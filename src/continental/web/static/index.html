@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Continental</title>
+<style>
+  :root {
+    --fondo: #fbfaf8;
+    --tinta: #1c1a17;
+    --tenue: #6b6560;
+    --linea: #e2ddd6;
+    --ok: #2f7d4f;
+    --mal: #a83232;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fondo: #16150f;
+      --tinta: #f0ece4;
+      --tenue: #9b948b;
+      --linea: #33302a;
+      --ok: #6fbd8b;
+      --mal: #e08a8a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1rem; background: var(--fondo); color: var(--tinta);
+    font: 16px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 46rem; margin: 0 auto; }
+  h1 { font-size: 1.6rem; margin: 0 0 .25rem; letter-spacing: -.01em; }
+  p.sub { margin: 0 0 2rem; color: var(--tenue); }
+  section { border-top: 1px solid var(--linea); padding-top: 1.25rem; margin-top: 1.5rem; }
+  h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .08em; color: var(--tenue); margin: 0 0 .75rem; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { display: flex; gap: .6rem; align-items: baseline; padding: .4rem 0; border-bottom: 1px solid var(--linea); }
+  li:last-child { border-bottom: 0; }
+  .punto { width: .55rem; height: .55rem; border-radius: 50%; background: var(--tenue); flex: none; }
+  .punto.ok { background: var(--ok); }
+  .punto.mal { background: var(--mal); }
+  .detalle { color: var(--tenue); font-size: .88rem; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Continental</h1>
+  <p class="sub">La suite de operación de la farmacia. Todavía es un esqueleto: el primer módulo es el Pedido.</p>
+
+  <section>
+    <h2>Estado</h2>
+    <ul id="estado"><li><span class="punto"></span><span class="detalle">Consultando…</span></li></ul>
+  </section>
+
+  <section>
+    <h2>Módulos</h2>
+    <ul id="modulos"><li><span class="punto"></span><span class="detalle">Consultando…</span></li></ul>
+  </section>
+</main>
+
+<script>
+const fila = (texto, ok, detalle) => {
+  const li = document.createElement('li');
+  const punto = document.createElement('span');
+  punto.className = 'punto' + (ok === true ? ' ok' : ok === false ? ' mal' : '');
+  const nombre = document.createElement('span');
+  nombre.textContent = texto;
+  li.append(punto, nombre);
+  if (detalle) {
+    const d = document.createElement('span');
+    d.className = 'detalle';
+    d.textContent = detalle;
+    li.append(d);
+  }
+  return li;
+};
+
+const pintar = (id, filas) => {
+  const ul = document.getElementById(id);
+  ul.replaceChildren(...filas);
+};
+
+async function cargar() {
+  try {
+    const salud = await (await fetch('/api/salud')).json();
+    pintar('estado', [
+      fila('Continental ' + salud.version, true, 'negocio: ' + salud.negocio),
+      fila('Entrando como', null, salud.quien),
+    ]);
+  } catch (e) {
+    pintar('estado', [fila('Continental no contesta', false)]);
+  }
+
+  try {
+    const { modulos } = await (await fetch('/api/modulos')).json();
+    pintar('modulos', modulos.length
+      ? modulos.map(m => fila(m.nombre, m.ok, m.detalle || m.url))
+      : [fila('Ninguno configurado', null)]);
+  } catch (e) {
+    pintar('modulos', [fila('No se pudo consultar', false)]);
+  }
+}
+
+cargar();
+</script>
+</body>
+</html>

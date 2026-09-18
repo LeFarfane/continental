@@ -1,0 +1,28 @@
+# Credenciales y configuración de máquina: la URL del almacén con la
+# contraseña del rol `continental`, y las direcciones de los módulos.
+.env
+.env.local
+
+# Borradores de trabajo humano (SQLite). No es la fuente de verdad: lo que
+# vale vive en Postgres. Mismo criterio que `data/marlowe.db`.
+data/continental.db
+data/continental.db-wal
+data/continental.db-shm
+
+# Bitácoras de las corridas desatendidas (el lote nocturno de precios).
+logs/
+
+# Exportaciones generadas: los CSV de un pedido se regeneran cuando se pidan.
+data/export/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.venv
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+.DS_Store

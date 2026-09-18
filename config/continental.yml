@@ -1,0 +1,56 @@
+# Configuración de Continental. Sin secretos: lo que lleva contraseña vive en
+# `.env` (ver `.env.example`).
+
+# Dónde está cada módulo. Loopback siempre: nada de esto es alcanzable desde
+# fuera, y esa es justamente la razón por la que los módulos no llevan
+# autenticación propia (regla 2 de CLAUDE.md, ADR 0001).
+modulos:
+  doyle:
+    url: "http://127.0.0.1:8383"
+    # Una búsqueda en un portal tiene un piso medido de ~9 s por proveedor
+    # (5.6 s de scroll de carga diferida + 3 s de cortesía) y un techo de
+    # 60-90 s si se estiran los timeouts. Por eso la web de Doyle no contesta
+    # la búsqueda de golpe: devuelve un `job_id` y se le pregunta después.
+    # Este timeout es para las llamadas cortas -pedir el estado, listar
+    # sesiones-, no para esperar un resultado.
+    timeout_seg: 10
+  marlowe:
+    url: "http://127.0.0.1:8484"
+    timeout_seg: 10
+
+# El módulo de Pedido. El porqué de cada número está en
+# docs/decisiones/0002-pedido-sugerido-por-reposicion-de-lo-vendido.md.
+pedido:
+  # Cuántos días de venta toma el PRIMER pedido sugerido, cuando todavía no hay
+  # un cierre anterior desde el cual acumular. Después de esa primera vez,
+  # siempre acumula desde el último cierre -con el hueco de fin de semana,
+  # mirar solo "el último día" tiraría las ventas del sábado al piso-.
+  dias_primera_vez: 7
+
+  # Tope del lote nocturno de precios. Lo que no alcanzó queda marcado sin
+  # precio, con su botón para completarlo a mano: un lote a medias que lo dice
+  # es mejor que uno que se estira hasta la mañana.
+  tope_lote_minutos: 60
+
+  # Anaqueles que cuentan como "medicamento" para el toggle. Es una lista
+  # blanca a propósito: lo que no está aquí y tampoco es abarrote se muestra
+  # como `sin clasificar`, nunca se esconde. Ver CONTEXT.md.
+  anaqueles_medicamento:
+    - "PATENTE"      # PATENTE 1 a 6
+    - "GENERICO"     # GENERICO 1 a 4
+    - "NATURISTA"
+    - "BOTICA"       # BOTICA 1 a 3 — material de curación, se compra a los
+                     # mismos proveedores, así que entra
+    - "VITRINA"      # VITRINA 1 a 3
+
+  # Abarrote: compite contra la tienda de la esquina, no contra una farmacia, y
+  # no se le compra a un proveedor de medicamentos. La regla es la misma que
+  # usa el grupo 1 de la canasta A8 (Marlowe/sql/canasta.sql), para que las dos
+  # no divergan.
+  anaqueles_abarrote:
+    - "SUPER"
+    - "CANASTA"
+    - "REFRIGERADOR"
+  categorias_abarrote:
+    - "SUPER"
+    - "ELECT"

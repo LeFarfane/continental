@@ -1,0 +1,47 @@
+[project]
+name = "continental"
+version = "0.1.0"
+description = "Suite de operación para una farmacia independiente: junta Doyle, Marlowe y los módulos propios detrás de una sola puerta"
+requires-python = ">=3.10"
+
+# Continental NO trae Playwright, y eso es una decisión, no un olvido: aquí no
+# se abre un navegador nunca (regla 1 de CLAUDE.md, ADR 0001). Los módulos que
+# sí lo necesitan -Doyle y Marlowe- tienen su propio entorno y su propio
+# proceso. Si algún día aparece `playwright` en esta lista, la separación se
+# rompió.
+#
+# Nada con código vectorizado: atlas es un Athlon II X4 de 2010 sin SSSE3 y
+# numpy/pandas/rapidfuzz de PyPI mueren ahí con `Illegal instruction`.
+# `pydantic_core` -el núcleo en Rust de pydantic v2, que FastAPI arrastra- sí
+# pasa: medido en atlas el 2026-09-06 con Marlowe, porque los wheels de Rust
+# apuntan al x86-64 base (SSE2) y no al moderno.
+#
+# `httpx` es como Continental le habla a los módulos: HTTP en loopback, con
+# timeout por llamada. Es la pieza que hace que un módulo caído se vea como un
+# hueco y no como una pantalla colgada.
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "httpx>=0.27",
+    "PyYAML>=6.0",
+    "SQLAlchemy>=2.0",
+    "psycopg2-binary>=2.9",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+# El código vive en src/continental/, no en la raíz. Sin esto,
+# `python -m continental.<algo>` falla con ModuleNotFoundError aunque estés
+# parado en la carpeta correcta: Python no mira dentro de `src/` por su cuenta.
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

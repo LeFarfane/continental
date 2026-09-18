@@ -1,0 +1,8 @@
+# Lo que corre en atlas (Linux) va con LF aunque se edite en la torre (Windows,
+# core.autocrlf=true). Un script con CRLF muere en bash con
+# "$'': command not found", y una unidad de systemd con CRLF no carga. Esto lo
+# fija en el repo, no en la configuracion de cada maquina. Copiado de Marlowe,
+# donde ya costo una vez.
+*.sh       text eol=lf
+*.service  text eol=lf
+*.timer    text eol=lf
