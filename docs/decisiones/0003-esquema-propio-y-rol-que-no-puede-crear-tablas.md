@@ -96,6 +96,18 @@ modelo.
 - **Agregar una columna cuesta una visita a atlas.** No hay migraciones
   automáticas y no las va a haber: el rol no puede alterar sus tablas. Es
   deliberado y el precio es real.
+- **Una columna nueva se escribe en dos archivos, no en uno.** En
+  `crear_tablas.sql`, que es la forma a la que se quiere llegar, y en
+  `sql/migraciones/NNNN-*.sql`, que es cómo llega una base que ya existe. Las
+  dos hacen falta: `crear_tablas.sql` usa `CREATE TABLE IF NOT EXISTS`, que
+  **calla** si la tabla ya está con otra forma, así que sobre una base creada
+  no agrega nada y el primer `UPDATE` rebota en atlas con "column does not
+  exist" — después de que aquí todo se vio verde; y dejar la columna solo en la
+  migración haría que una base desde cero naciera sin ella y que
+  `crear_tablas.sql` dejara de describir la tabla de verdad, que es lo único
+  para lo que sirve. La migración la corre una persona con credenciales de
+  dueño, nunca el código de arranque: eso es lo que esta decisión prohíbe.
+  Salió del ticket 10, que agregó `descartado_por` y `descartado_en`.
 - **`crear_rol.sql` se va a volver a correr**, no es una operación única. Por
   eso es idempotente y por eso no le toca la contraseña a un rol que ya existe.
 - **La dependencia con farmacia-data es de doble sentido y hay que decirlo.**

@@ -32,9 +32,12 @@
 --   cero con `crear_tablas.sql` naciera sin ella, y que ese archivo dejara de
 --   describir la tabla de verdad -- que es lo único para lo que sirve.
 --
--- Así que la regla del repo, desde hoy: **una columna nueva se escribe en los
--- dos archivos**. `crear_tablas.sql` es la forma a la que se quiere llegar;
--- `sql/migraciones/NNNN-*.sql` es cómo llega una base que ya existe.
+-- Así que una columna nueva se escribe en los dos archivos:
+-- `crear_tablas.sql` es la forma a la que se quiere llegar y
+-- `sql/migraciones/NNNN-*.sql` es cómo llega una base que ya existe. **La
+-- regla vive en el ADR 0003**, en sus Consecuencias, y no en este comentario:
+-- una convención del repo escrita solo aquí no la encuentra quien agregue la
+-- siguiente columna.
 --
 --
 -- ## Es idempotente, y eso se decidió a propósito

@@ -473,7 +473,7 @@ const renglonDescartado = (r, alDevolver) => {
   // `sin-identificar`, y eso se dice tal cual en vez de dejar el hueco.
   const firma = document.createElement('span');
   firma.className = 'quien';
-  firma.textContent = 'Descartado por ' + (r.descartado_por || 'sin identificar') +
+  firma.textContent = 'Descartado por ' + (r.descartado_por || 'sin-identificar') +
     (r.descartado_en ? ' · ' + instanteEnPalabras(r.descartado_en) : '');
 
   li.append(nombre, devolver, firma);
