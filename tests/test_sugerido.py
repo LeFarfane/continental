@@ -319,11 +319,15 @@ def test_la_pantalla_pinta_la_existencia_del_renglon_y_no_la_vuelve_a_buscar(cli
 
     assert "r.existencia" in portada
     assert "r.dias_de_cobertura" in portada
-    # Cuatro consultas y ni una más: el pedido, la salud, los módulos y el
-    # cierre del ticket 08 —que es un POST que ocurre cuando alguien lo pide,
-    # no una lectura de la carga—. La lista se pide UNA vez y todo lo demás se
-    # resuelve con lo que ya llegó.
-    assert portada.count("fetch('/api/") == 4
+    # Cinco consultas y ni una más, y **solo la primera ocurre al cargar**: el
+    # pedido. Las otras cuatro son la salud, los módulos, el cierre del ticket
+    # 08 y el mover un renglón del 10 —descartar y devolver comparten la misma
+    # llamada—, y las tres últimas son POST que ocurren cuando alguien los
+    # pide. La lista se pide UNA vez: ni el interruptor ni descartar vuelven a
+    # preguntarle al almacén, porque dos lecturas en momentos distintos pueden
+    # no coincidir y nadie sabría cuál tiene razón.
+    assert portada.count("fetch('/api/") == 5
+    assert portada.count("fetch('/api/pedido-sugerido')") == 1
 
 
 # ------------------------------------------------------- la función, directo

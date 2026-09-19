@@ -359,6 +359,171 @@ def cerrar_pedido_sugerido(
     return _como_json(cerrado)
 
 
+@app.post("/api/renglon/{renglon_id}/descartar")
+def descartar_renglon(
+    renglon_id: int,
+    request: Request,
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+):
+    """Un clic: el renglón pasa a `descartado` y sale de la lista de trabajo.
+
+    **Sin cuerpo y sin confirmación.** El ticket dice un clic, y lo que hace
+    segura la operación no es un diálogo —que se aprende a cerrar sin leer a la
+    tercera pantalla— sino que se puede deshacer con `/devolver`. "Nada se
+    filtra, y se descarta con un clic" es la mitad de lo que mantiene legible
+    una lista tan larga como productos distintos se vendieron (ADR 0002).
+
+    **Descartar no borra nada**: el renglón sigue en su lista, con sus números
+    congelados, y se ve aparte. El rol `continental` no tiene `DELETE` y eso no
+    es una limitación que haya que sortear, es el diseño (ADR 0003).
+
+    **Quién descartó se guarda en la fila, no solo en la bitácora**, y ahí está
+    la diferencia con el cierre del ticket 08. No es celo de auditoría: es la
+    evidencia de la **condición de revisión del ADR 0002** —"si después de un
+    mes de uso los renglones descartados superan a los pedidos, la reposición
+    1 a 1 no es la regla correcta"—. Una bitácora rota por `logrotate` no se
+    puede consultar con un `GROUP BY`; una columna sí. Va junto con el cuándo,
+    porque sin él no hay forma de acotar "un mes".
+
+    Es una **firma y no un permiso** (regla 3 de `CLAUDE.md`): el correo lo
+    validó Cloudflare Access y aquí solo se anota. Sin el túnel delante vale
+    `sin-identificar`, que dice la verdad — que no se supo—.
+
+    **Descartar NO es una lista negra**, y conviene tenerlo presente al leer
+    esto al lado del ticket 09: el descarte es de un **renglón**, no del
+    producto. La ventana de reposición acumula por fechas de venta desde el
+    corte del último cerrado y `calcular_pedido_sugerido` no mira el estado de
+    renglones anteriores, así que un producto que alguien decidió no pedir hoy
+    vuelve a proponerse mañana si se vuelve a vender. Es lo correcto: "hoy no
+    hace falta" no es "nunca hace falta", y lo contrario sería mercancía que
+    deja de proponerse para siempre por un clic. Lo único que saca un producto
+    de la lista siguiente es `en tránsito` (`CONTEXT.md`), y eso es el ticket
+    24. Lo cubre
+    `test_descarte.test_un_producto_descartado_vuelve_a_proponerse_si_se_vuelve_a_vender`.
+
+    Un 409 y no un 500 cuando no hay nada que descartar: el renglón no existe,
+    es de otro negocio, o ya no está `abierto` —`en tránsito` significa que ya
+    se le pidió a un proveedor—. Los tres casos se ven igual desde fuera a
+    propósito: distinguirlos sería contar qué ids hay en la tabla.
+
+    El identificador es el del **renglón** y no va anidado bajo su lista: la
+    llave es global (`GENERATED ALWAYS AS IDENTITY`) y el `negocio` sale de la
+    configuración, así que un `pedido_sugerido_id` en la ruta sería un dato
+    repetido que la pantalla tendría que mantener de acuerdo con el otro.
+
+    Es `def` y no `async def` a propósito: el borde es síncrono —psycopg2 no es
+    asíncrono— y así FastAPI lo corre en su pool de hilos.
+    """
+    return _mover_el_renglon(
+        renglon_id,
+        request,
+        lambda negocio, firma: almacenamiento.descartar(negocio, renglon_id, firma),
+        verbo="descartar",
+        choque=(
+            "Ese renglón ya no estaba abierto. Vuelve a cargar la página para "
+            "ver cómo quedó."
+        ),
+    )
+
+
+@app.post("/api/renglon/{renglon_id}/devolver")
+def devolver_renglon(
+    renglon_id: int,
+    request: Request,
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+):
+    """Deshacer el descarte: vuelve a `abierto` y se borra la firma.
+
+    Es la otra dirección del ticket, y es lo que permite que descartar cueste
+    un clic sin confirmación.
+
+    **La firma y la hora se van juntas.** Un renglón devuelto a `abierto` no
+    está descartado: dejarle `descartado_por` puesto haría que el conteo
+    mensual del ADR 0002 sumara renglones que alguien está trabajando, y la
+    condición de revisión se dispararía con evidencia falsa. Lo rechazaría
+    además `ck_renglon_descarte`.
+
+    Lo que cuesta, dicho con todas sus letras: **no queda rastro del descarte
+    deshecho**. Un historial de cada clic sería otra tabla y otro ticket; el
+    dato que el ADR necesita es cuántos renglones quedaron descartados, no
+    cuántas veces alguien dudó.
+
+    Un 409 si el renglón no estaba `descartado`: la transición vive en el
+    `WHERE` del `UPDATE`, así que el segundo clic no mueve nada.
+    """
+    return _mover_el_renglon(
+        renglon_id,
+        request,
+        lambda negocio, firma: almacenamiento.devolver_a_abierto(negocio, renglon_id),
+        verbo="devolver a abierto",
+        choque=(
+            "Ese renglón ya no estaba descartado. Vuelve a cargar la página "
+            "para ver cómo quedó."
+        ),
+    )
+
+
+def _mover_el_renglon(renglon_id: int, request: Request, mover, verbo: str, choque: str):
+    """Lo que las dos rutas del ticket 10 comparten entero.
+
+    Cambia la operación y cambia el texto; el resto —la firma, el `try` que
+    convierte una base caída en un hueco con su motivo, el 409 de "no había
+    nada que mover" y la respuesta con los conteos— es el mismo, y escribirlo
+    dos veces sería dos oportunidades de que una de las dos deje de cumplir la
+    regla 5.
+    """
+    negocio = cargar().negocio
+    firma = quien(request)
+
+    try:
+        guardado = mover(negocio, firma)
+    except Exception as exc:  # noqa: BLE001 — el almacenamiento caído es un hueco, no un 500
+        log.exception("No se pudo %s el renglón %s", verbo, renglon_id)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "detalle": f"no se pudo {verbo} el renglón ({type(exc).__name__})",
+            },
+        )
+
+    if guardado is None:
+        log.info(
+            "%s quiso %s el renglón %s y no había ninguno en el estado que lo "
+            "permite en %s.",
+            firma,
+            verbo,
+            renglon_id,
+            negocio,
+        )
+        return JSONResponse(status_code=409, content={"ok": False, "detalle": choque})
+
+    movido = next(r for r in guardado.renglones if r.renglon_id == renglon_id)
+    log.info(
+        "%s acaba de %s el renglón %s (%s) de la lista %s. Van %d descartado(s) "
+        "de %d renglones.",
+        firma,
+        verbo,
+        renglon_id,
+        movido.propuesto.descripcion,
+        guardado.pedido_sugerido_id,
+        guardado.descartados,
+        len(guardado.renglones),
+    )
+    return {
+        "ok": True,
+        "pedido_sugerido_id": guardado.pedido_sugerido_id,
+        "renglon": _renglon_como_json(movido),
+        # Los conteos salen del servidor y no de una cuenta del navegador: dos
+        # pestañas abiertas en el mostrador bastan para que un número que el
+        # JavaScript va sumando se separe de la verdad, y ese número es el que
+        # el ADR 0002 va a mirar después de un mes.
+        "descartados": guardado.descartados,
+        "de_trabajo": len(guardado.de_trabajo),
+        "tiene_renglones_sin_atender": guardado.tiene_renglones_sin_atender,
+    }
+
+
 def _armar(almacen: LecturaDelAlmacen, ventana: Ventana):
     """Las dos lecturas y el cálculo. Solo corre cuando la lista **no** existía.
 
@@ -429,26 +594,53 @@ def _como_json(guardado: PedidoSugeridoGuardado) -> dict:
             guardado.cerrado_en.isoformat() if guardado.cerrado_en else None
         ),
         "tiene_renglones_sin_atender": guardado.tiene_renglones_sin_atender,
-        # `esta_agotado` va explícito porque `asdict` no incluye propiedades, y
-        # la regla —existencia conocida y en cero o negativa— tiene que vivir
-        # en un solo lugar probado, no repetida en el JavaScript de la
-        # pantalla. `renglon_id` y `estado` son del renglón guardado: el ticket
-        # 10 los necesita para descartar uno.
-        "renglones": [
-            {
-                **dataclasses.asdict(r.propuesto),
-                "esta_agotado": r.propuesto.esta_agotado,
-                "renglon_id": r.renglon_id,
-                "estado": r.estado,
-            }
-            for r in guardado.renglones
-        ],
+        # **Van TODOS los renglones, descartados incluidos**, y con su estado.
+        # Mandar solo los de trabajo dejaría a la pantalla sin con qué pintar el
+        # bloque de descartados, y pedirlos en una segunda llamada sería leer
+        # dos veces la misma lista en dos momentos distintos: las dos partes
+        # podrían no coincidir y nadie sabría cuál tiene razón. Es el mismo
+        # criterio por el que el interruptor de vistas filtra en el navegador
+        # (`vistas.py`).
+        "renglones": [_renglon_como_json(r) for r in guardado.renglones],
+        # Los dos conteos se calculan en Python —donde hay pruebas— y no en el
+        # JavaScript. `descartados` es lo que el ticket pide que se vea y, de
+        # paso, el numerador de la condición de revisión del ADR 0002.
+        "descartados": guardado.descartados,
+        "de_trabajo": len(guardado.de_trabajo),
         "sin_catalogo": guardado.sin_catalogo,
         # De la lista completa, no de la vista: la pregunta que responde es si
         # vale la pena ir a ponerles anaquel en SICAR. El porqué está en
         # `PedidoSugerido.sin_clasificar`.
         "sin_clasificar": guardado.sin_clasificar,
         "vistas": _vistas(),
+    }
+
+
+def _renglon_como_json(renglon) -> dict:
+    """Un renglón guardado, como la pantalla lo lee.
+
+    `esta_agotado` va explícito porque `asdict` no incluye propiedades, y la
+    regla —existencia conocida y en cero o negativa— tiene que vivir en un solo
+    lugar probado, no repetida en el JavaScript de la pantalla.
+
+    `descartado_en` viaja en ISO **con zona**, por la misma razón que
+    `armado_en`: sin ella el navegador lo leería como hora local y el contenedor
+    corre en UTC.
+
+    Lo usan la lista entera y las dos rutas del ticket 10, y eso es el punto: el
+    renglón que vuelve después de descartarlo tiene exactamente la misma forma
+    que el que llegó en la carga, así que la pantalla puede sustituirlo sin
+    traducir nada.
+    """
+    return {
+        **dataclasses.asdict(renglon.propuesto),
+        "esta_agotado": renglon.propuesto.esta_agotado,
+        "renglon_id": renglon.renglon_id,
+        "estado": renglon.estado,
+        "descartado_por": renglon.descartado_por,
+        "descartado_en": (
+            renglon.descartado_en.isoformat() if renglon.descartado_en else None
+        ),
     }
 
 
@@ -465,6 +657,8 @@ def _sin_ventas() -> dict:
         "cerrado_en": None,
         "tiene_renglones_sin_atender": False,
         "renglones": [],
+        "descartados": 0,
+        "de_trabajo": 0,
         "sin_catalogo": 0,
         "sin_clasificar": 0,
         "vistas": _vistas(),

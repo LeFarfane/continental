@@ -83,9 +83,11 @@ VENCIDO = "vencido"
 ESTADOS_DE_LA_LISTA: tuple[str, ...] = (ABIERTO, CERRADO, VENCIDO)
 
 RENGLON_ABIERTO = "abierto"
+RENGLON_DESCARTADO = "descartado"
 
-#: Los cinco del glosario, con el acento de `en tránsito`. Hoy solo se escribe
-#: el primero: el 10 pone `descartado` y el 24 `en tránsito`.
+#: Los cinco del glosario, con el acento de `en tránsito`. Hoy se escriben dos:
+#: `abierto` al nacer y `descartado` desde el ticket 10. El 24 pone
+#: `en tránsito` y el 26 los dos de recepción.
 ESTADOS_DEL_RENGLON: tuple[str, ...] = (
     "abierto",
     "en tránsito",
@@ -275,11 +277,36 @@ class RenglonGuardado:
     `estado` nace en `abierto`. Atenderlo —descartarlo (ticket 10), pedirlo
     (20), recibirlo (26)— es un cambio de estado y nunca un borrado: el rol no
     tiene `DELETE`.
+
+    `descartado_por` y `descartado_en` son la **firma** del descarte y valen
+    `None` en todo renglón que no esté descartado, que es lo que exige
+    `ck_renglon_descarte`. Son una firma y no un permiso (regla 3 de
+    `CLAUDE.md`): el correo lo validó Cloudflare Access y sirve para saber
+    quién decidió no pedir un producto, nunca para decidir si podía.
+
+    El `cuándo` está aquí por una razón concreta y medible: la **condición de
+    revisión del ADR 0002** —"si después de un mes de uso los renglones
+    descartados superan a los pedidos, la reposición 1 a 1 no es la regla
+    correcta"— es una consulta con un rango de fechas. Sin este instante, esa
+    condición se puede cumplir sin que nadie pueda demostrarlo.
     """
 
     renglon_id: int
     estado: str
     propuesto: Renglon
+    descartado_por: str | None = None
+    descartado_en: dt.datetime | None = None
+
+    @property
+    def esta_descartado(self) -> bool:
+        """Si una persona decidió no pedirlo (`CONTEXT.md`).
+
+        Vive aquí y no repetida en cada consumidor por la misma razón que
+        `esta_agotado` vive en `sugerido.Renglon`: es la regla que decide si un
+        renglón sale de la lista de trabajo, y una regla que se escribe dos
+        veces se cambia una sola.
+        """
+        return self.estado == RENGLON_DESCARTADO
 
 
 @dataclass(frozen=True, slots=True)
@@ -325,12 +352,48 @@ class PedidoSugeridoGuardado:
         )
 
     @property
+    def descartados(self) -> int:
+        """Cuántos renglones de **esta lista** decidió alguien no pedir.
+
+        "Cuántos se descartaron en el día" se cuenta sobre la lista del día y
+        **no** con un `descartado_en::date`, y esa es la decisión: el día de la
+        lista sale de `max(fecha)` del almacén, mientras que la fecha de un
+        instante saldría del reloj del servidor. El Postgres del contenedor
+        corre en UTC y su idea de "hoy" puede ir dos días adelante del último
+        dato —a farmacia-data le costó 11.7 puntos de crecimiento inventados—,
+        así que contar por el reloj dejaría el número en cero justo los días en
+        que las dos fechas no coinciden.
+
+        Es el numerador de la **condición de revisión del ADR 0002**: si esto
+        supera sistemáticamente a lo que sí se pidió, la reposición 1 a 1 no es
+        la regla correcta y hay que volver a la opción 2 del ADR.
+        """
+        return sum(1 for r in self.renglones if r.esta_descartado)
+
+    @property
+    def de_trabajo(self) -> tuple[RenglonGuardado, ...]:
+        """Los renglones que siguen en la lista de trabajo.
+
+        "Sale de la lista de trabajo" **no es** "desaparece": el descartado
+        sigue guardado, se ve aparte y se puede devolver a `abierto`. Lo que
+        esta propiedad define es qué se muestra como pendiente, y vive aquí —en
+        Python, probado— y no en el JavaScript de la pantalla, por la misma
+        razón que las vistas de `vistas.py`: la regla que decide qué se ve no
+        puede vivir en el único archivo que ninguna prueba mira.
+        """
+        return tuple(r for r in self.renglones if not r.esta_descartado)
+
+    @property
     def tiene_renglones_sin_atender(self) -> bool:
         """Si queda algo en `abierto`, que es lo que el glosario llama "sin atender".
 
         Es lo que describe a una lista `vencida`: pasó su día y quedaron
         renglones sin atender. Se expone para poder decirlo en la pantalla, no
         como condición del vencimiento — ver `vencer_las_de_dias_anteriores`.
+
+        **Un renglón `descartado` ya se atendió**: alguien lo miró y decidió no
+        pedirlo. Contarlo como pendiente diría que quedó trabajo por hacer en
+        una lista que se revisó entera.
         """
         return any(r.estado == RENGLON_ABIERTO for r in self.renglones)
 
@@ -382,6 +445,12 @@ def columnas_del_renglon(
     `esta_en_el_catalogo` no se deduce de que haya clave: es un dato propio del
     renglón y deducirlo daría un producto "sin catálogo" el día que el catálogo
     traiga un EAN vacío, que pasa.
+
+    `descartado_por` y `descartado_en` van explícitos en `None` aunque las
+    columnas admitan nulos, por la misma razón que `estado` y `cerrado_en` van
+    explícitos en `columnas_de_la_lista`: `ck_renglon_descarte` relaciona los
+    tres, y escribirlos juntos deja ver que se respeta. Un renglón nace
+    `abierto` y nadie lo ha descartado.
     """
     return {
         "negocio": negocio,
@@ -398,6 +467,8 @@ def columnas_del_renglon(
         ),
         "clasificacion": renglon.clasificacion,
         "estado": RENGLON_ABIERTO,
+        "descartado_por": None,
+        "descartado_en": None,
     }
 
 
@@ -485,6 +556,23 @@ def revisar_el_renglon(columnas: dict) -> None:
         raise ValueError(
             f"Estado {columnas['estado']!r} fuera del glosario: ck_renglon_estado."
         )
+    if columnas["descartado_por"] == "":
+        raise ValueError(
+            "Firma vacía. La columna tiene CHECK (descartado_por <> ''): o hay "
+            "correo o es NULL. Sin encabezado, `web.app.quien()` devuelve "
+            "'sin-identificar', que sí es un dato."
+        )
+    if (columnas["estado"] == RENGLON_DESCARTADO) != (
+        columnas["descartado_por"] is not None and columnas["descartado_en"] is not None
+    ):
+        raise ValueError(
+            "Descartado sin decir quién ni cuándo, o firma de descarte en un "
+            "renglón que no está descartado. Lo rechaza ck_renglon_descarte. "
+            "Sin el cuándo, la condición de revisión del ADR 0002 —los "
+            "descartados de un mes— no se puede medir; con la firma puesta en "
+            "un renglón devuelto a 'abierto', ese mismo conteo mentiría al "
+            "revés."
+        )
 
 
 # --------------------------------------------------------------- interfaz
@@ -492,7 +580,7 @@ def revisar_el_renglon(columnas: dict) -> None:
 
 @runtime_checkable
 class AlmacenamientoDelPedido(Protocol):
-    """El borde de escritura. Cinco operaciones y ninguna de ellas borra.
+    """El borde de escritura. Siete operaciones y ninguna de ellas borra.
 
     Es aparte de `LecturaDelAlmacen` a propósito, igual que Doyle lo es del
     almacén: una prueba tiene que poder sustituir una sola, y un borde caído no
@@ -586,6 +674,53 @@ class AlmacenamientoDelPedido(Protocol):
         """
         ...
 
+    def descartar(
+        self, negocio: str, renglon_id: int, quien: str
+    ) -> PedidoSugeridoGuardado | None:
+        """Pone un renglón **abierto** en `descartado`, firmado. Devuelve la lista.
+
+        `None` es "no había ningún renglón abierto con ese id en este negocio",
+        y quien llame lo dice: fingir que descartó sería la falla silenciosa que
+        este repo prohíbe. Desde fuera no se distingue "no existe" de "no estaba
+        abierto", y es a propósito — decirlo sería contar qué ids hay en la
+        tabla.
+
+        **La transición vive en el `WHERE`**, no en un `if` de Python. Solo se
+        descarta lo `abierto`: un renglón `en tránsito` ya se le pidió a un
+        proveedor —y el ticket 26 va a recibir esa mercancía contra él—, y
+        `recibido` / `recibido parcial` son hechos consumados que descartar
+        reescribiría. Comprobar el estado en Python y actualizar después tiene
+        una carrera en medio.
+
+        `quien` es una **firma, no un permiso** (regla 3 de `CLAUDE.md`). Se
+        guarda junto con la hora porque sin las dos la condición de revisión del
+        ADR 0002 no se puede evaluar.
+
+        Devuelve la **lista entera** y no solo el renglón: el conteo de
+        descartados tiene que salir de lo guardado y no de un número que el
+        navegador vaya sumando, o dos pestañas abiertas en el mostrador se
+        separan de la verdad sin un solo error que ver.
+        """
+        ...
+
+    def devolver_a_abierto(
+        self, negocio: str, renglon_id: int
+    ) -> PedidoSugeridoGuardado | None:
+        """Deshace un descarte: `descartado` → `abierto`, sin firma ni hora.
+
+        Es lo que hace segura la operación de un clic, y por eso descartar no
+        pide confirmación. `None` si el renglón no estaba `descartado`.
+
+        **Las dos columnas se limpian**, y eso es una decisión: un renglón
+        devuelto a `abierto` no está descartado, así que dejarle la firma haría
+        que el conteo mensual del ADR 0002 sumara renglones que alguien está
+        trabajando. Lo que cuesta, dicho: **no queda rastro del descarte
+        deshecho**. Un historial de cada clic sería otra tabla, y el dato que el
+        ADR necesita es cuántos renglones quedaron descartados, no cuántas veces
+        alguien dudó.
+        """
+        ...
+
 
 # ------------------------------------------------- la implementación real
 #
@@ -603,11 +738,22 @@ _LEER_LISTA = text(
     """
 )
 
+_LEER_LISTA_POR_ID = text(
+    """
+    select pedido_sugerido_id, negocio, fecha_del_pedido, estado,
+           ventas_consideradas_desde, ventas_consideradas_hasta,
+           armado_en, cerrado_en
+    from pedidos.pedido_sugerido
+    where negocio = :negocio and pedido_sugerido_id = :pedido_sugerido_id
+    """
+)
+
 _LEER_RENGLONES = text(
     """
     select renglon_id, producto_id, clave, descripcion, piezas_vendidas,
            cantidad_propuesta, esta_en_el_catalogo, existencia,
-           dias_de_cobertura, clasificacion, estado
+           dias_de_cobertura, clasificacion, estado,
+           descartado_por, descartado_en
     from pedidos.renglon
     where negocio = :negocio and pedido_sugerido_id = :pedido_sugerido_id
     order by renglon_id
@@ -674,6 +820,57 @@ _INSERTAR_RENGLONES = text(
         (:negocio, :pedido_sugerido_id, :producto_id, :clave, :descripcion,
          :piezas_vendidas, :cantidad_propuesta, :esta_en_el_catalogo,
          :existencia, :dias_de_cobertura, :clasificacion, :estado)
+    """
+)
+
+# Descartar un renglón (ticket 10). Es un UPDATE y nunca un borrado: el rol no
+# tiene DELETE y descartar es un cambio de estado del glosario.
+#
+# `and estado = 'abierto'` es la transición metida en el WHERE, igual que en
+# `_CERRAR`. Solo se descarta lo abierto: `en tránsito` ya se le pidió a un
+# proveedor, y `recibido` / `recibido parcial` son hechos consumados. Cero filas
+# es "no había nada que descartar", y quien llama lo dice en vez de fingir.
+#
+# `now()` y no una hora calculada en Python, por la misma razón que el cierre:
+# la pone el servidor que guarda la fila, así que dos procesos con relojes
+# distintos no escriben descartes incomparables. Es un INSTANTE con zona y no
+# una fecha -- lo que se ancla en `max(fecha)` son las fechas de VENTA--, y es
+# lo que vuelve medible la condición de revisión del ADR 0002.
+#
+# Las dos columnas se escriben juntas porque `ck_renglon_descarte` las exige
+# juntas: descartado si y solo si hay firma Y hora.
+_DESCARTAR = text(
+    """
+    update pedidos.renglon
+       set estado = 'descartado',
+           descartado_por = :quien,
+           descartado_en = now()
+     where negocio = :negocio
+       and renglon_id = :renglon_id
+       and estado = 'abierto'
+    returning renglon_id, pedido_sugerido_id
+    """
+)
+
+# Deshacer el descarte. Lo que hace segura la operación de un clic.
+#
+# `descartado_por` y `descartado_en` vuelven a NULL **las dos**: un renglón
+# abierto no está descartado, y `ck_renglon_descarte` rechaza la mitad. Dejar
+# la firma puesta haría que el conteo mensual del ADR 0002 sumara renglones que
+# alguien está trabajando.
+#
+# `and estado = 'descartado'` es la otra mitad de la transición: no se "abre"
+# un renglón recibido ni uno en tránsito por esta puerta.
+_DEVOLVER_A_ABIERTO = text(
+    """
+    update pedidos.renglon
+       set estado = 'abierto',
+           descartado_por = null,
+           descartado_en = null
+     where negocio = :negocio
+       and renglon_id = :renglon_id
+       and estado = 'descartado'
+    returning renglon_id, pedido_sugerido_id
     """
 )
 
@@ -862,6 +1059,60 @@ class AlmacenamientoPostgres:
                 ).fetchall()
             )
 
+    def descartar(
+        self, negocio: str, renglon_id: int, quien: str
+    ) -> PedidoSugeridoGuardado | None:
+        return self._mover_el_renglon(
+            _DESCARTAR,
+            {"negocio": negocio, "renglon_id": renglon_id, "quien": quien},
+        )
+
+    def devolver_a_abierto(
+        self, negocio: str, renglon_id: int
+    ) -> PedidoSugeridoGuardado | None:
+        return self._mover_el_renglon(
+            _DEVOLVER_A_ABIERTO, {"negocio": negocio, "renglon_id": renglon_id}
+        )
+
+    def _mover_el_renglon(self, sentencia, parametros: dict):
+        """El `UPDATE` de un renglón y la relectura de su lista, en una transacción.
+
+        Las dos operaciones del ticket 10 comparten esto entero y solo cambian
+        de sentencia: la transición está en el `WHERE` de cada una, así que
+        aquí no hay un solo `if` sobre el estado — cero filas es "no había nada
+        que mover" y sale como `None`.
+
+        **Se relee dentro de la misma transacción** para que el conteo de
+        descartados que vuelve sea el de después del cambio y no el de una foto
+        tomada un instante antes.
+        """
+        with self._motor().begin() as conexion:
+            movido = conexion.execute(sentencia, parametros).mappings().first()
+            if movido is None:
+                return None
+            cabecera = (
+                conexion.execute(
+                    _LEER_LISTA_POR_ID,
+                    {
+                        "negocio": parametros["negocio"],
+                        "pedido_sugerido_id": movido["pedido_sugerido_id"],
+                    },
+                )
+                .mappings()
+                .first()
+            )
+            if cabecera is None:
+                # Imposible con la llave foránea puesta: el renglón que se acaba
+                # de actualizar apunta a una lista que existe. Se truena en vez
+                # de devolver `None`, que quien llama leería como "no había nada
+                # que descartar" -- y sí lo había (regla 4).
+                raise RuntimeError(
+                    f"El renglón {parametros['renglon_id']} cambió de estado y "
+                    "su pedido sugerido no aparece. Es un estado imposible con "
+                    "fk_renglon_sugerido puesta: revisa el DDL."
+                )
+            return self._con_renglones(conexion, cabecera)
+
 
 def armar_guardado(cabecera, filas) -> PedidoSugeridoGuardado:
     """Filas leídas → el dato congelado. Lo usan la implementación real y el doble.
@@ -886,6 +1137,8 @@ def armar_guardado(cabecera, filas) -> PedidoSugeridoGuardado:
                 renglon_id=int(f["renglon_id"]),
                 estado=f["estado"],
                 propuesto=renglon_desde_columnas(f),
+                descartado_por=f["descartado_por"],
+                descartado_en=f["descartado_en"],
             )
             for f in filas
         ),

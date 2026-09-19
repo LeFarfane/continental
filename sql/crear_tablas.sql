@@ -54,6 +54,25 @@
 -- permisos: sin eso, un DDL editado a medias se vería igual de verde.
 --
 --
+-- ## Y por eso este archivo NO alcanza para agregar una columna
+--
+-- Este archivo describe **la forma a la que se quiere llegar**, y sirve para
+-- una base desde cero. Sobre una base donde las tablas ya existen no hace
+-- nada: el `IF NOT EXISTS` calla, la columna nueva no aparece, y el primer
+-- `UPDATE` que la nombre rebota con "column ... does not exist" -- una falla
+-- que llega hasta atlas justamente porque aquí todo se vio verde.
+--
+-- Así que **cada columna que nace después de la primera corrida se escribe
+-- dos veces**: aquí, para que una base nueva la tenga, y en un archivo de
+-- `sql/migraciones/` con su `ALTER TABLE`, para la base que ya existe. Los dos
+-- se corren a mano con credenciales de dueño (ADR 0003) y ninguno de los dos
+-- lo toca el código de arranque.
+--
+-- Hoy hay una: `sql/migraciones/0001-renglon-quien-descarto-y-cuando.sql`
+-- (ticket 10), que agrega `descartado_por` y `descartado_en` a
+-- `pedidos.renglon`.
+--
+--
 -- ## Acentos
 --
 -- **Identificadores en ASCII, valores con su acento.** `renglon` se llama
@@ -286,6 +305,8 @@ CREATE TABLE IF NOT EXISTS pedidos.renglon (
     dias_de_cobertura    numeric(8,1),
     clasificacion        text          NOT NULL,
     estado               text          NOT NULL DEFAULT 'abierto',
+    descartado_por       text,
+    descartado_en        timestamptz,
 
     CONSTRAINT pk_renglon
         PRIMARY KEY (renglon_id),
@@ -335,6 +356,29 @@ CREATE TABLE IF NOT EXISTS pedidos.renglon (
     CONSTRAINT ck_renglon_estado
         CHECK (estado IN ('abierto', 'en tránsito', 'recibido',
                           'recibido parcial', 'descartado')),
+
+    -- La firma vacía no existe, por la misma razón que la clave vacía: una
+    -- cadena vacía se compara igual que un dato y no se distingue de "no se
+    -- sabe". `web.app.quien()` nunca devuelve '' -- sin encabezado devuelve
+    -- 'sin-identificar', que es un dato de verdad -- así que esto es el
+    -- cinturón, no el caso esperado.
+    CONSTRAINT ck_renglon_descartado_por
+        CHECK (descartado_por <> ''),
+
+    -- Descartado si y solo si hay firma Y hora, igual que
+    -- `ck_pedido_sugerido_cierre` hace con el cierre de la lista.
+    --
+    -- Las dos mitades hacen falta. Sin la de ida, un renglón podría quedar
+    -- 'descartado' sin decir quién ni cuándo, y la CONDICIÓN DE REVISIÓN del
+    -- ADR 0002 -"si después de un mes de uso los renglones descartados superan
+    -- a los pedidos, la reposición 1 a 1 no es la regla correcta"- dejaría de
+    -- ser medible: sin `descartado_en` no hay forma de acotar "de un mes". Sin
+    -- la de vuelta, un renglón devuelto a 'abierto' por error conservaría la
+    -- firma del descarte y ese mismo conteo mensual sumaría renglones que hoy
+    -- están abiertos.
+    CONSTRAINT ck_renglon_descarte
+        CHECK ((estado = 'descartado')
+               = (descartado_por IS NOT NULL AND descartado_en IS NOT NULL)),
 
     CONSTRAINT fk_renglon_sugerido
         FOREIGN KEY (pedido_sugerido_id, negocio)
@@ -395,6 +439,29 @@ COMMENT ON COLUMN pedidos.renglon.estado IS
 
 COMMENT ON COLUMN pedidos.renglon.pedido_id IS
     'A qué proveedor se le pidió. NULL mientras nadie lo haya repartido.';
+
+-- FIRMA, NO PERMISO (regla 3 de CLAUDE.md). El correo llega en
+-- `Cf-Access-Authenticated-User-Email`, ya validado por Cloudflare Access, y
+-- sirve para saber quién hizo qué -- nunca para decidir si puede hacerlo. Hoy,
+-- corriendo en la torre sin el túnel delante, vale 'sin-identificar', y eso es
+-- un dato honesto: dice que no se supo. Lo que no puede pasar es que no se
+-- guarde nada.
+COMMENT ON COLUMN pedidos.renglon.descartado_por IS
+    'Quién descartó el renglón, según Cf-Access-Authenticated-User-Email. Es '
+    'una FIRMA, no un permiso. NULL en todo renglón que no esté descartado.';
+
+-- `timestamptz` y no `date`, y esto no contradice "todo se ancla en
+-- max(fecha)": esa regla es sobre FECHAS DE VENTA, que salen del almacén. Esto
+-- es un INSTANTE que ocurrió AQUÍ -- justo lo que el reloj del servidor sabe y
+-- el almacén no-, igual que `armado_en` y `cerrado_en`. Con zona porque el
+-- contenedor corre en UTC.
+--
+-- Es lo que vuelve medible la condición de revisión del ADR 0002: "después de
+-- un mes de uso" es `descartado_en >= <inicio> AND descartado_en < <fin>`, y
+-- sin esta columna esa condición no se puede evaluar aunque se cumpla.
+COMMENT ON COLUMN pedidos.renglon.descartado_en IS
+    'Cuándo se descartó, instante con zona. NULL en todo renglón que no esté '
+    'descartado. Es lo que hace medible la condición de revisión del ADR 0002.';
 
 
 -- --------------------------------------------------------------------------

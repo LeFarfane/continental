@@ -24,6 +24,8 @@ from continental.almacen import LineaDeCompra, LineaDeVenta, Producto
 from continental.almacenamiento import (
     ABIERTO,
     CERRADO,
+    RENGLON_ABIERTO,
+    RENGLON_DESCARTADO,
     VENCIDO,
     PedidoSugeridoDuplicado,
     PedidoSugeridoGuardado,
@@ -188,6 +190,11 @@ class AlmacenamientoFalso:
       renglón, igual que la transacción de `AlmacenamientoPostgres`. Sin eso,
       una lista a medias quedaría ocupando el `UNIQUE` del día y ninguna carga
       posterior podría arreglarla — el rol no tiene `DELETE`.
+    - **Las transiciones de estado**, que en la base viven en el `WHERE` de
+      cada `UPDATE` y no en un CHECK: solo se descarta lo `abierto` y solo se
+      devuelve a `abierto` lo `descartado`. Aquí son las mismas condiciones, en
+      el mismo orden, y devuelven `None` donde el `UPDATE` real devolvería cero
+      filas.
 
     `falla` es el almacenamiento caído, que tiene que verse como un hueco con
     su motivo y no como una lista vacía (regla 4).
@@ -227,6 +234,19 @@ class AlmacenamientoFalso:
         for lista in self.listas:
             if lista["pedido_sugerido_id"] == pedido_sugerido_id:
                 return lista
+        return None
+
+    def _renglon_por_id(self, renglon_id: int) -> tuple[dict, dict] | None:
+        """El renglón y la lista a la que pertenece, o `None` si no hay.
+
+        Devuelve los dos porque toda operación sobre un renglón termina
+        releyendo su lista entera: es lo que hace el `RETURNING
+        pedido_sugerido_id` del `UPDATE` real, seguido de `_LEER_LISTA_POR_ID`.
+        """
+        for lista in self.listas:
+            for fila in lista["renglones"]:
+                if fila["renglon_id"] == renglon_id:
+                    return fila, lista
         return None
 
     def leer(
@@ -386,6 +406,88 @@ class AlmacenamientoFalso:
         return self.poner_estado(
             pedido_sugerido_id, CERRADO, cerrado_en=dt.datetime.now(dt.UTC)
         )
+
+    # ------------------------------------------------ el estado del renglón
+
+    def poner_estado_del_renglon(
+        self,
+        renglon_id: int,
+        estado: str,
+        descartado_por: str | None = None,
+        descartado_en: dt.datetime | None = None,
+    ) -> PedidoSugeridoGuardado | None:
+        """El `UPDATE` pelado de un renglón, revisado contra los CHECK.
+
+        Aparte por la misma razón que `poner_estado` lo está para la lista: es
+        donde se ve que el doble **se niega** igual que Postgres —un
+        `descartado` sin firma, una firma en un renglón abierto, un estado que
+        el glosario no conoce—. Si el rechazo estuviera escondido dentro del
+        camino que lo evita, nadie podría verlo.
+
+        Lo usan también las pruebas para poner un renglón en `en tránsito` o
+        `recibido`, que son estados que **todavía ningún código escribe** (son
+        los tickets 24 y 26): sin esto no habría forma de comprobar hoy que
+        descartar no los toca.
+        """
+        self._revisar()
+        encontrado = self._renglon_por_id(renglon_id)
+        if encontrado is None:
+            return None
+        fila, lista = encontrado
+
+        propuesta = {
+            **fila,
+            "estado": estado,
+            "descartado_por": descartado_por,
+            "descartado_en": descartado_en,
+        }
+        revisar_el_renglon(propuesta)
+
+        fila.update(
+            estado=estado,
+            descartado_por=descartado_por,
+            descartado_en=descartado_en,
+        )
+        return armar_guardado(lista, lista["renglones"])
+
+    def descartar(
+        self, negocio: str, renglon_id: int, quien: str
+    ) -> PedidoSugeridoGuardado | None:
+        self._revisar()
+        encontrado = self._renglon_por_id(renglon_id)
+        # Las tres condiciones son el `WHERE` del UPDATE real, en el mismo
+        # orden: el negocio, el id y que siga abierto. Sin la última, un
+        # renglón `en tránsito` —que ya se le pidió a un proveedor— se podría
+        # descartar, y el ticket 26 recibiría mercancía contra un renglón que
+        # dice que nadie la pidió.
+        if encontrado is None:
+            return None
+        fila, _ = encontrado
+        if fila["negocio"] != negocio or fila["estado"] != RENGLON_ABIERTO:
+            return None
+        # El instante real con zona que en la tabla pone `now()`. Es un
+        # INSTANTE y no una fecha: lo que se ancla en `max(fecha)` son las
+        # fechas de venta.
+        return self.poner_estado_del_renglon(
+            renglon_id,
+            RENGLON_DESCARTADO,
+            descartado_por=quien,
+            descartado_en=dt.datetime.now(dt.UTC),
+        )
+
+    def devolver_a_abierto(
+        self, negocio: str, renglon_id: int
+    ) -> PedidoSugeridoGuardado | None:
+        self._revisar()
+        encontrado = self._renglon_por_id(renglon_id)
+        if encontrado is None:
+            return None
+        fila, _ = encontrado
+        if fila["negocio"] != negocio or fila["estado"] != RENGLON_DESCARTADO:
+            return None
+        # Las dos columnas se van a `None` juntas: lo exige ck_renglon_descarte
+        # y lo comprueba `poner_estado_del_renglon`.
+        return self.poner_estado_del_renglon(renglon_id, RENGLON_ABIERTO)
 
     def vencer_las_de_dias_anteriores(
         self, negocio: str, fecha_del_pedido: dt.date

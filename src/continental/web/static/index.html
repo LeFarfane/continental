@@ -115,6 +115,33 @@
   td.clave, th.clave { width: 9.5rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; color: var(--tenue); }
   td.cantidad, th.cantidad { width: 7.5rem; text-align: right; }
   td.cantidad b { font-size: 1.05rem; font-weight: 600; }
+  /* La columna de acciones. Angosta a propósito: descartar es una acción
+     frecuente pero secundaria —lo que se lee es la cantidad a pedir—, así que
+     el botón no compite con ella por atención. */
+  td.acciones, th.acciones { width: 6.5rem; text-align: right; }
+  /* 2.2rem de alto mínimo: a 375 px esto se toca con el dedo, y un objetivo
+     más chico se falla y se descarta el renglón de al lado. Que se pueda
+     deshacer no vuelve gratis equivocarse. */
+  .accion {
+    font: inherit; font-size: .82rem; line-height: 1.2; min-height: 2.2rem;
+    padding: .35rem .7rem; cursor: pointer; white-space: nowrap;
+    color: var(--tinta); background: var(--fondo);
+    border: 1px solid var(--linea); border-radius: 999px;
+  }
+  .accion:hover { border-color: var(--tinta); background: var(--realce); }
+  .accion:disabled { cursor: default; opacity: .5; }
+
+  /* Los descartados, aparte. `<details>` y no una sección siempre abierta:
+     es lo que ya se atendió, así que por omisión no ocupa pantalla, y el
+     navegador ya sabe abrirlo con teclado y anunciarlo. Lo que NO se esconde
+     es cuántos son: eso va en el `<summary>`, que se ve con el bloque
+     cerrado. */
+  .descartados { margin: 1.25rem 0 0; border-top: 1px dashed var(--linea); padding-top: .9rem; }
+  .descartados summary { cursor: pointer; color: var(--tenue); font-size: .9rem; }
+  .descartados ul { margin: .75rem 0 0; }
+  .descartados li { flex-wrap: wrap; gap: .3rem .7rem; }
+  .descartados .quien { color: var(--tenue); font-size: .8rem; flex: 1 1 100%; }
+  .descartados .accion { margin-left: auto; }
   /* Existencia y cobertura: a la derecha y con cifras de ancho fijo, que es lo
      que deja comparar dos renglones sin leerlos. */
   td.numero, th.numero { text-align: right; width: 6.5rem; }
@@ -147,7 +174,11 @@
          padding: .55rem .4rem; border-bottom: 1px solid var(--linea); }
     td { display: block; border: 0; padding: 0; }
     td.clave, td.producto { flex: 0 0 100%; width: auto; }
-    td.numero, td.cantidad { width: auto; text-align: left; }
+    td.numero, td.cantidad, td.acciones { width: auto; text-align: left; }
+    /* El botón se va a su propio renglón, pegado a la izquierda: a 375 px
+       compartir línea con la cantidad dejaba las dos cosas apretadas contra
+       los bordes y el objetivo táctil a menos de 2.2 rem. */
+    td.acciones { flex: 0 0 100%; margin-top: .35rem; }
     td.numero::before { content: attr(data-etiqueta) " "; color: var(--tenue); font-size: .78rem; }
     /* La cantidad se va al extremo derecho de la última línea: es la cifra
        que el encargado copia al pedido, y en el teléfono sigue siendo la que
@@ -177,6 +208,10 @@
     <div class="vistas" id="vistas" role="radiogroup" aria-label="Qué se muestra en la lista" hidden></div>
     <p class="nota" id="pedido-nota" hidden></p>
     <p class="nota" id="pedido-sin-clasificar" hidden></p>
+    <!-- Lo que salió mal al descartar o al devolver. Aparte de las otras dos
+         notas porque es pasajero y de otra naturaleza: aquéllas describen la
+         lista, ésta describe un clic que no llegó. -->
+    <p class="nota" id="pedido-accion" hidden></p>
     <table id="pedido-tabla" hidden>
       <caption id="pedido-resumen"></caption>
       <thead>
@@ -186,10 +221,15 @@
           <th class="numero">Existencia</th>
           <th class="numero">Días de cobertura</th>
           <th class="cantidad">Cantidad a pedir</th>
+          <th class="acciones">Quitar</th>
         </tr>
       </thead>
       <tbody id="pedido-renglones"></tbody>
     </table>
+    <details class="descartados" id="descartados" hidden>
+      <summary id="descartados-resumen"></summary>
+      <ul id="descartados-lista"></ul>
+    </details>
   </section>
 
   <section>
@@ -315,7 +355,22 @@ const celdaDeCifra = (valor, etiqueta, sufijo, urgente) => {
   return td;
 };
 
-const renglon = (r) => {
+// El estado del glosario que saca un renglón de la lista de trabajo. Constante
+// y no una cadena suelta repetida: viaja en el JSON tal cual lo guarda la
+// columna (`CONTEXT.md` manda sobre el nombre de cualquier cosa) y aquí se
+// compara en tres lugares.
+const DESCARTADO = 'descartado';
+
+const botonDeAccion = (texto, alHacerClic) => {
+  const boton = document.createElement('button');
+  boton.type = 'button';
+  boton.className = 'accion';
+  boton.textContent = texto;
+  boton.onclick = () => alHacerClic(boton);
+  return boton;
+};
+
+const renglon = (r, alDescartar) => {
   const tr = document.createElement('tr');
 
   const clave = document.createElement('td');
@@ -380,8 +435,49 @@ const renglon = (r) => {
     cantidad.append(d);
   }
 
-  tr.append(clave, producto, existencia, cobertura, cantidad);
+  // Descartar: UN CLIC y sin diálogo de confirmación. Lo que hace segura la
+  // operación es que se puede deshacer —el renglón baja al bloque de
+  // descartados con su botón para devolverlo—, no un "¿estás seguro?" que a la
+  // tercera pantalla se cierra sin leer. La lista trae tantos renglones como
+  // productos distintos se vendieron: un diálogo por renglón sería el doble de
+  // clics en la única acción que mantiene legible la lista (ADR 0002).
+  const acciones = document.createElement('td');
+  acciones.className = 'acciones';
+  const quitar = botonDeAccion('Descartar', (boton) => alDescartar(r, boton));
+  quitar.title = 'No se pide. Se puede devolver a la lista.';
+  // El nombre del producto va en el nombre accesible: con veinte botones
+  // iguales, "Descartar" a secas no dice cuál se está tocando.
+  quitar.setAttribute('aria-label', 'Descartar ' + r.descripcion);
+  acciones.append(quitar);
+
+  tr.append(clave, producto, existencia, cobertura, cantidad, acciones);
   return tr;
+};
+
+// Un renglón ya descartado, en el bloque de abajo. Es una lista y no una tabla
+// a propósito: de un renglón que no se va a pedir lo único que importa es cuál
+// era, quién lo quitó y poder devolverlo. Repetir las cinco columnas daría el
+// mismo peso visual a lo atendido que a lo pendiente.
+const renglonDescartado = (r, alDevolver) => {
+  const li = document.createElement('li');
+
+  const nombre = document.createElement('span');
+  nombre.textContent = r.descripcion;
+
+  const devolver = botonDeAccion('Devolver a la lista', (boton) => alDevolver(r, boton));
+  devolver.setAttribute('aria-label', 'Devolver ' + r.descripcion + ' a la lista');
+
+  // Quién y cuándo, a la vista. Es una firma, no un permiso (regla 3 de
+  // CLAUDE.md), y se muestra porque es lo que permite preguntar "¿por qué
+  // quitaste éste?" a la persona correcta. Sin el túnel delante vale
+  // `sin-identificar`, y eso se dice tal cual en vez de dejar el hueco.
+  const firma = document.createElement('span');
+  firma.className = 'quien';
+  firma.textContent = 'Descartado por ' + (r.descartado_por || 'sin identificar') +
+    (r.descartado_en ? ' · ' + instanteEnPalabras(r.descartado_en) : '');
+
+  li.append(nombre, devolver, firma);
+  return li;
 };
 
 // ------------------------------------------------------- las dos vistas
@@ -634,25 +730,77 @@ async function cargarPedido() {
   // de más, nunca hacia esconder: lo que no se ve es lo que hace falta sin que
   // nadie se entere.
   const vistas = Array.isArray(datos.vistas) && datos.vistas.length ? datos.vistas : null;
-  if (!vistas) {
-    pintarRenglones(datos.renglones, datos.renglones.length, null);
-    tabla.hidden = false;
-    return;
-  }
 
-  vistas.forEach(v => { v.cuantos = renglonesDe(datos.renglones, v).length; });
+  // Cuál vista está encendida. Es el único estado que la pantalla guarda: la
+  // lista es `datos`, tal como el servidor la mandó, y descartar solo
+  // sustituye un renglón dentro de ella.
+  let vistaActiva = vistas ? elegirVista(vistas, vistaRecordada()) : null;
 
-  const mostrar = (vista) => {
-    recordarVista(vista.clave);
-    pintarInterruptor(vistas, vista, mostrar);
-    pintarRenglones(
-      renglonesDe(datos.renglones, vista),
-      datos.renglones.length,
-      vistas.find(v => v.clave !== vista.clave) || vista);
+  // Descartar saca el renglón de la lista de trabajo y lo baja al bloque de
+  // abajo. El reparto se hace por el ESTADO que trae cada renglón, que es el
+  // del glosario y el de la columna: la pantalla no decide qué es descartado,
+  // solo dónde se pinta.
+  const repintar = () => {
+    const trabajables = datos.renglones.filter(r => r.estado !== DESCARTADO);
+    if (vistas) {
+      // Los conteos del interruptor son de la lista DE TRABAJO: decir "18" en
+      // una vista donde se ven 12 porque seis están descartados haría buscar
+      // seis renglones que no están escondidos, sino atendidos.
+      vistas.forEach(v => { v.cuantos = renglonesDe(trabajables, v).length; });
+      pintarInterruptor(vistas, vistaActiva, mostrar);
+      pintarRenglones(
+        renglonesDe(trabajables, vistaActiva),
+        trabajables.length,
+        vistas.find(v => v.clave !== vistaActiva.clave) || vistaActiva,
+        datos.descartados,
+        descartar);
+    } else {
+      pintarRenglones(trabajables, trabajables.length, null, datos.descartados, descartar);
+    }
+    // El bloque de descartados NO se filtra por vista, y es a propósito: la
+    // vista de medicamentos esconde abarrotes de lo que falta por pedir, pero
+    // un abarrote que alguien descartó por error tiene que poder devolverse sin
+    // adivinar en qué vista aparece.
+    pintarDescartados(
+      datos.renglones.filter(r => r.estado === DESCARTADO),
+      datos.descartados,
+      devolver);
     tabla.hidden = false;
   };
 
-  mostrar(elegirVista(vistas, vistaRecordada()));
+  const mostrar = (vista) => {
+    vistaActiva = vista;
+    recordarVista(vista.clave);
+    repintar();
+  };
+
+  // El renglón que vuelve del servidor tiene la misma forma que el que llegó
+  // en la carga, así que se sustituye entero: nada se deduce aquí del estado
+  // nuevo, ni la firma ni la hora.
+  const aplicar = (respuesta) => {
+    const i = datos.renglones.findIndex(r => r.renglon_id === respuesta.renglon.renglon_id);
+    if (i >= 0) datos.renglones[i] = respuesta.renglon;
+    datos.descartados = respuesta.descartados;
+    datos.tiene_renglones_sin_atender = respuesta.tiene_renglones_sin_atender;
+    repintar();
+  };
+
+  function descartar(r, boton) {
+    moverRenglon(r.renglon_id, '/descartar', boton, aplicar);
+  }
+
+  function devolver(r, boton) {
+    moverRenglon(r.renglon_id, '/devolver', boton, aplicar);
+  }
+
+  // Un servidor viejo que no mande el conteo no puede dejar la pantalla
+  // diciendo "undefined renglones descartados". Se cae a contarlos aquí, que
+  // es lo mismo mientras haya una sola pestaña abierta.
+  if (typeof datos.descartados !== 'number') {
+    datos.descartados = datos.renglones.filter(r => r.estado === DESCARTADO).length;
+  }
+
+  if (vistas) mostrar(vistaActiva); else repintar();
 }
 
 // El resumen dice el orden a propósito: una lista larga ordenada por un
@@ -661,18 +809,83 @@ async function cargarPedido() {
 // "el interruptor los escondió" de "no se vendieron": son dos cosas que en
 // pantalla se ven idénticas —el renglón no está— y solo una se arregla
 // moviendo el interruptor.
-const pintarRenglones = (visibles, total, otra) => {
+const pintarRenglones = (visibles, total, otra, descartados, alDescartar) => {
   const escondidos = total - visibles.length;
   document.getElementById('pedido-resumen').textContent =
-    plural(visibles.length, 'renglón', 'renglones') +
+    plural(visibles.length, 'renglón por atender', 'renglones por atender') +
     ', uno por producto vendido. Se propone reponer lo que salió, pieza por ' +
     'pieza. Arriba lo que se va a acabar primero. ' +
     (escondidos
       ? 'Esta vista esconde ' + plural(escondidos, 'renglón de abarrote', 'renglones de abarrote') +
         ' y nada más: los sin clasificar siguen aquí. Cámbiala a «' + otra.nombre +
-        '» para verlos todos.'
-      : 'Nada se quitó de la lista.');
-  document.getElementById('pedido-renglones').replaceChildren(...visibles.map(renglon));
+        '» para verlos todos. '
+      : 'Nada se escondió de esta vista. ') +
+    // Se dice aquí además de en el bloque de abajo: "por atender" bajó de
+    // número y la razón tiene que estar donde se lee el número, o parecería
+    // que se vendió menos.
+    // La frase entera pasa por `plural` y no solo su primera mitad: "1 renglón
+    // descartado no aparece aquí: están abajo" es lo que sale de pegar un
+    // sujeto en singular a un verbo en plural, y se vio así al recorrer la
+    // pantalla el 2026-09-19.
+    (descartados
+      ? plural(descartados,
+          'renglón descartado no aparece aquí y se puede devolver desde abajo.',
+          'renglones descartados no aparecen aquí y se pueden devolver desde abajo.')
+      : '');
+  document.getElementById('pedido-renglones').replaceChildren(
+    ...visibles.map(r => renglon(r, alDescartar)));
+};
+
+// Los descartados, aparte. El bloque se esconde entero cuando no hay ninguno:
+// un "0 descartados" permanente es ruido en una pantalla que ya tiene dos
+// avisos y un interruptor.
+//
+// `cuantos` viene del SERVIDOR y no de `renglones.length`, aunque hoy valgan
+// lo mismo: es el número que el ADR 0002 va a mirar después de un mes, y un
+// conteo que el navegador lleve a mano se separa de la verdad en cuanto hay
+// dos pestañas abiertas en el mostrador.
+const pintarDescartados = (renglones, cuantos, alDevolver) => {
+  const caja = document.getElementById('descartados');
+  document.getElementById('descartados-resumen').textContent =
+    plural(cuantos, 'renglón descartado', 'renglones descartados') +
+    ' de esta lista. Queda guardado quién y cuándo.';
+  document.getElementById('descartados-lista').replaceChildren(
+    ...renglones.map(r => renglonDescartado(r, alDevolver)));
+  caja.hidden = !cuantos;
+};
+
+// Descartar y devolver son la misma petición con otro final de ruta. El botón
+// se desarma mientras viaja: descartar dos veces no rompe nada —el servidor
+// contesta 409 y no mueve la firma— pero un botón vivo invita a un segundo
+// clic que no hace falta.
+//
+// **No se vuelve a pedir la lista entera.** El servidor devuelve el renglón
+// movido y los conteos; releer todo sería una segunda lectura en otro momento,
+// y la lista podría dejar de coincidir consigo misma mientras alguien la
+// trabaja. Es la misma razón por la que las dos vistas salen de una sola
+// lectura.
+const moverRenglon = async (id, ruta, boton, alTerminar) => {
+  boton.disabled = true;
+  nota('pedido-accion', '');
+
+  let respuesta;
+  try {
+    respuesta = await fetch('/api/renglon/' + id + ruta, { method: 'POST' });
+  } catch (e) {
+    boton.disabled = false;
+    nota('pedido-accion', 'Continental no contestó. El renglón se quedó como estaba; inténtalo otra vez.', 'mal');
+    return;
+  }
+
+  const datos = await respuesta.json();
+  if (!datos.ok) {
+    boton.disabled = false;
+    // El motivo viene del servidor y es genérico a propósito (regla 5): el
+    // detalle está en la bitácora.
+    nota('pedido-accion', datos.detalle || 'No se pudo mover el renglón.', 'aviso');
+    return;
+  }
+  alTerminar(datos);
 };
 
 // ------------------------------------------------------------- el esqueleto

@@ -76,6 +76,20 @@ ventas una sola vez —el rango unión— y recortando en memoria. Lo que sí ag
 es una consulta corta al almacenamiento por carga, la del corte, que contra el
 doble es recorrer una lista de diccionarios.
 
+**Con el ticket 10 dentro el suite no se movió.** Medido el 2026-09-19, en
+tres corridas seguidas, 188 recolectadas —187 pasan, 1 saltada— en
+**0.87-1.07 s**, con la recolección en 0.08 s. Las 38 pruebas nuevas de
+`test_descarte.py` cuestan ~0.01 s cada una de las que pasan por `TestClient`
+y nada las que solo tocan el doble en memoria o leen un `.sql`; tres de ellas
+aparecen entre las ocho más lentas, todas con 0.01 s. Descartar no agrega una
+sola lectura del almacén: la lista ya está guardada y el conteo de descartados
+sale de ella.
+
+La recolección subió 0.01 s y se sabe de dónde: `sql/migraciones/` es una
+carpeta nueva por la que `test_compila.py` camina buscando `.sql`, y el
+archivo que hay dentro estrena un caso más de
+`test_el_archivo_de_atlas_no_trae_retorno_de_carro`.
+
 La saltada bajó de 2 a 1 con el ticket 07: `sql/crear_tablas.sql` estrenó los
 casos de `.sql` de `test_compila.py` y solo queda saltado el del shebang, que
 espera a que exista un `.sh`.

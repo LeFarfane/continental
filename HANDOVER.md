@@ -24,7 +24,7 @@ contestan. Nada más.
 
 ```bash
 python iniciar.py     # http://127.0.0.1:8585
-pytest                # 148 pruebas y 1 saltada, ~0.7 s (2026-09-19, ticket 09)
+pytest                # 187 pruebas y 1 saltada, ~0.9 s (2026-09-19, ticket 10)
 ```
 
 | Archivo | Qué es |
@@ -35,6 +35,7 @@ pytest                # 148 pruebas y 1 saltada, ~0.7 s (2026-09-19, ticket 09)
 | `docs/decisiones/0002` | el módulo de Pedido: reposición 1 a 1, EAN, recepción sugerida |
 | `docs/decisiones/0003` | dónde viven las tablas del pedido y por qué el rol no puede crearlas |
 | `sql/` | el DDL de las tres tablas, el rol acotado y el verificador. **Se corren a mano, en ese orden, con credenciales de dueño** |
+| `sql/migraciones/` | lo que le falta a una base donde las tablas YA existen: `crear_tablas.sql` usa `CREATE TABLE IF NOT EXISTS` y calla si la tabla ya está con otra forma. También a mano y con credenciales de dueño |
 | `config/continental.yml` | puertos de los módulos y los parámetros del pedido |
 | `src/continental/web/app.py` | `/api/salud`, `/api/modulos`, el pedido sugerido y su cierre, la portada |
 | `src/continental/almacenamiento.py` | donde el pedido sugerido se guarda: el `Protocol`, el SQL real y las reglas de la tabla en un solo lugar |
@@ -90,6 +91,32 @@ más barato y se le pidió a otro.**
   esperaba y lo que se encontró, y salida distinta de cero si algo quedó mal.
   Es lo que cierra la última casilla del ticket 07, y solo lo puede correr una
   persona con credenciales de dueño en atlas.
+
+- **La migración del ticket 10, si las tablas ya se crearon antes del
+  2026-09-19.** El ticket 10 le agregó a `pedidos.renglon` dos columnas —
+  `descartado_por` y `descartado_en`, la firma del descarte— y están escritas
+  en los **dos** archivos: en `sql/crear_tablas.sql`, para una base desde cero,
+  y en `sql/migraciones/0001-renglon-quien-descarto-y-cuando.sql`, para una
+  base donde la tabla ya existe. Hacen falta los dos porque `CREATE TABLE IF
+  NOT EXISTS` **calla si la tabla ya existe con otra forma**: volver a correr
+  el DDL sobre una tabla vieja no agrega la columna y no avisa, y el primer
+  descarte rebotaría en atlas con "column descartado_por does not exist".
+
+  Si `crear_tablas.sql` **todavía no se ha corrido** (que es el caso al
+  2026-09-19), no hay nada que migrar: correrlo ahora ya crea las columnas. Si
+  ya se corrió antes de esa fecha, además de los tres pasos de arriba:
+
+  ```bash
+  docker exec -i farmacia_warehouse psql -U farmacia -d farmacia \
+      -v ON_ERROR_STOP=1 \
+      < sql/migraciones/0001-renglon-quien-descarto-y-cuando.sql
+  ```
+
+  Es idempotente: correrlo dos veces no rompe nada. **`sql/crear_rol.sql` no
+  hace falta volver a correrlo**: el `GRANT SELECT, INSERT, UPDATE` es sobre la
+  tabla entera y cubre las columnas nuevas (no se usan permisos por columna, a
+  propósito). Ninguno de los dos lo corre el código de arranque: el rol no
+  tiene DDL y eso es el ADR 0003.
 
 - **Del lado de farmacia-data, y sin esto lo anterior se borra solo:** agregar
   `'continental'` al `grants` de `dim_fecha.sql`, `dim_producto.sql`,
