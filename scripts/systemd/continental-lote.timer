@@ -1,0 +1,71 @@
+# Cuándo corre el lote nocturno de precios (ticket 18).
+#
+#   sudo systemctl enable --now continental-lote.timer
+#   systemctl list-timers continental-lote.timer
+#
+# ====================================================================
+#  LA HORA, QUE ES LA ÚNICA DECISIÓN DE ESTE ARCHIVO
+# ====================================================================
+#
+# El ticket pide que el lote corra DESPUÉS de la cadena nocturna, y la cadena
+# es `farmacia-diario.timer` de farmacia-data: lunes a viernes 20:30 en atlas
+# (última corrida verificada, vie 18-sep 20:30). Tiene que ser después porque
+# la lista del día se arma con las ventas que esa cadena acaba de meter: un
+# lote que corriera antes armaría la lista de ayer y le traería precios.
+#
+# 22:00 = 20:30 + 90 minutos de colchón. El colchón es lo que dura la cadena
+# -rclone baja el respaldo de Drive, se restaura la réplica MySQL, ingesta a
+# `raw`, snapshot del día y `dbt build` con sus 124 pruebas- más margen.
+#
+# NO se usa `After=farmacia-diario.service`, aunque parezca lo obvio: `After=`
+# solo ordena unidades que arrancan en la MISMA transacción de systemd, y
+# éstas las disparan dos timers distintos a horas distintas. Escribirlo no
+# ordenaría nada y se leería como si sí, que es peor que no escribirlo. El
+# porqué completo, y lo que habría que hacer para encadenarlas de verdad
+# -un drop-in en farmacia-diario.service, que vive en el OTRO repo- está en
+# el ADR 0006.
+#
+# >>> SI SE MUEVE LA CADENA, HAY QUE MOVER ESTO. <<<
+#
+# Está vivo, no es hipotético: el hilo abierto 5 de HANDOVER.md y el ADR 0017
+# de farmacia-data -en estado PROPUESTA, lo decide el dueño-. Si el respaldo
+# de SICAR se mueve a las ~20:15, la cadena se mueve a las 21:00 para no bajar
+# el colchón de hora y media a quince minutos; y entonces esto se mueve a las
+# 22:30, en el MISMO movimiento y no después. Moverla a ella y no a esto
+# dejaría el lote armando la lista con las ventas de ayer, sin fallar y sin
+# avisar, que es exactamente lo que este repo persigue.
+#
+# Lun-vie, igual que la cadena: el respaldo de SICAR sube de lunes a viernes y
+# el sábado no hay datos nuevos que traer. Lo del sábado y el viernes por la
+# tarde llega hasta el lunes en la noche -peor caso medido, 2.5 días- y por
+# eso el sugerido acumula desde el último cierre en vez de mirar "el último
+# día": el lote del lunes trae esa cola entera.
+
+[Unit]
+Description=Dispara el lote nocturno de precios de Continental, después de la cadena de las 20:30
+Documentation=file:///home/eddie/proyectos/Continental/docs/decisiones/0006-el-lote-nocturno-corre-despues-de-la-cadena-y-se-detiene-al-tope.md
+
+[Timer]
+OnCalendar=Mon-Fri 22:00
+Unit=continental-lote.service
+
+# Un minuto de holgura, que es lo que systemd usa por omisión. Se escribe para
+# que quede dicho que la hora exacta no importa: lo que importa es estar
+# claramente después de la cadena.
+AccuracySec=1min
+
+# SIN RandomizedDelaySec: dispersar el arranque solo serviría si hubiera varias
+# máquinas peleándose por un recurso, y aquí hay una. Lo que sí haría es
+# comerse parte del colchón contra la cadena por nada.
+
+# SIN Persistent=true, y es una decisión. Con él, un atlas que estuvo apagado a
+# las 22:00 dispararía el lote EN CUANTO ARRANCARA -a las nueve de la mañana,
+# por ejemplo-, y entonces serían cuatro navegadores contra los portales del
+# dueño en horario de mostrador, durante una hora, por una lista que el
+# encargado ya tiene enfrente y cuyos precios puede pedir con un botón. Una
+# corrida perdida cuesta que la lista de esa mañana llegue sin precios y se
+# completen a mano; una corrida a destiempo cuesta molestar cuatro portales
+# ajenos cuando nadie lo pidió.
+
+[Install]
+WantedBy=timers.target

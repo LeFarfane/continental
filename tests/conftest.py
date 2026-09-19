@@ -214,6 +214,37 @@ La saltada bajó de 2 a 1 con el ticket 07: `sql/crear_tablas.sql` estrenó los
 casos de `.sql` de `test_compila.py` y solo queda saltado el del shebang, que
 espera a que exista un `.sh`.
 
+**Con el ticket 18 dentro el suite sube ~0.1 s, y es casi todo recolección.**
+Medido el 2026-09-19, en tres corridas seguidas, 628 recolectadas —**628 pasan,
+0 saltadas**— en **2.51-2.72 s**, con la recolección en 0.18 s. Con el archivo
+nuevo fuera (`pytest --ignore=tests/test_lote.py`) y en la misma sesión, el
+árbol del ticket 17 costó **2.39-2.47 s**; las 54 pruebas de `test_lote.py`
+corriendo solas cuestan **0.09-0.10 s**, y ninguna aparece entre las ocho más
+lentas. La más lenta del suite sigue sin ser de este ticket:
+`test_la_pantalla_dice_el_rango_de_ventas...`, con 0.13 s.
+
+El salto de 565 a 628 son cuatro cosas: las 54 nuevas, 5 de `test_verificar.py`
+(el invariante 4, el de la clase ABC), 3 casos que `test_compila.py` gana solo
+—hay un módulo de Python más y **dos unidades de systemd más** por las que
+caminar— y 1 del `ast` de las funciones puras, que ahora son siete.
+
+**Y este ticket estrena una regla que hay que respetar, no admirar: ninguna
+prueba del lote espera, y varias simulan una hora entera.** El tope de 60
+minutos se prueba con el mismo mecanismo que el tope por consulta del ticket
+12: `ahora` y `dormir` entran por argumento y `_reloj()` devuelve un par en el
+que el tiempo **solo avanza cuando alguien duerme**. Así
+`test_se_detiene_al_tope_de_sesenta_minutos` mide 3600 s simulados en
+microsegundos reales, y lo que avanza es **exactamente lo que el código pidió
+esperar** — no un `monkeypatch` de `time.sleep`, que mediría otra cosa. Si una
+prueba de `test_lote.py` empieza a tardar segundos, está mal planteada.
+
+Que cuesten tan poco es por lo de siempre: **la mayoría no levanta nada**.
+`ordenar_por_importancia` recibe renglones congelados y un diccionario;
+`Cronometro` recibe un reloj; `contar_los_motivos` recibe una tupla; catorce
+leen dos archivos `.service`/`.timer` y comparan cadenas. Las que sí orquestan
+pasan por los **tres dobles** y no por `TestClient`: el lote es otro proceso y
+no toca FastAPI.
+
 **La medición en la torre tiene ruido de ±0.4 s**, así que una sola corrida no
 dice nada: corre tres. Y si el número se sale de lo anterior, mide antes de
 culpar a las pruebas nuevas: `pytest --durations=8` para el tiempo de las

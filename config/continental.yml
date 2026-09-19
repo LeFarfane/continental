@@ -27,9 +27,22 @@ pedido:
   # mirar solo "el último día" tiraría las ventas del sábado al piso-.
   dias_primera_vez: 7
 
-  # Tope del lote nocturno de precios. Lo que no alcanzó queda marcado sin
-  # precio, con su botón para completarlo a mano: un lote a medias que lo dice
-  # es mejor que uno que se estira hasta la mañana.
+  # Tope del lote nocturno de precios (ticket 18, lo lee
+  # `continental.lote.tope_del_lote_segundos`). Lo que no alcanzó queda marcado
+  # sin precio -con el motivo `no alcanzo el tiempo`, no como un error- y con
+  # su botón para completarlo a mano: un lote a medias que lo dice es mejor que
+  # uno que se estira hasta la mañana.
+  #
+  # El tope se mira ANTES de arrancar cada renglón y nunca en medio de uno:
+  # cortar una consulta a la mitad dejaría a Doyle con navegadores abiertos y
+  # tiraría una búsqueda que ya costó ~9 s por proveedor. Así que el lote se
+  # puede pasar por lo que tarde el renglón en curso, acotado por el
+  # `consulta_de_precio.tope_seg` de aquí abajo.
+  #
+  # SI SE SUBE ESTE NÚMERO, hay que subir también el `TimeoutStartSec` de
+  # `scripts/systemd/continental-lote.service`: `Type=oneshot` usa ese valor
+  # para MATAR el proceso, y si se queda corto el tope de aquí no se llega a
+  # cumplir nunca. Hay una prueba que comprueba que el de la unidad sea mayor.
   tope_lote_minutos: 60
 
   # Consultar el precio de UN renglón en Doyle (ticket 12). Esto no es el lote:

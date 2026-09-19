@@ -123,6 +123,7 @@ PURAS = (
     "revisar_sugeridos_abiertos",
     "revisar_transito_con_pedido",
     "revisar_pedidos_enviados",
+    "revisar_clase_abc",
     "revisar_permisos",
 )
 
@@ -658,3 +659,93 @@ def test_el_modulo_explica_por_que_existen_los_dos_verificadores():
 
     assert "verificar_rol.sql" in doc
     assert "dueño" in doc
+
+
+# ==========================================================================
+# INVARIANTE 4 — el lote nocturno puede ordenar por clase ABC (ticket 18)
+# ==========================================================================
+#
+# Es el mismo aparato que el invariante 3: una columna que llega de otro
+# ticket, un `PENDIENTE` visible mientras no está, y el invariante encendiéndose
+# solo el día que aparezca. La diferencia es de quién es la columna: aquélla la
+# trae el ticket 21 de este repo, y ésta la trae el ADR 0018 de FARMACIA-DATA,
+# que es otro repo y otro dueño.
+
+
+def test_sin_clase_abc_el_invariante_queda_pendiente_y_no_tumba_el_despliegue():
+    """**El bloqueo externo del ticket 18, visto desde el despliegue.**
+
+    `marts.dim_producto` tiene 18 columnas al 2026-09-19 y ninguna es
+    `clase_abc`. Sin ella el lote nocturno no puede consultar en orden de
+    importancia, y eso se dice en cada despliegue en vez de descubrirse un día
+    mirando por qué el pedido salió en otro orden.
+    """
+    informe = v.revisar_clase_abc(frozenset({"producto_id", "clave", "ubicacion"}))
+
+    (pendiente,) = informe.pendientes
+    assert informe.fallas == ()
+    assert informe.codigo_de_salida == 0, (
+        "Una columna que otro repo todavía no creó no puede tumbar el "
+        "despliegue de éste."
+    )
+    assert "clase_abc" in pendiente.resumen
+    assert "0018" in pendiente.detalle
+    assert "ACEPTADO Y SIN IMPLEMENTAR" in pendiente.detalle
+
+
+def test_sin_clase_abc_se_dice_que_el_orden_alterno_esta_descartado():
+    """Que nadie "arregle" el pendiente inventando otro orden.
+
+    El ADR 0018 consideró exactamente eso —ordenar por la utilidad de la
+    ventana— y lo descartó con su razón escrita. El mensaje lo dice para que
+    quien lea el despliegue rojo no lo intente.
+    """
+    informe = v.revisar_clase_abc(frozenset({"producto_id"}))
+
+    (pendiente,) = informe.pendientes
+    assert "orden alterno está descartado" in pendiente.detalle
+
+
+def test_con_la_columna_pero_sin_leerla_sigue_pendiente_y_dice_la_linea(monkeypatch):
+    """El segundo caso, y es tan pendiente como el primero.
+
+    Que la columna exista y Continental siga sin leerla no es "ya está": el
+    dato está ahí y el pedido se sigue ordenando mal. El mensaje nombra **la
+    única línea** que falta, para que nadie tenga que buscarla.
+    """
+    monkeypatch.setattr(v, "LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO", False)
+
+    informe = v.revisar_clase_abc(frozenset({"producto_id", "clase_abc"}))
+
+    (pendiente,) = informe.pendientes
+    assert informe.codigo_de_salida == 0
+    assert "YA EXISTE" in pendiente.detalle
+    assert "LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO = True" in pendiente.detalle
+    assert "almacen.py" in pendiente.detalle
+
+
+def test_con_la_columna_y_leyendola_el_invariante_pasa_a_ok(monkeypatch):
+    """El día que llegue el ADR 0018 y se mueva la línea, esto se enciende solo.
+
+    Nadie tiene que volver a tocar este archivo: el invariante ya está escrito
+    y lo único que cambia es lo que el almacén contesta.
+    """
+    monkeypatch.setattr(v, "LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO", True)
+
+    informe = v.revisar_clase_abc(frozenset({"producto_id", "clase_abc"}))
+
+    assert informe.fallas == ()
+    assert informe.pendientes == ()
+    assert informe.codigo_de_salida == 0
+
+
+def test_el_nombre_de_la_columna_sale_del_almacen_y_no_esta_copiado():
+    """Una columna escrita en dos lugares se separa el día que uno cambie.
+
+    Si se separaran, el verificador diría que falta una columna que ya existe
+    —o al revés— y el despliegue mentiría en la dirección más cara.
+    """
+    from continental import almacen
+
+    assert v.COLUMNAS_QUE_EXIGE_EL_ORDEN == (almacen.COLUMNA_DE_LA_CLASE_ABC,)
+    assert almacen.COLUMNA_DE_LA_CLASE_ABC == "clase_abc"

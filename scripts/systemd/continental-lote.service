@@ -1,0 +1,119 @@
+# El lote nocturno de precios de Continental (ticket 18).
+#
+# Es un TRABAJO DE UNA CORRIDA, no un servicio persistente: corre, hace lo
+# suyo, y se muere. Lo mismo que farmacia-diario.service en farmacia-data, y
+# lo contrario de continental-web.service, que está vivo todo el día.
+# Quien lo dispara es continental-lote.timer, que está al lado.
+#
+# Instalación (en atlas, con el repo ya clonado en ~/proyectos/Continental):
+#   sudo cp scripts/systemd/continental-lote.service /etc/systemd/system/
+#   sudo cp scripts/systemd/continental-lote.timer   /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemd-analyze verify continental-lote.service   # que no calle nada
+#   sudo systemctl enable --now continental-lote.timer
+#
+# OJO: se habilita el TIMER, no el servicio. `enable` sobre el servicio no
+# hace nada útil aquí -no tiene [Install] con WantedBy=multi-user.target a
+# propósito- y dejaría el lote sin disparar sin un solo error que ver.
+#
+# Ver cómo le fue anoche -AQUÍ VIVE LA BITÁCORA DE LA CORRIDA-:
+#   journalctl -u continental-lote -n 200 --no-pager
+#   systemctl list-timers continental-lote.timer
+#
+# Correrlo a mano, sin esperar a la noche (y con un tope corto para mirarlo):
+#   sudo systemctl start continental-lote.service
+#   cd ~/proyectos/Continental && PYTHONPATH=src .venv/bin/python \
+#       -m continental.lote --tope-minutos 5
+
+[Unit]
+Description=Continental: lote nocturno de precios de proveedor (tope de 60 min)
+Documentation=file:///home/eddie/proyectos/Continental/docs/decisiones/0006-el-lote-nocturno-corre-despues-de-la-cadena-y-se-detiene-al-tope.md
+Documentation=file:///home/eddie/proyectos/Continental/docs/despliegue-en-atlas.md
+
+# LAS DEPENDENCIAS, y por qué son estas y no más:
+#
+# - `docker.service` es REQUISITO DURO: el almacén (`farmacia_warehouse`,
+#   postgres:16) corre en Docker, y sin él este proceso no tiene ni de dónde
+#   leer las ventas ni dónde escribir los precios.
+#
+# - DOYLE NO ES DEPENDENCIA, ni dura ni blanda, y es la misma decisión que
+#   tomó continental-web.service. Doyle caído no es un lote fallido: es una
+#   corrida en la que cada renglón queda `no se pudo` con su motivo en la
+#   bitácora (regla 4 de CLAUDE.md). Y un `Requires=doyle-web.service` sería
+#   peor: esa unidad NO EXISTE en atlas al 2026-09-19 -Doyle todavía corre en
+#   la torre, el ADR 0008 de Doyle está sin hacer- y systemd falla el arranque
+#   de quien requiere una unidad que no puede cargar.
+#
+# - `farmacia-diario.service` (la cadena de las 20:30 de farmacia-data)
+#   TAMPOCO es dependencia, y esto sí merece explicación porque el ticket dice
+#   "después de la cadena". `After=` solo ordena unidades que arrancan en la
+#   MISMA transacción de systemd, y estas dos las disparan timers distintos a
+#   horas distintas: escribirlo aquí no ordenaría nada y se leería como si sí.
+#   Lo que de verdad separa a las dos es la hora del timer, con su colchón
+#   medido, y está razonado en continental-lote.timer y en el ADR 0006.
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=eddie
+Group=eddie
+WorkingDirectory=/home/eddie/proyectos/Continental
+# El repo va PLANO en atlas -~/proyectos/Continental, hermano de
+# ~/proyectos/Marlowe y de ~/proyectos/Farmacia (que es farmacia-data)-, al
+# revés que en la torre, donde cuelga de Farmacia/.
+
+# El paquete no está instalado en el venv de atlas (no hace falta: nunca se
+# distribuye), así que `continental` solo se encuentra con esto.
+Environment=PYTHONPATH=/home/eddie/proyectos/Continental/src
+
+# SIN CONTINENTAL_HOST: este proceso NO ESCUCHA EN NINGÚN PUERTO. No es un
+# servidor web, no lo alcanza el túnel y no tiene nada que ver con el gateway
+# de la red `borde` (ADR 0005). Habla de salida con dos cosas: el Postgres del
+# contenedor y Doyle por loopback.
+
+# SIN xvfb-run, igual que continental-web.service y por la misma razón:
+# Continental no abre un navegador nunca (regla 1 de CLAUDE.md, ADR 0001). El
+# lote le pide los precios a Doyle por HTTP y es DOYLE quien abre navegadores
+# -y quien, con su ADR 0008, va a reutilizar uno por proveedor-. El día que
+# aquí haga falta un Xvfb, la separación del ADR 0001 se rompió.
+ExecStart=/home/eddie/proyectos/Continental/.venv/bin/python -m continental.lote
+
+# EL TIEMPO MÁXIMO, Y ESTA LÍNEA NO ES OPCIONAL.
+#
+# `Type=oneshot` usa `TimeoutStartSec` para matar el proceso, y el valor por
+# omisión de systemd (DefaultTimeoutStartSec, 90 s en Debian) MATARÍA EL LOTE
+# A LOS NOVENTA SEGUNDOS. Sin esta línea el tope de 60 minutos no existiría: el
+# lote alcanzaría a consultar un puñado de renglones, systemd lo mandaría a
+# `failed` cada noche, y el journal diría "timeout" en vez de decir que se
+# consultaron nueve de trescientos.
+#
+# 75 minutos y no 60: el tope se mira ANTES de arrancar cada renglón, no en
+# medio de uno -cortar una consulta a la mitad dejaría a Doyle con navegadores
+# abiertos y tiraría una búsqueda que ya costó ~9 s por proveedor-. Así que el
+# lote puede pasarse por lo que tarde el renglón en curso, y eso está acotado:
+# el tope por consulta son 120 s (pedido.consulta_de_precio.tope_seg), o sea
+# dos minutos como mucho. Los 13 restantes son margen para el arranque y para
+# el día que alguien suba `pedido.tope_lote_minutos` un poco sin acordarse de
+# venir aquí. SI SE SUBE EL TOPE DEL YAML, HAY QUE SUBIR ESTO TAMBIÉN.
+TimeoutStartSec=75min
+
+# SIN Restart, y es deliberado. Un lote que falla a mitad de la noche NO se
+# reintenta solo: lo que alcanzó a consultar ya está guardado -la tabla del
+# precio solo crece, ADR 0004- y volver a empezar molestaría otra vez a los
+# cuatro portales del dueño por renglones que ya tienen precio. Lo que queda
+# se completa con el botón de la pantalla, que es justo para lo que está.
+#
+# `SuccessExitStatus` tampoco hace falta: una corrida que se detiene al tope
+# sale con CERO a propósito (ver `lote.main`). Detenerse a los 60 minutos es
+# lo que se le pidió, no un fallo, y marcarlo en rojo cada noche haría que
+# nadie volviera a mirar el journal -que es donde vive la bitácora-.
+
+StandardOutput=journal
+StandardError=journal
+
+# SIN [Install]. Quien se habilita es el timer de al lado. Un
+# `WantedBy=multi-user.target` aquí arrancaría el lote EN CADA ARRANQUE de
+# atlas, a la hora que fuera, contra los portales del dueño en horario de
+# mostrador.

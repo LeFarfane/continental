@@ -61,6 +61,59 @@ class LineaDeVenta:
     utilidad: float
 
 
+#: Los tres valores que `marts.dim_producto.clase_abc` va a tomar, y el orden
+#: en que se leen de más a menos importante. Salen del ADR 0018 de
+#: farmacia-data: participación acumulada en la utilidad de 12 meses, A hasta
+#: 80% y B hasta 95%.
+#:
+#: Se escriben aquí y no se deducen porque son el vocabulario de otro repo: el
+#: día que llegue la columna, lo que hay que comparar es **esto** contra lo que
+#: dbt escriba, y una tupla tiene dónde ponerle la comparación.
+CLASES_ABC: tuple[str, ...] = ("A", "B", "C")
+
+#: Que un producto no tenga clase conocida. **No es una cuarta clase**: es "no
+#: se sabe", igual que `existencia is None` en un renglón. Hoy vale esto para
+#: los 3,429 artículos, porque la columna todavía no existe.
+SIN_CLASE_ABC = ""
+
+#: **El interruptor del bloqueo externo, y el único que hay que mover.**
+#:
+#: `marts.dim_producto` tiene 18 columnas al 2026-09-19 y ninguna es la clase
+#: (verificado: `clase_abc` no aparece en un solo modelo de
+#: `../dbt/models`). El ADR 0018 de farmacia-data está **aceptado y sin
+#: implementar**, así que un `select clase_abc` hoy rebota en atlas con
+#: "column does not exist" y se lleva por delante la lista entera del día —el
+#: catálogo es una de las dos lecturas con las que se arma—.
+#:
+#: Así que la columna se lee **cuando exista** y no antes. El día que
+#: `dbt build` la materialice, esto pasa a `True` y no hay nada más que tocar:
+#: el `Producto` ya tiene el campo, el orden del lote ya sabe usarlo y sus
+#: pruebas ya están escritas contra dobles con clase.
+#:
+#: Y nadie tiene que acordarse de venir: `continental.verificar` mira las
+#: columnas reales de `marts.dim_producto` en cada despliegue y lo imprime como
+#: PENDIENTE mientras la columna falte —el mismo trato que el invariante 3 del
+#: ticket 17—. En cuanto aparezca, el paso 6 del despliegue lo dice con el
+#: nombre de esta constante dentro.
+LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO = False
+
+
+def clase_abc_normalizada(crudo) -> str:
+    """Lo que venga en la columna → `"A"`, `"B"`, `"C"` o `SIN_CLASE_ABC`.
+
+    Estricta a propósito y en la dirección segura: un valor que no sea una de
+    las tres clases se convierte en "no se sabe" y no en una clase inventada.
+    El lote ordena con esto, y un producto que subiera al principio de la noche
+    por un `"a "` mal leído se llevaría el tiempo de los que de verdad pesan.
+
+    Se acepta la minúscula y el espacio porque son las dos maneras en que un
+    `case` de dbt suele entregar una etiqueta, y rechazarlas costaría el orden
+    entero por un detalle de formato.
+    """
+    texto = ("" if crudo is None else str(crudo)).strip().upper()
+    return texto if texto in CLASES_ABC else SIN_CLASE_ABC
+
+
 @dataclass(frozen=True, slots=True)
 class Producto:
     """Una fila de `marts.dim_producto`, con anaquel y existencia.
@@ -69,6 +122,25 @@ class Producto:
     (medido al 2026-09). Esos productos se muestran marcados *sin clasificar*,
     nunca se esconden — un producto que desaparece de la lista por no tener
     anaquel es mercancía que va a faltar sin que nadie se entere.
+
+    **`clase_abc` es un dato del catálogo y por eso vive aquí**, al lado del
+    anaquel y del costo, y no en un mapa suelto que el lote nocturno se pase
+    por un lado. Es la columna del ADR 0018 de farmacia-data: A, B o C por
+    participación acumulada en la utilidad de 12 meses.
+
+    **Hoy vale `SIN_CLASE_ABC` en las 3,429 filas, y eso no es un valor por
+    omisión inocente: es el bloqueo externo del ticket 18 dicho en el tipo.**
+    La columna todavía no existe en `marts.dim_producto` (ADR 0018 aceptado y
+    sin implementar), así que la consulta real ni siquiera la nombra — ver
+    `LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO`. Nada deduce una clase de otra cosa:
+    quien ordena por importancia mira si la sabe y **dice que no la sabe**
+    cuando no, en vez de inventarse un orden alterno y llamarlo cumplido. El
+    ADR 0018 descartó a propósito "ordenar por la utilidad de la ventana" (su
+    opción 2), así que eso no es una alternativa disponible.
+
+    Va al final y con valor por omisión para que las filas que ya se
+    construyen en cien sitios —dobles, pruebas, `AlmacenFalso`— sigan
+    construyéndose igual. El día que la columna exista, el campo ya está.
     """
 
     producto_id: int
@@ -82,6 +154,12 @@ class Producto:
     existencia: float
     esta_activo: bool
     es_granel: bool
+    clase_abc: str = SIN_CLASE_ABC
+
+    @property
+    def tiene_clase_abc(self) -> bool:
+        """Si de este producto se sabe cuánto pesa. Hoy: de ninguno."""
+        return self.clase_abc in CLASES_ABC
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,15 +242,50 @@ _VENTAS = text(
     """
 )
 
-_CATALOGO = text(
-    """
-    select producto_id, clave, descripcion, categoria, departamento,
-           ubicacion, precio_lista_sin_iva, costo, existencia,
-           esta_activo, es_granel
-    from marts.dim_producto
-    order by producto_id
-    """
+#: Las once columnas que `marts.dim_producto` tiene **hoy** y que Continental
+#: necesita. Sin `clase_abc`: esa columna no existe (ADR 0018 de farmacia-data,
+#: aceptado y sin implementar) y nombrarla haría que la lista del día entera
+#: rebotara con "column clase_abc does not exist".
+_COLUMNAS_DEL_CATALOGO = (
+    "producto_id",
+    "clave",
+    "descripcion",
+    "categoria",
+    "departamento",
+    "ubicacion",
+    "precio_lista_sin_iva",
+    "costo",
+    "existencia",
+    "esta_activo",
+    "es_granel",
 )
+
+#: Lo único que se le agrega a la consulta el día que la columna exista.
+COLUMNA_DE_LA_CLASE_ABC = "clase_abc"
+
+
+def _sql_del_catalogo(con_la_clase: bool) -> str:
+    """El `select` del catálogo, con o sin la columna de la clase.
+
+    Se arma y no se escribe dos veces entero por la razón de siempre: dos
+    consultas casi iguales se separan al primer cambio, y la que nadie corre
+    hoy sería justo la que se quedara vieja. Aquí la que nadie corre hoy es la
+    del día que llegue el ADR 0018, o sea la que más falta hace que esté bien.
+
+    No es SQL armado con datos de nadie: los nombres son constantes de este
+    archivo y el booleano sale de otra constante de este archivo.
+    """
+    columnas = list(_COLUMNAS_DEL_CATALOGO)
+    if con_la_clase:
+        columnas.append(COLUMNA_DE_LA_CLASE_ABC)
+    return (
+        f"select {', '.join(columnas)}\n"
+        "from marts.dim_producto\n"
+        "order by producto_id"
+    )
+
+
+_CATALOGO = text(_sql_del_catalogo(LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO))
 
 _COMPRAS = text(
     """
@@ -245,6 +358,14 @@ class AlmacenPostgres:
                 existencia=float(f.existencia or 0),
                 esta_activo=bool(f.esta_activo),
                 es_granel=bool(f.es_granel),
+                # Hoy la fila no trae la columna y esto vale `SIN_CLASE_ABC`
+                # para las 3,429. `getattr` y no `f.clase_abc` porque la
+                # consulta de hoy no la pide: pedirla tronaría. El día que
+                # `LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO` pase a `True`, la misma
+                # línea empieza a leerla sin tocarse.
+                clase_abc=clase_abc_normalizada(
+                    getattr(f, COLUMNA_DE_LA_CLASE_ABC, None)
+                ),
             )
             for f in self._filas(_CATALOGO)
         ]

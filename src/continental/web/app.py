@@ -47,7 +47,7 @@ from continental.consultas import (
     lecturas_como_json,
 )
 from continental.doyle import ClienteDeDoyle
-from continental.sugerido import DIAS_DE_RITMO, calcular_pedido_sugerido
+from continental.sugerido import armar_la_lista
 from continental.vistas import VISTAS
 from continental.web.dependencias import (
     obtener_almacen,
@@ -1008,46 +1008,20 @@ def _mover_el_renglon(
 def _armar(almacen: LecturaDelAlmacen, ventana: Ventana):
     """Las dos lecturas y el cálculo. Solo corre cuando la lista **no** existía.
 
-    **Son dos ventanas distintas y este ticket alargó solo una.** La de
-    reposición es la que llega por argumento —lo acumulado desde el corte— y la
-    del ritmo son `DIAS_DE_RITMO` días fijos, que es cuánta historia se mira
-    para estimar "a este ritmo, ¿cuánto dura lo que queda?". El porqué de los 28
-    está junto a la constante, en `sugerido.py`.
+    El cuerpo vive en `sugerido.armar_la_lista` desde el ticket 18, y no por
+    gusto de mover código: desde ese ticket hay **dos** cosas que arman la
+    lista del mismo día —esta pantalla cuando alguien la carga, y el lote
+    nocturno a las 22:00—. Con dos copias, el día que una cambie el lote habría
+    consultado precios de una lista y la pantalla mostraría otra, sin un solo
+    error que ver. Todo el porqué de las dos ventanas, del rango unión y del
+    recorte en memoria está en el docstring de allá.
 
-    Hasta el ticket 08 la de reposición era un solo día y por tanto un
-    subconjunto de la del ritmo: bastaba leer 28 días y recortar. **Eso dejó de
-    valer**: una lista cerrada hace dos meses hace que la de reposición sea la
-    más larga de las dos. Así que se lee **el rango unión** —el `min` de los dos
-    extremos izquierdos— en una sola consulta y se recortan las dos en memoria.
-
-    Recortar la del ritmo no es opcional aunque la lectura la contenga: el
-    divisor de `_ritmo_diario` sale de las fechas que recibe, así que pasarle la
-    lectura entera estiraría el rango, bajaría el ritmo e inflaría la cobertura
-    — y lo urgente se hundiría al fondo de la lista.
-
-    Una sola lectura y no dos: le ahorra a Postgres un recorrido de
-    `fct_ventas` por carga y, sobre todo, evita que la reposición y el ritmo
-    salgan de dos fotos tomadas en momentos distintos. Son del orden de 600
-    filas por cada 28 días (21,035 líneas en 33 meses, medido sobre el respaldo
-    del 2026-07-27).
-
-    El `- 1` es el rango completo menos el propio día: de `hasta - 27` a
-    `hasta` son 28 días, porque el almacén incluye los dos extremos.
-
-    Las listas de anaqueles se leen aquí y se pasan hacia adentro: el cálculo es
-    una función pura y no abre archivos, igual que no mira el reloj. `cargar()`
-    está cacheado, así que esto no relee el YAML por petición.
+    Esto se queda como la puerta de esta ruta: lee las reglas de clasificación
+    del YAML —`cargar()` está cacheado, así que no relee el archivo por
+    petición— y se las pasa hacia adentro, porque el cálculo no abre archivos
+    igual que no mira el reloj.
     """
-    desde_del_ritmo = ventana.hasta - dt.timedelta(days=DIAS_DE_RITMO - 1)
-    leidas = almacen.ventas(min(ventana.desde, desde_del_ritmo), ventana.hasta)
-    catalogo = almacen.catalogo()
-
-    return calcular_pedido_sugerido(
-        ventas=[v for v in leidas if ventana.desde <= v.fecha <= ventana.hasta],
-        catalogo=catalogo,
-        ventas_del_ritmo=[v for v in leidas if v.fecha >= desde_del_ritmo],
-        reglas=reglas_configuradas(),
-    )
+    return armar_la_lista(almacen, ventana, reglas=reglas_configuradas())
 
 
 def _como_json(guardado: PedidoSugeridoGuardado, precios: dict | None = None) -> dict:

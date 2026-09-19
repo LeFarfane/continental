@@ -38,6 +38,43 @@ motivo dicho con palabras de persona; y **un renglón con una sola lectura ya no
 se marca como "el más barato" sino como "el único que contestó"**. Lo que falta
 de precios —el lote de la noche— es el ticket 18.
 
+**Y desde el ticket 18 la lista se arma sola de noche y trae precios sin que
+nadie los pida.** `continental-lote.timer` dispara lun-vie a las 22:00 —noventa
+minutos después de la cadena de las 20:30 de farmacia-data, que es la que mete
+las ventas con las que la lista se arma— y `python -m continental.lote` abre la
+lista del día, le pide a Doyle el precio de cada renglón uno por uno, y **se
+detiene al tope de 60 minutos**. Lo que no alcanzó queda contado como *faltante
+por tope*, con el motivo `no alcanzó el tiempo` que ya existía, y **no como un
+error**: una corrida que se detiene al tope sale con cero, porque detenerse es
+lo que se le pidió. Un proveedor que falla deja un hueco con su motivo y los
+otros tres siguen; un renglón que no se pudo consultar tampoco tumba la
+corrida. **La bitácora es el journal** —`journalctl -u continental-lote`— con
+cuántos consultó, cuántos quedaron sin precio y el desglose por motivo; el
+*por qué* de cada hueco además ya vivía en `pedidos.precio_de_proveedor`, así
+que no se estrenó ninguna tabla (ADR 0006). Y **el lote no puede dejar la lista
+peor que antes**: lo único que escribe son filas de precio —la tabla que solo
+crece del ADR 0004— más la lista del día si no existía, sin un solo `UPDATE` de
+renglón, y hay una prueba que lo mata a la mitad para demostrarlo.
+
+**Dos casillas del ticket 18 quedaron SIN MARCAR, y las dos por bloqueos
+externos que siguen puestos** (más la del timer, que está escrito y probado
+pero no instalado porque Continental todavía no está en atlas):
+
+- **El orden de importancia por clase ABC.** `marts.dim_producto` no tiene
+  `clase_abc` (ADR 0018 de farmacia-data, **aceptado y sin implementar**). El
+  orden está construido entero como función pura y probado con dobles; el lote
+  **no reordena nada** mientras no haya clase —consulta en el orden de urgencia
+  con el que la lista se guardó— y **lo declara en cada corrida**. No se
+  inventó un orden alterno: el propio ADR 0018 descartó "ordenar por la
+  utilidad de la ventana" con su razón escrita. El día que la columna exista,
+  el trabajo es **una línea**: `almacen.LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO =
+  True`. Y nadie tiene que acordarse — `continental.verificar` lo imprime como
+  PENDIENTE en cada despliegue, con esa constante dentro.
+- **El navegador reutilizado por proveedor.** Vive en Doyle (su ADR 0008, sin
+  hacer) y Continental no abre navegadores nunca (regla 1). Lo único que de
+  este lado depende está hecho: el lote es **estrictamente secuencial**, que es
+  lo que le permite a Doyle reutilizar lo que tenga abierto.
+
 **Y desde el ticket 17 el despliegue pregunta por los datos, no solo por el
 código.** `python -m continental.verificar` es el paso 6 de `desplegar.sh`:
 comprueba que el rol todavía pueda leer las cinco tablas de `marts` **haciendo
@@ -78,7 +115,18 @@ contestó"*.
 ```bash
 python iniciar.py     # http://127.0.0.1:8585
 python -m continental.verificar   # los datos de producción, no el código (ticket 17)
-pytest                # 565 pruebas, 0 saltadas, 2.50-2.73 s (2026-09-19, ticket 17)
+python -m continental.lote        # el lote nocturno, a mano (ticket 18)
+python -m continental.lote --tope-minutos 5   # ...con tope corto, para mirarlo
+pytest                # 628 pruebas, 0 saltadas, 2.51-2.72 s (2026-09-19, ticket 18)
+                      # 565 en el ticket 17. Las 63 nuevas son 54 de
+                      # `test_lote.py`, 5 de `test_verificar.py` (el invariante
+                      # 4, el de la clase ABC), 3 de `test_compila.py` que gana
+                      # solo por haber dos unidades y un módulo más que
+                      # revisar, y 1 más del ast de las funciones puras.
+                      # Medido en tres corridas: con `test_lote.py` fuera el
+                      # árbol del 17 costó 2.39-2.47 s, y las 54 nuevas
+                      # corriendo solas, 0.09-0.10 s. NINGUNA DUERME: varias
+                      # simulan sesenta minutos con el reloj inyectado.
                       # 499 y 1 saltada en el ticket 15; 525 en el 16; las 40
                       # del 17 son 37 de `test_verificar.py`, 2 de
                       # `test_despliegue.py` y 1 que `test_compila.py` gana sola
@@ -100,6 +148,8 @@ pytest                # 565 pruebas, 0 saltadas, 2.50-2.73 s (2026-09-19, ticket
 | `docs/decisiones/0002` | el módulo de Pedido: reposición 1 a 1, EAN, recepción sugerida |
 | `docs/decisiones/0003` | dónde viven las tablas del pedido y por qué el rol no puede crearlas |
 | `docs/decisiones/0004` | el precio congelado: tabla que solo crece, `numeric`, y quién espera a Doyle |
+| `docs/decisiones/0005` | dónde escucha Continental: el gateway de la red `borde`, no loopback |
+| `docs/decisiones/0006` | el lote nocturno: la hora, el tope, qué pasa con lo que no alcanzó, y por qué la bitácora es el journal y no una tabla nueva |
 | `sql/` | el DDL de las cuatro tablas, el rol acotado y `verificar_rol.sql`, que mira la **forma** de la base. **Se corren a mano, en ese orden, con credenciales de dueño** — no confundirlo con `continental.verificar`, que mira los **datos** en cada despliegue (la cabecera de ese módulo tiene la tabla que los separa) |
 | `sql/migraciones/` | lo que le falta a una base donde las tablas YA existen: `crear_tablas.sql` usa `CREATE TABLE IF NOT EXISTS` y calla si la tabla ya está con otra forma. También a mano y con credenciales de dueño |
 | `config/continental.yml` | puertos de los módulos y los parámetros del pedido |
@@ -107,6 +157,7 @@ pytest                # 565 pruebas, 0 saltadas, 2.50-2.73 s (2026-09-19, ticket
 | `src/continental/almacenamiento.py` | donde el pedido sugerido se guarda: el `Protocol`, el SQL real y las reglas de la tabla en un solo lugar |
 | `src/continental/precios.py` | funciones puras: lo que Doyle contestó + la clave buscada -> precio `Decimal` o motivo de rechazo. Ahí vive `emparejar`, la regla por proveedor. No toca la red ni el reloj |
 | `src/continental/consultas.py` | quién espera a Doyle y dónde queda el resultado si nadie está mirando |
+| `src/continental/lote.py` | el lote nocturno. Tres mitades: lo **puro** —el orden por clase ABC, el cronómetro del tope, el resumen de la corrida—, la **orquestación** (`correr_el_lote`, con los tres bordes por argumento) y el **arranque** (`main`, lo único que construye bordes de verdad). El reloj entra por argumento: una prueba de sesenta minutos cuesta microsegundos |
 | `src/continental/verificar.py` | los invariantes sobre los **datos** de producción, no sobre el código. Mitad pura (recibe listas, devuelve un `Informe`, se prueba) y mitad de recolección (lee de Postgres, no se prueba). Acumula todas las fallas, cada una con su comando de reparación, y sale distinto de cero. Es el paso 6 de `desplegar.sh` |
 | `src/continental/comparacion.py` | funciones puras: las cuatro lecturas congeladas + las piezas -> quién gana, con qué certeza, cuánto se ahorra contra NADRO y, para la lista entera, cuántos renglones quedaron sin comparar (`contar_la_lista`). No toca la red, la base ni el reloj |
 
@@ -120,7 +171,13 @@ pytest                # 565 pruebas, 0 saltadas, 2.50-2.73 s (2026-09-19, ticket
    se construye la suite mezclaría dos fallas distintas.
 2. **`clase_abc` y `clase_xyz` como columnas de `dim_producto`** en
    farmacia-data (ADR 0018). El lote nocturno necesita un orden de importancia
-   desde el primer día.
+   desde el primer día. **Desde el ticket 18 todo lo de este lado está listo y
+   esperando**: el orden es una función pura probada, `Producto.clase_abc`
+   existe, y el único trabajo del día que llegue la columna es poner
+   `almacen.LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO = True` —la consulta de hoy ni
+   siquiera la nombra, a propósito, porque un `select clase_abc` se llevaría
+   por delante la lista del día entera—. El paso 6 del despliegue lo imprime
+   como PENDIENTE hasta entonces.
 3. **El módulo de Pedido.**
 4. **Absorber la interfaz de Marlowe**, que pasa a ser API como Doyle. Después
    del Pedido: es reescribir una interfaz que ya funciona y no agrega ninguna
@@ -143,6 +200,16 @@ más barato y se le pidió a otro.**
   que falta no son los archivos: es **instalarlos en atlas**, y eso empieza por
   algo que todavía no hay (ver abajo). Los pasos completos, en orden y con las
   casillas sin marcar, están en `docs/despliegue-en-atlas.md`.
+- ~~`continental-lote.service` y `continental-lote.timer`~~ **ya existen**
+  desde el ticket 18 (2026-09-19), con 14 pruebas en `tests/test_lote.py`.
+  Tampoco están instalados, por lo mismo, y su paso es el **A.8** de
+  `docs/despliegue-en-atlas.md`. Dos cosas que conviene no redescubrir a la
+  mala: se habilita **el timer y no el servicio** —la unidad no tiene
+  `[Install]` a propósito, así que un `enable` sobre ella no hace nada y deja
+  el lote sin disparar en silencio—, y el `TimeoutStartSec=75min` **no es
+  adorno**: `Type=oneshot` usa ese valor para matar el proceso y el de omisión
+  de systemd son 90 segundos, o sea que sin esa línea el tope de 60 minutos no
+  existiría y la unidad quedaría en `failed` todas las noches.
 - **El rol `continental` y sus tablas, CREADOS EN LA BASE.** El SQL ya está
   escrito (ticket 07): `sql/crear_tablas.sql`, `sql/crear_rol.sql` y
   `sql/verificar_rol.sql`, con su cabecera explicando el porqué de cada
@@ -304,6 +371,13 @@ más barato y se le pidió a otro.**
    consulte la lista entera de golpe, o cuando entre un `leer_por_id` al
    almacenamiento por otra razón, esto se cierra en una línea.
 
+   **La condición se cumplió a medias con el ticket 18 y el hilo sigue
+   abierto.** El lote sí consulta la lista entera de golpe, pero lo hace desde
+   **otro proceso** y sin pasar por la ruta: no le agrega ni le quita nada al
+   conteo que la pantalla muestra. Lo que sí cambió es cuánto duele — a la
+   mañana la lista ya llega con sus precios, así que el encargado aprieta el
+   botón muchas menos veces, que es justo cuando el conteo envejece.
+
 3. **Un fallo de Doyle al PEDIR la búsqueda no deja rastro guardado.** Si
    `pedir_busqueda` truena —Doyle apagado, el puerto ocupado por otra cosa— no
    se escribe ninguna fila: no se sabe siquiera a qué proveedores se iba a
@@ -316,6 +390,14 @@ más barato y se le pidió a otro.**
    vez de resuelto a medias. **Condición de disparo:** si el lote nocturno
    (ticket 18) corre con Doyle caído y a la mañana no hay forma de saber que
    corrió, esto deja de ser un detalle.
+
+   **El ticket 18 le quitó la mitad del filo.** El lote deja su resumen en el
+   journal **pase lo que pase** —está en un `finally`, así que sale hasta
+   cuando alguien mata el proceso— y ahí se lee cuántos renglones quedaron
+   `no se pudo` y con qué tipo de falla. O sea que sí hay forma de saber que
+   corrió y cómo le fue. Lo que sigue sin poderse contestar es lo mismo **desde
+   la pantalla, con SQL**: para eso haría falta la tabla de bitácora que el ADR
+   0006 describe y deja sin construir, con su propia condición de disparo.
 
 4. **El tercer invariante del ticket 17 está DECLARADO, no revisado.** "Ningún
    pedido enviado sin quién lo envió" necesita dos columnas que `pedidos.pedido`
@@ -340,6 +422,15 @@ más barato y se le pidió a otro.**
    farmacia-data): lo decide el dueño. Si se acepta mover el respaldo a las
    ~20:15, **hay que mover el timer de la cadena a las 21:00 en el mismo
    movimiento**, o el colchón baja de hora y media a 15 minutos.
+
+   **Desde el ticket 18 son TRES cosas que se mueven juntas y no dos**: el
+   respaldo, `farmacia-diario.timer` (20:30 → 21:00) y
+   `continental-lote.timer` (22:00 → 22:30). El lote arma la lista con las
+   ventas que la cadena acaba de meter, así que moverla a ella y no a él
+   dejaría el lote trayendo precios para la lista de **ayer** — sin fallar y
+   sin avisar. El aviso está escrito en mayúsculas dentro del propio
+   `scripts/systemd/continental-lote.timer`, que es donde lo va a leer quien lo
+   esté editando, y hay una prueba que comprueba que siga ahí.
 6. **Falta probar `google-chrome --version` en atlas.** Si ese CPU de 2010 no
    lo aguanta, Doyle usa el Chromium de `apt` —que ya está medido— y la parte
    del ADR 0004 que dependía de Chrome queda cerrada.
@@ -377,7 +468,41 @@ más barato y se le pidió a otro.**
    ofuscadas pero recuperables. Está aceptado con mitigación (permisos `700`,
    fuera de respaldos) en el ADR 0008 de Doyle. Si alguien saca una copia del
    disco, se cambian las cuatro contraseñas.
-10. **El día del corte se cierra a medias y ese pedacito se pierde.** El
+10. **La pantalla no distingue "el lote no llegó" de "el lote no corrió".**
+   Un renglón que el tope dejó fuera **no deja fila** en
+   `pedidos.precio_de_proveedor`, y eso es una decisión razonada del ADR 0006:
+   escribir cuatro huecos por renglón no alcanzado obligaría a inventarse a qué
+   proveedores se le iba a preguntar —esa lista sale del acuse de Doyle, y no
+   hubo acuse— y dispararía la condición de revisión del ADR 0004 sobre cuánto
+   crece la tabla (~11,000 filas de puro hueco en una noche que corte al 20%).
+
+   Lo que cuesta, dicho: la pantalla muestra esos renglones como *"nadie los
+   consultó"* (ticket 15), que es verdad pero es menos de lo que se sabe. La
+   diferencia —faltante por tope, con su motivo `no alcanzó el tiempo`— hoy
+   solo se ve en el journal del lote. **Condición de disparo:** si el encargado
+   pregunta dos mañanas seguidas por qué media lista no tiene precio, esto deja
+   de ser un detalle y lo que hace falta es la tabla de bitácora que el ADR
+   0006 describe.
+
+11. **El lote vuelve a consultar los renglones que ya tienen precio.** No se
+   saltan, a propósito: decidir "qué tan viejo es viejo" es una regla que nadie
+   ha tomado, y la tabla solo crece, así que volver a consultar no pierde nada
+   —solo gasta tope—. Hoy da igual porque a las 22:00 la lista del día acaba de
+   nacer y no tiene ni una lectura. Empieza a importar el día que alguien cargue
+   la pantalla por la tarde y consulte a mano media lista. **Condición de
+   disparo:** si el lote se queda sin tiempo de forma habitual, lo primero que
+   hay que probar es saltarse lo que ya tenga lectura de esa misma noche —antes
+   de subir `pedido.tope_lote_minutos`, y antes de culpar a Doyle—.
+
+   Lo segundo que hay que probar, por la misma razón, es **saltarse los
+   renglones de `abarrote`**: no se le compran a estos cuatro proveedores
+   (`CONTEXT.md`) y hoy el lote los consulta igual, porque nada se filtra. Ojo
+   con hacerlo al revés: saltarse *"lo que no es medicamento"* tiraría también
+   los 688 artículos **sin anaquel conocido**, que caen en `sin clasificar` y
+   sí se compran. Solo es seguro saltarse lo que dice `abarrote` con todas sus
+   letras.
+
+12. **El día del corte se cierra a medias y ese pedacito se pierde.** El
    respaldo de SICAR corta a las 18:51, así que el último día del almacén
    siempre está incompleto: lo que se venda después llega al día siguiente. El
    sugerido acumula desde el corte del último cerrado y **arranca al día

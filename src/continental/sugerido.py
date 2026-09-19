@@ -20,6 +20,22 @@ aquí las ventas llegan ya elegidas.
 Reposición 1 a 1: "se vendieron tres, se piden tres". Es aritmética que el
 encargado verifica de un vistazo, y eso importa más que ser óptima —una lista
 que no se entiende no se usa—.
+
+## La excepción, que está al final del archivo y se llama `armar_la_lista`
+
+Desde el ticket 18 hay **una** función aquí que sí toca el borde de lectura, y
+va anunciada porque contradice lo de arriba. Es la que hace *las dos lecturas
+y el cálculo*: el rango unión de ventas y el catálogo, recortados en memoria.
+
+Existe porque a partir del ticket 18 hay **dos** cosas que arman la lista del
+día —la pantalla cuando alguien la carga, y el lote nocturno a las 22:00— y
+escribir dos veces "qué ventas se leen y cómo se recortan" es cómo un día la
+pantalla y el lote arman listas distintas del mismo día sin que nadie lo note.
+Vive aquí, al lado de `DIAS_DE_RITMO` y de `calcular_pedido_sugerido`, que son
+las dos cosas que necesita.
+
+`calcular_pedido_sugerido` **sigue sin tocar nada**: recibe listas y devuelve
+un pedido sugerido. La frontera es exactamente esa función y ninguna otra.
 """
 
 from __future__ import annotations
@@ -28,13 +44,20 @@ import datetime as dt
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from continental.almacen import LineaDeVenta, Producto
+from continental.almacen import LecturaDelAlmacen, LineaDeVenta, Producto
 from continental.clasificacion import (
     SIN_CLASIFICAR,
     ReglasDeClasificacion,
     clasificar,
 )
+
+if TYPE_CHECKING:  # pragma: sin cobertura — solo para el tipo de `armar_la_lista`
+    # `almacenamiento` importa de aquí, así que importarlo de vuelta en tiempo
+    # de ejecución sería un ciclo. Con `from __future__ import annotations` las
+    # anotaciones no se evalúan, así que esto alcanza para que el tipo se lea.
+    from continental.almacenamiento import Ventana
 
 #: Decimales a los que se redondea la suma de piezas antes de subirla al entero
 #: siguiente. `1.1 + 2.2 + 0.7` da `4.000000000000001` en coma flotante, y sin
@@ -425,3 +448,65 @@ def _piezas_a_pedir(piezas: float) -> int:
     El `round` previo no es cosmético: ver `_DECIMALES_DE_GRANEL`.
     """
     return math.ceil(round(piezas, _DECIMALES_DE_GRANEL))
+
+
+# ---------------------------------------------- las dos lecturas y el cálculo
+#
+# Lo único de este archivo que toca un borde. Ver la nota del encabezado.
+
+
+def armar_la_lista(
+    almacen: LecturaDelAlmacen,
+    ventana: "Ventana",
+    reglas: ReglasDeClasificacion | None = None,
+    catalogo: Sequence[Producto] | None = None,
+) -> PedidoSugerido:
+    """Las dos lecturas del almacén y el cálculo. **Lee; no escribe nada.**
+
+    Es lo que `web/app.py` venía haciendo desde el ticket 08 y lo que el lote
+    nocturno del ticket 18 necesita hacer igual. Está aquí, en un solo lugar,
+    porque dos copias de esto arman listas distintas del mismo día en cuanto
+    una cambie: la pantalla vería una y el lote habría consultado precios de la
+    otra.
+
+    **Son dos ventanas distintas y solo una llega por argumento.** La de
+    reposición es `ventana` —lo acumulado desde el corte del último cerrado— y
+    la del ritmo son `DIAS_DE_RITMO` días fijos, que es cuánta historia se mira
+    para estimar "a este ritmo, ¿cuánto dura lo que queda?". Hasta el ticket 08
+    la primera era un solo día y por tanto un subconjunto de la segunda;
+    **eso dejó de valer**: una lista cerrada hace dos meses hace que la de
+    reposición sea la más larga. Así que se lee el **rango unión** —el `min` de
+    los dos extremos izquierdos— en una sola consulta y se recortan las dos en
+    memoria.
+
+    Recortar la del ritmo no es opcional aunque la lectura la contenga: el
+    divisor de `_ritmo_diario` sale de las fechas que recibe, así que pasarle
+    la lectura entera estiraría el rango, bajaría el ritmo e inflaría la
+    cobertura — y lo urgente se hundiría al fondo de la lista.
+
+    Una sola lectura de ventas y no dos: le ahorra a Postgres un recorrido de
+    `fct_ventas` y, sobre todo, evita que la reposición y el ritmo salgan de
+    dos fotos tomadas en momentos distintos. Son del orden de 600 filas por
+    cada 28 días (21,035 líneas en 33 meses, medido sobre el respaldo del
+    2026-07-27).
+
+    El `- 1` es el rango completo menos el propio día: de `hasta - 27` a
+    `hasta` son 28 días, porque el almacén incluye los dos extremos.
+
+    `catalogo` se puede pasar ya leído, y ése es el único argumento nuevo
+    respecto de lo que hacía la pantalla. El lote nocturno lee el catálogo una
+    vez —lo necesita además para la clase ABC del orden de importancia— y
+    pasarlo aquí evita el segundo recorrido de las 3,429 filas en la misma
+    corrida. `None` es "léelo tú", que es lo que hace la pantalla.
+    """
+    desde_del_ritmo = ventana.hasta - dt.timedelta(days=DIAS_DE_RITMO - 1)
+    leidas = almacen.ventas(min(ventana.desde, desde_del_ritmo), ventana.hasta)
+    if catalogo is None:
+        catalogo = almacen.catalogo()
+
+    return calcular_pedido_sugerido(
+        ventas=[v for v in leidas if ventana.desde <= v.fecha <= ventana.hasta],
+        catalogo=catalogo,
+        ventas_del_ritmo=[v for v in leidas if v.fecha >= desde_del_ritmo],
+        reglas=reglas,
+    )

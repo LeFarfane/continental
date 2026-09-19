@@ -2,9 +2,10 @@
 
 Cómo `farmacia.farfanlab.uk` llega a existir, paso a paso y en orden.
 
-**Estado al 2026-09-19: nada de esto está hecho todavía.** Lo que el ticket 16
-dejó construido y probado es lo que vive en este repo —la unidad de systemd,
-el script de despliegue, la interfaz de escucha y sus pruebas—. Lo que falta
+**Estado al 2026-09-19: nada de esto está hecho todavía.** Lo que los tickets
+16 y 18 dejaron construido y probado es lo que vive en este repo —las tres
+unidades de systemd (el servicio web, el lote y su timer), el script de
+despliegue, la interfaz de escucha y sus pruebas—. Lo que falta
 necesita dos cosas que una sesión de agente no puede hacer: **escribir en
 atlas** y **entrar al dashboard de Cloudflare**. Las casillas de abajo están
 sin marcar por eso, no por olvido.
@@ -25,6 +26,9 @@ Medido en atlas el 2026-09-19, en solo lectura: `~/proyectos/` contiene
 | La interfaz de escucha, configurable | `iniciar.py`, `.env.example` | `tests/test_despliegue.py` (3 casos) |
 | LF y no CRLF en `.sh` y `.service` | los archivos mismos | `tests/test_compila.py` |
 | El porqué de la interfaz | `docs/decisiones/0005-*` | — |
+| El lote nocturno y su timer | `scripts/systemd/continental-lote.{service,timer}` | `tests/test_lote.py` (14 casos) |
+| El lote mismo | `src/continental/lote.py` | `tests/test_lote.py` (40 casos) |
+| El porqué de la hora y del tope | `docs/decisiones/0006-*` | — |
 
 ---
 
@@ -114,6 +118,58 @@ curl -s http://172.19.0.1:8585/api/salud
 > ```bash
 > docker network inspect borde --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}'
 > ```
+
+### A.8 — Instalar el lote nocturno (ticket 18)
+
+Es lo que hace que **en la mañana la lista ya traiga precios sin que nadie los
+pida**. Va después de A.6 porque comparte el venv y el `.env`, y **puede ir
+antes de la parte B**: el lote no escucha en ningún puerto y no pasa por el
+túnel. Lo que necesita es Postgres y Doyle, no Cloudflare.
+
+- [ ] Instalar las dos unidades y **habilitar el TIMER, no el servicio**. Un
+      `enable` sobre el servicio no hace nada útil —no tiene `[Install]`, a
+      propósito— y dejaría el lote sin disparar sin un solo error que ver.
+
+```bash
+sudo cp scripts/systemd/continental-lote.service /etc/systemd/system/
+sudo cp scripts/systemd/continental-lote.timer   /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemd-analyze verify continental-lote.service   # no debe decir nada
+sudo systemctl enable --now continental-lote.timer
+systemctl list-timers continental-lote.timer           # ¿cuándo dispara?
+```
+
+- [ ] **Probarlo a mano antes de dejarlo solo**, con un tope corto para no
+      pasarse una hora mirando:
+
+```bash
+cd ~/proyectos/Continental
+PYTHONPATH=src .venv/bin/python -m continental.lote --tope-minutos 5
+```
+
+- [ ] Y a la mañana siguiente, la bitácora de la corrida — **es aquí donde
+      vive**, no en una tabla (ver `docs/decisiones/0006-*`):
+
+```bash
+journalctl -u continental-lote -n 200 --no-pager
+```
+
+> **La hora es 22:00 lun-vie, y no es independiente.** Son noventa minutos
+> después de `farmacia-diario.timer` (la cadena de farmacia-data, lun-vie
+> 20:30), porque la lista del día se arma con las ventas que esa cadena acaba
+> de meter. **Si la cadena se mueve, esto se mueve en el mismo movimiento** —
+> hilo abierto 5 de `HANDOVER.md`: si el respaldo de SICAR pasa a las ~20:15,
+> la cadena va a las 21:00 y esto a las 22:30. Moverla a ella y no a esto
+> dejaría el lote armando la lista con las ventas de ayer, sin fallar y sin
+> avisar.
+
+> **Dos casillas del ticket 18 quedan abiertas aquí y no se cierran
+> instalando nada:** el orden por clase ABC necesita la columna
+> `clase_abc` en `marts.dim_producto` (ADR 0018 de farmacia-data, aceptado y
+> sin implementar), y el navegador reutilizado por proveedor vive en Doyle (su
+> ADR 0008, también sin hacer). El paso 6 del despliegue imprime la primera
+> como PENDIENTE en cada corrida, con la única línea que hay que cambiar el
+> día que la columna exista.
 
 ---
 
@@ -225,6 +281,13 @@ propio script lo dice con esas palabras para que nadie intente deshacer un
 despliegue que no hace falta deshacer. Cada falla sale con el comando que la
 repara; el verificador **señala y no repara**, a propósito.
 
+**El despliegue no toca el lote nocturno, y no hace falta.**
+`continental-lote.service` es `Type=oneshot`: cada noche arranca un proceso
+nuevo desde el repo, así que un `git pull` a las tres de la tarde ya cambia lo
+que corre a las 22:00 sin reiniciar nada. Lo único que hay que volver a copiar
+a `/etc/systemd/system/` es la unidad o el timer **si cambian esos archivos**,
+y entonces sí: `daemon-reload`.
+
 No confundirlo con `sql/verificar_rol.sql`, que también "verifica": ése mira la
 **forma** de la base (que el rol no tenga `CREATE`, que los CHECK sigan
 puestos), se corre **a mano y una vez** con credenciales de dueño, y pregunta
@@ -244,4 +307,8 @@ tabla. La cabecera de `src/continental/verificar.py` lo tiene en una tabla.
 | La pantalla dice `sin-identificar` entrando por el túnel | Falta la aplicación de Access, o está sobre otro dominio (B.3) |
 | El despliegue se detiene en "1/6 git pull" | No hay remoto configurado (A.1) |
 | El despliegue se detiene en "6/6 invariantes" | Los datos, no el código: el servicio ya está arriba. Lee cada falla con su comando en la salida del paso 6 |
+| El lote nunca dispara, y `systemctl status continental-lote` dice `inactive (dead)` | Se habilitó el servicio en vez del timer (A.8) |
+| El lote muere a los 90 s con `Failed with result 'timeout'` | Falta o se borró `TimeoutStartSec` de la unidad: `Type=oneshot` usa el valor por omisión de systemd |
+| A la mañana la lista no tiene precios y el journal del lote está vacío | El timer no está habilitado, o atlas estuvo apagado a las 22:00 (no es `Persistent`, a propósito) |
+| El lote dice "se acabó el tiempo" todas las noches | No es una falla: mira el resumen del journal. Antes de subir `pedido.tope_lote_minutos`, ver la condición de disparo del ADR 0006 |
 | "permission denied for table ..." a las 8 de la mañana | `dbt build` recreó los modelos de `marts` y se llevó los GRANT. Ver el final de `sql/crear_rol.sql` |

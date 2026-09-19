@@ -70,6 +70,19 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+# Lo único que este módulo importa del paquete, y son dos constantes: el nombre
+# de una columna y un booleano. **No abre nada** —`continental.almacen` solo
+# importa sqlalchemy al cargarse y el motor vive detrás de un `lru_cache`— así
+# que la regla de "las importaciones del almacén van dentro de las funciones"
+# sigue valiendo para lo que de verdad la motiva: `motor()`, que se sigue
+# importando dentro de `correr`. Se importan y no se copian porque una columna
+# escrita en dos lugares se separa el día que uno de los dos cambie, y entonces
+# el verificador diría que falta una columna que ya existe.
+from continental.almacen import (
+    COLUMNA_DE_LA_CLASE_ABC,
+    LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO,
+)
+
 RAIZ = Path(__file__).resolve().parents[2]
 CREAR_ROL = RAIZ / "sql" / "crear_rol.sql"
 
@@ -617,6 +630,84 @@ def revisar_pedidos_enviados(
     )
 
 
+#: La columna del ADR 0018 de farmacia-data que el lote nocturno necesita, y el
+#: interruptor que la enciende del lado de Continental. Los dos salen de
+#: `continental.almacen`, que es donde se lee el catálogo.
+#:
+#: **Sin `clase_abc`, la segunda casilla del ticket 18 no se puede cumplir.**
+#: El orden de importancia del lote está construido y probado, pero no hay de
+#: dónde leer la clase: `marts.dim_producto` tiene 18 columnas y ninguna es
+#: ésa. Es un bloqueo externo, no un pendiente de este repo.
+COLUMNAS_QUE_EXIGE_EL_ORDEN = (COLUMNA_DE_LA_CLASE_ABC,)
+
+
+def revisar_clase_abc(columnas: frozenset[str] | set[str]) -> Informe:
+    """Invariante 4: el lote nocturno puede ordenar por importancia.
+
+    **Hoy no puede, y eso se dice en vez de fingirse.** Es exactamente el mismo
+    trato que el invariante 3 le da a `estado` y `enviado_por` (ticket 17), y
+    por la misma razón: la columna llega de otro repo y de otro ticket, y quien
+    la implemente no tiene por qué acordarse de volver aquí.
+
+    Mientras `marts.dim_producto` no traiga `clase_abc`, el resultado es
+    `PENDIENTE`: **se ve en la salida de cada despliegue y no tumba nada**. El
+    lote sigue corriendo —trae precios igual— pero consulta en el orden de
+    urgencia con el que la lista se armó, y lo declara en su bitácora.
+
+    El día que `dbt build` materialice la columna (ADR 0018 de farmacia-data),
+    esto pasa a `ok` solo, y lo que dice entonces es **el único trabajo que
+    queda**: mover `almacen.LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO` a `True`. Es una
+    línea, y el mensaje la nombra para que nadie tenga que buscarla.
+
+    Los dos casos se distinguen a propósito. Que la columna exista y
+    Continental siga sin leerla **también es un pendiente** —el dato está ahí y
+    el pedido se sigue ordenando mal—, así que sale igual de visible.
+    """
+    nombre = "el lote nocturno puede ordenar por clase ABC"
+    faltantes = [c for c in COLUMNAS_QUE_EXIGE_EL_ORDEN if c not in columnas]
+
+    if faltantes:
+        return _pendiente(
+            nombre,
+            f"pendiente: marts.dim_producto no tiene {_enumerar(faltantes)}",
+            "\n".join(
+                [
+                    f"`marts.dim_producto` todavía no tiene {_enumerar(faltantes)}, así",
+                    "que el lote nocturno (ticket 18) NO puede consultar en orden de",
+                    "importancia: consulta en el orden de urgencia con el que la lista",
+                    "se armó y lo dice en su bitácora. La columna la crea dbt en la",
+                    "cadena de las 20:30 y la decide el ADR 0018 de farmacia-data,",
+                    "que está ACEPTADO Y SIN IMPLEMENTAR. No se inventa aquí: el rol",
+                    "`continental` solo lee de marts (regla 6 de CLAUDE.md), y un",
+                    "orden alterno está descartado a propósito por ese mismo ADR.",
+                    "Esto se enciende solo el día que la columna exista.",
+                ]
+            ),
+        )
+
+    if not LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO:
+        return _pendiente(
+            nombre,
+            f"pendiente: ya existe {COLUMNA_DE_LA_CLASE_ABC} y Continental no la lee",
+            "\n".join(
+                [
+                    f"`marts.dim_producto.{COLUMNA_DE_LA_CLASE_ABC}` YA EXISTE —llegó el",
+                    "ADR 0018 de farmacia-data— y Continental sigue sin leerla, así que",
+                    "el lote nocturno sigue ordenando por urgencia y no por importancia.",
+                    "Falta UNA línea, y es la única que falta:",
+                    "",
+                    "  en src/continental/almacen.py,",
+                    "  LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO = True",
+                    "",
+                    "Después, `pytest` y desplegar. El orden del lote ya está escrito y",
+                    "probado (tests/test_lote.py): lo único que falta es leer el dato.",
+                ]
+            ),
+        )
+
+    return _ok(nombre, f"marts.dim_producto trae {COLUMNA_DE_LA_CLASE_ABC} y se lee")
+
+
 def revisar_permisos(esquema: str, lecturas: Sequence[LecturaDeTabla]) -> Informe:
     """Casilla 5: el veredicto sobre los `SELECT 1` que ya se hicieron.
 
@@ -730,6 +821,30 @@ def _intentar_leer(motor, esquema: str, tablas: Sequence[str]) -> list[LecturaDe
                     )
                 )
     return lecturas
+
+
+def columnas_de_dim_producto(motor) -> frozenset[str]:
+    """Qué columnas tiene HOY `marts.dim_producto`. **LEE de Postgres.**
+
+    Recolección, así que no se prueba: lo que sí está probado es la función
+    pura que decide con lo que esto devuelva (`revisar_clase_abc`).
+
+    `select * ... limit 1` y no una consulta al catálogo del sistema, por la
+    misma razón que la casilla 5 del ticket 17: el catálogo contesta lo que el
+    catálogo cree, y esto contesta lo que este rol ve al leer. Es además la
+    forma en que el invariante 3 averigua la forma de `pedidos.pedido`.
+
+    El `limit 1` es todo lo que hace falta: `CursorResult.keys()` trae los
+    nombres de las columnas aunque no vuelva ni una fila, así que una
+    `dim_producto` vacía contesta igual de bien.
+    """
+    from sqlalchemy import text
+
+    with motor.connect() as conexion:
+        filas = conexion.execute(
+            text("select * from marts.dim_producto limit 1")
+        ).mappings()
+        return frozenset(filas.keys())
 
 
 def _filas_de_los_invariantes(motor) -> tuple[list, list, list, frozenset[str]]:
@@ -853,6 +968,27 @@ def correr() -> Informe:
         + revisar_permisos("marts", lecturas_marts)
         + revisar_permisos("pedidos", lecturas_pedidos)
     )
+
+    # El invariante 4 mira `marts`, no `pedidos`, así que va aquí arriba y se
+    # salta solo si el rol no puede leer esa tabla — la falla ya está dicha una
+    # vez y repetirla no agrega información.
+    if any(l.tabla == "dim_producto" and not l.pudo_leer for l in lecturas_marts):
+        informe = informe + _pendiente(
+            "el lote nocturno puede ordenar por clase ABC",
+            "pendiente: no se pudo leer marts.dim_producto",
+            "No se revisó porque el rol no alcanza la tabla. Arregla el permiso"
+            " de arriba y vuelve a correr esto.",
+        )
+    else:
+        try:
+            informe = informe + revisar_clase_abc(columnas_de_dim_producto(el_motor))
+        except Exception as exc:  # noqa: BLE001
+            informe = informe + _falla(
+                "el lote nocturno puede ordenar por clase ABC",
+                "no se pudieron leer las columnas de marts.dim_producto",
+                redactar(f"{type(exc).__name__}: {exc}"),
+                f'{_PSQL} -c "\\d marts.dim_producto";',
+            )
 
     if any(not l.pudo_leer for l in lecturas_pedidos):
         return informe + _pendiente(
