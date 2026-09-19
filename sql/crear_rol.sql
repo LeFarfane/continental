@@ -107,6 +107,27 @@ GRANT USAGE ON SCHEMA pedidos TO continental;
 -- de algo que no se tiene no falla.
 REVOKE CREATE ON SCHEMA pedidos FROM continental;
 
+-- Y el esquema `public`, que es el que se olvida. Hasta PostgreSQL 14, PUBLIC
+-- traía CREATE sobre `public` por omisión, así que **todo rol podía crear
+-- tablas ahí** sin que ningún GRANT lo dijera: la garantía de este archivo
+-- dependía de la versión del servidor y no de lo que aquí está escrito.
+-- PostgreSQL 15 quitó ese permiso, y farmacia-data corre `postgres:16`
+-- (docker-compose.yml, revisado el 2026-09-19), así que hoy el hueco no está
+-- abierto. Se revoca igual: cuesta una línea y hace que la afirmación "el rol
+-- no puede crear tablas" deje de depender de qué imagen se levante mañana.
+-- El caso 8 de `verificar_rol.sql` pregunta por TODOS los esquemas, así que es
+-- quien lo cazaría si alguna vez volviera.
+--
+-- Se revoca del rol y **no de PUBLIC**, aunque en un servidor anterior a la 15
+-- solo el segundo cerraría el hueco: un permiso que llega por PUBLIC no se
+-- quita revocándoselo a un rol. `REVOKE CREATE ON SCHEMA public FROM PUBLIC`
+-- se lo quitaría a TODOS —dbt y Metabase incluidos—, y eso es una decisión de
+-- farmacia-data y no de este repo. Es el mismo criterio con el que el permiso
+-- de tablas temporales quedó documentado en vez de arreglado a ciegas. Si
+-- alguna vez esto corre sobre un Postgres anterior a la 15, `verificar_rol.sql`
+-- lo va a decir y ahí se decide allá.
+REVOKE CREATE ON SCHEMA public FROM continental;
+
 GRANT SELECT, INSERT, UPDATE ON pedidos.pedido_sugerido TO continental;
 GRANT SELECT, INSERT, UPDATE ON pedidos.renglon         TO continental;
 GRANT SELECT, INSERT, UPDATE ON pedidos.pedido          TO continental;

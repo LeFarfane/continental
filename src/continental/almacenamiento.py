@@ -214,21 +214,35 @@ def ventana_de_reposicion(
         )
 
     desde = corte + dt.timedelta(days=1)
-    if desde > hasta:
-        # Estado imposible con datos sanos: el corte de un cerrado siempre es de
-        # un día anterior al último con ventas. Solo sale de aquí si alguien le
-        # quitó filas al almacén. `ck_pedido_sugerido_ventana` rechazaría una
-        # ventana al revés, así que se acota al propio día y se avisa: el pedido
-        # del día se hace y el motivo queda escrito (regla 4).
+    if desde <= hasta:
+        return Ventana(desde=desde, hasta=hasta)
+
+    # Los dos casos que llegan aquí NO son el mismo, y confundirlos costaba una
+    # falsa alarma en el camino más ordinario que hay.
+    #
+    # `corte == hasta` es la lista de hoy ya cerrada y alguien que recarga la
+    # página. Pasa todos los días y no tiene nada de malo: la ventana que se
+    # devuelve ni siquiera se usa, porque `abrir_el_dia` encuentra la lista y la
+    # lee. Avisar aquí era gritar "revisa si al almacén le faltan días" cada vez
+    # que alguien cierra y recarga, y una alarma que suena cuando todo está bien
+    # deja de leerse justo cuando importa.
+    #
+    # `corte > hasta` sí es un estado que no sale de datos sanos: el corte de un
+    # cerrado nunca es posterior al último día con ventas. Solo se llega ahí si
+    # al almacén le quitaron días. Eso se dice (regla 4).
+    if corte > hasta:
         log.warning(
-            "El corte del último pedido sugerido cerrado (%s) es igual o "
-            "posterior al último día con ventas (%s). La ventana se acota a ese "
-            "día: revisa si al almacén le faltan días.",
+            "El corte del último pedido sugerido cerrado (%s) es posterior al "
+            "último día con ventas (%s). La ventana se acota a ese día: revisa "
+            "si al almacén le faltan días.",
             corte,
             hasta,
         )
-        return Ventana(desde=hasta, hasta=hasta)
-    return Ventana(desde=desde, hasta=hasta)
+
+    # Se acota al propio día en los dos casos: `ck_pedido_sugerido_ventana`
+    # rechazaría una ventana al revés, y el pedido del día tiene que poder
+    # hacerse.
+    return Ventana(desde=hasta, hasta=hasta)
 
 
 def dias_primera_vez_configurados() -> int:
