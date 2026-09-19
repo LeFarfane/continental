@@ -26,12 +26,28 @@ lo congela con su instante de lectura**. Desde el ticket 13 **ese precio solo se
 acepta si empareja**: NADRO, LEVIC y QuePharma por EAN de 13 dígitos directo;
 VICMA únicamente si la búsqueda devuelve exactamente un resultado. Lo que no
 empareja queda como hueco con su motivo —`no empareja` o `varios resultados`—,
-nunca como cero. Lo que falta de precios —comparar los cuatro y decir cuál gana,
-contar los huecos, el lote de la noche— son los tickets 14 en adelante.
+nunca como cero. Y desde el ticket 14 **la fila compara**: los cuatro
+proveedores con su precio y su existencia, el más barato **con existencia**
+marcado, la diferencia por pieza de cada uno contra él, y el ahorro contra NADRO
+en pesos y por renglón —multiplicado por `cantidad_a_pedir`, que es lo que de
+verdad se va a pedir—. Lo que falta de precios —contar los huecos, el lote de la
+noche— son los tickets 15 en adelante.
+
+**Tres cosas del 14 que conviene no redescubrir.** La existencia tiene **tres**
+categorías y no dos: la confirmó, dijo cero, o **no dijo** —los portales la
+dicen con palabras a menudo—. El tercero no compite con quien sí la confirmó, y
+si nadie la confirmó gana igual pero con otra certeza, escrita con otras
+palabras y en ámbar en vez de verde. El **ahorro cuando NADRO no dio precio no
+es cero**: es `None` con el motivo de NADRO al lado, porque un `$0.00` se lee
+"da lo mismo a quién comprarle". Y un proveedor puede ser **más barato que el
+ganador** y no haber ganado —el más barato de los que lo tienen—, así que su
+diferencia sale negativa: la pantalla escribe "60.33 más barato por pieza, pero
+no lo tiene", y el signo lo decide Python. Ese último caso lo cazó el recorrido
+del navegador, no el suite: la pantalla había escrito `+-60.33`.
 
 ```bash
 python iniciar.py     # http://127.0.0.1:8585
-pytest                # 399 pruebas y 1 saltada, 5.3-5.7 s (2026-09-19, ticket 13)
+pytest                # 453 pruebas y 1 saltada, 1.8-2.1 s (2026-09-19, ticket 14)
                       # el número subió con la torre, no con las pruebas: ese
                       # mismo día, con test_precio.py fuera, el árbol del
                       # ticket 11 costaba 3.7-4.2 s contra los 1.7-1.9 s que
@@ -54,6 +70,7 @@ pytest                # 399 pruebas y 1 saltada, 5.3-5.7 s (2026-09-19, ticket 1
 | `src/continental/almacenamiento.py` | donde el pedido sugerido se guarda: el `Protocol`, el SQL real y las reglas de la tabla en un solo lugar |
 | `src/continental/precios.py` | funciones puras: lo que Doyle contestó + la clave buscada -> precio `Decimal` o motivo de rechazo. Ahí vive `emparejar`, la regla por proveedor. No toca la red ni el reloj |
 | `src/continental/consultas.py` | quién espera a Doyle y dónde queda el resultado si nadie está mirando |
+| `src/continental/comparacion.py` | funciones puras: las cuatro lecturas congeladas + las piezas -> quién gana y cuánto se ahorra contra NADRO. No toca la red, la base ni el reloj |
 
 ## Lo que falta, en orden
 
@@ -200,6 +217,21 @@ más barato y se le pidió a otro.**
    abran, el módulo de Pedido no puede traer un solo precio**, y los tickets 13
    y 14 no se pueden cerrar contra datos reales. Es lo primero que hay que
    hacer antes de seguir.
+
+   **Qué queda sin demostrar del ticket 14, dicho con precisión (2026-09-19).**
+   Las reglas —quién gana, el ahorro, las tres categorías de existencia— están
+   escritas y probadas, y el recorrido del navegador cubrió los siete casos
+   (incluido el que la pantalla tenía mal). Pero **todo eso corrió contra los
+   dobles**: sin una sesión abierta no hay un solo precio de un portal de verdad,
+   así que lo que NO está demostrado contra el mundo es de qué forma llega la
+   existencia en cada portal. La tercera categoría —"dio precio y no dijo su
+   existencia"— es la que más depende de eso: hoy se decidió que no compita con
+   quien sí la confirmó, y **cuán seguido se cae en ella no se sabe**. Si
+   resultara ser el caso ordinario en dos de los cuatro portales, la marca
+   ámbar de "nadie confirmó existencia" sería lo que el encargado vea casi
+   siempre, y entonces la decisión hay que volver a mirarla —no cambiarla a
+   ciegas—. Se mide con `select proveedor, existencia_como_llego, count(*)`
+   sobre `pedidos.precio_de_proveedor` en cuanto haya lecturas reales.
 
 2. **Un fallo de Doyle al PEDIR la búsqueda no deja rastro guardado.** Si
    `pedir_busqueda` truena —Doyle apagado, el puerto ocupado por otra cosa— no

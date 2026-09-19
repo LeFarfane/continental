@@ -147,6 +147,27 @@ entera, y es el que demuestra que `no empareja` llega hasta la fila guardada. **
 (`pytest --durations=12`): la más lenta del suite sigue siendo
 `test_la_pantalla_dice_el_rango_de_ventas...`, con 0.33 s.
 
+**Con el ticket 14 dentro el suite no subió, y de paso la torre volvió a
+demostrar que su número no significa nada por sí solo.** Medido el 2026-09-19,
+en tres corridas seguidas, 454 recolectadas —453 pasan, 1 saltada— en
+**1.84-2.05 s**. El número **baja** de los 5.27-5.70 s del ticket 13 con 53
+pruebas MÁS, y no es una optimización de nadie: es la misma torre en otro
+momento del día. La resta que sí significa algo se midió en la misma sesión:
+con el archivo nuevo fuera (`pytest --ignore=tests/test_comparacion.py`) el
+árbol del ticket 13 costó **1.62-1.84 s**, así que las 53 pruebas nuevas
+cuestan ~0.2 s. Corriendo solas, **0.22 s**.
+
+Que cuesten tan poco es por lo mismo que en el 13: **41 de las 50 funciones de
+prueba no levantan la aplicación** —`comparacion.comparar` recibe lecturas
+congeladas y un entero y devuelve otro objeto congelado, sin almacén, sin red y
+sin `TestClient`; las tres parametrizadas dan los 53 casos—. Las **nueve** que
+quedan pasan por la aplicación entera y son las que demuestran que la
+comparación llega hasta la pantalla con la cantidad correcta.
+
+**La lección, otra vez y con el signo al revés: un número solo no dice nada.**
+Si se hubiera mirado nada más el total, este ticket parecería haber hecho el
+suite tres veces más rápido.
+
 La saltada bajó de 2 a 1 con el ticket 07: `sql/crear_tablas.sql` estrenó los
 casos de `.sql` de `test_compila.py` y solo queda saltado el del shebang, que
 espera a que exista un `.sh`.

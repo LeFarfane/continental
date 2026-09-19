@@ -153,19 +153,75 @@
      hacia abajo es lo que un ojo hace sin pensar. 13rem cabe
      "QuePharma 1,234.50" sin partirse. */
   td.precios, th.precios { width: 13rem; }
-  .precio { display: flex; gap: .4rem; align-items: baseline; font-size: .85rem; }
-  .precio .quien { color: var(--tenue); flex: 1 0 auto; }
-  .precio b { font-variant-numeric: tabular-nums; font-weight: 600; }
+  /* Cada proveedor es una rejilla de tres columnas —quién, cuánto, cuántas
+     tiene— y no una línea de flex, para que las cifras de los CUATRO queden
+     alineadas entre sí. Comparar cuatro números que no empiezan en la misma
+     columna obliga a leerlos uno por uno; alineados, el más barato salta solo.
+     El motivo y la marca del ganador cuelgan debajo, desde la segunda columna,
+     para no romper esa alineación. */
+  .precio {
+    display: grid; grid-template-columns: 4.6rem 4.2rem 1fr;
+    gap: 0 .35rem; align-items: baseline; font-size: .82rem;
+    padding: .05rem 0;
+  }
+  .precio .quien { color: var(--tenue); overflow-wrap: anywhere; }
+  .precio b { font-variant-numeric: tabular-nums; font-weight: 600; text-align: right; }
+  /* EL GANADOR. Fondo suave y borde a la izquierda: se ve de un vistazo sin
+     depender de que se distinga el verde, y la palabra "el más barato" va
+     escrita debajo. Es la segunda casilla del ticket 14 y la razón de ser de
+     la pantalla entera. */
+  .precio.gana { background: var(--realce); border-left: 3px solid var(--ok); padding-left: .3rem; margin-left: -.33rem; }
+  .precio.gana b { color: var(--ok); }
+  .precio .marca-gana { grid-column: 2 / -1; color: var(--ok); font-size: .75rem; font-weight: 600; }
+  /* Cuando nadie confirmó existencia la marca cambia de palabras Y de color:
+     el verde afirma algo que ningún portal dijo. La clase va en la LÍNEA y no
+     se deduce con `:has()` —que es de 2022 y el navegador del mostrador puede
+     no tenerlo—: sin él, la marca ámbar se vería verde y diría lo que no es. */
+  .precio.gana.sinconfirmar { border-left-color: var(--aviso); }
+  .precio.gana.sinconfirmar b { color: var(--aviso); }
+  .precio .marca-gana.sinconfirmar { color: var(--aviso); }
+  /* LO CARO. La diferencia por pieza contra el ganador, calculada en Python.
+     Es lo que hace legible una fila de cuatro cifras sin restar de cabeza, y
+     es lo que vuelve "caro" un aspecto y no una conjetura. */
+  .precio .caro { grid-column: 2 / -1; color: var(--aviso); font-variant-numeric: tabular-nums; font-size: .75rem; }
   /* UN HUECO NO PUEDE VERSE COMO UNA CIFRA. "sin dato" va en cursiva y en tono
      tenue justo para que no se lea como un número: un proveedor sin dato tiene
      que distinguirse de uno caro de un vistazo (ticket 14), y lo que nunca
-     puede parecer es el más barato (regla 4 de CLAUDE.md). */
-  .precio .sindato { color: var(--tenue); font-style: italic; }
+     puede parecer es el más barato (regla 4 de CLAUDE.md). El de arriba es
+     ámbar y alineado a la derecha como un número; éste es gris, en cursiva y
+     alineado a la izquierda: no se parecen ni de lejos. */
+  .precio .sindato { color: var(--tenue); font-style: italic; text-align: left; font-weight: 400; }
+  /* La existencia que reporta el proveedor, en su propia columna. Es la cuarta
+     casilla: el más barato no sirve si no lo tiene. */
+  .precio .hay { color: var(--tenue); font-size: .75rem; font-variant-numeric: tabular-nums; }
+  /* Cero piezas NO es un hueco: es un dato duro —no lo tiene— y por eso va en
+     rojo y no en gris. Es lo que explica que un precio más bajo no haya
+     ganado. */
+  .precio .hay.notiene { color: var(--mal); font-weight: 600; }
+  /* Y "no dijo" tampoco es cero: es la tercera categoría, y va en cursiva
+     para que no se confunda con una cifra. */
+  .precio .hay.nodijo { font-style: italic; }
   /* El motivo, debajo y en chico. Es la diferencia entre un hueco que alguien
      puede atender y uno que solo frustra: "la sesión caducó" se arregla en dos
      clics y "sin resultados" no se arregla (historia 23). */
   .precio-motivo { color: var(--aviso); font-size: .75rem; display: block; margin: 0 0 .3rem; }
   .precio-cuando { color: var(--tenue); font-size: .75rem; display: block; margin-top: .25rem; }
+  /* El veredicto: quién gana con todas sus letras y cuánto se ahorra. Va
+     separado de la rejilla por una línea porque no es un quinto proveedor:
+     es la conclusión de los cuatro de arriba. */
+  .veredicto { border-top: 1px solid var(--linea); margin-top: .4rem; padding-top: .35rem; }
+  /* Por qué NO hay ganador, cuando no lo hay. El caso con ganador no escribe
+     nada aquí: su marca ya está pegada al proveedor que ganó, y repetirla
+     costaría dos renglones de una celda de 13 rem. */
+  .veredicto .gano.nadie { display: block; font-size: .78rem; color: var(--tenue); font-weight: 400; font-style: italic; }
+  .veredicto .ahorro { display: block; font-size: .78rem; font-variant-numeric: tabular-nums; }
+  .veredicto .ahorro.gana { color: var(--ok); font-weight: 600; }
+  .veredicto .ahorro.cuesta { color: var(--aviso); font-weight: 600; }
+  /* SIN AHORRO QUE CALCULAR no es un ahorro de cero y no se pinta como una
+     cifra: va en gris y en cursiva, con el motivo al lado. Un "$0.00" aquí se
+     leería "da lo mismo a quién comprarle", que es lo contrario de lo que
+     pasa. */
+  .veredicto .ahorro.nose { color: var(--tenue); font-style: italic; }
   /* 2.2rem de alto mínimo: a 375 px esto se toca con el dedo, y un objetivo
      más chico se falla y se descarta el renglón de al lado. Que se pueda
      deshacer no vuelve gratis equivocarse. */
@@ -230,6 +286,11 @@
        los dejaba a media columna y las cifras dejaban de alinearse entre sí,
        que es lo único que hace comparable una lista de cuatro. */
     td.precios { flex: 0 0 100%; margin-top: .45rem; }
+    /* Con la línea entera para él, el bloque de precios se puede permitir
+       columnas más anchas y letra un punto más grande: a 375 px hay ~21 rem
+       y la rejilla de escritorio está apretada para caber en 13. Medido en
+       el recorrido del 2026-09-19. */
+    td.precios .precio { grid-template-columns: 5.4rem 5.2rem 1fr; font-size: .85rem; }
     td.numero::before { content: attr(data-etiqueta) " "; color: var(--tenue); font-size: .78rem; }
     /* La cantidad se va al extremo derecho de la última línea: es la cifra
        que el encargado copia al pedido, y en el teléfono sigue siendo la que
@@ -515,68 +576,206 @@ const celdaDeCantidad = (r, editable, alAjustar) => {
 
 // --------------------------------------------- el precio de los proveedores
 
-// Los cuatro proveedores de un renglón, o el botón para preguntárselo a Doyle.
+// El veredicto de un renglón: quién gana y cuánto se ahorra contra NADRO.
 //
-// **Ninguna cifra se calcula aquí.** El precio llega como CADENA desde el
-// servidor —el JSON de JavaScript solo tiene coma flotante, y meter dinero ahí
-// justo en el borde donde acababa de salir es la falla que el `numeric(12,2)`
-// del DDL existe para evitar— y se pinta tal cual. Cuál es el más barato y
-// cuánto se ahorra contra NADRO es el ticket 14, y va a salir de Python.
+// Va debajo de los cuatro y separado por una línea porque no es un quinto
+// proveedor: es la conclusión de los de arriba. Y va con PALABRAS —"el más
+// barato con existencia"— y no solo con la marca de la fila, porque es la
+// frase que el encargado repite en voz alta cuando decide a quién llamarle.
 //
-// `sin dato` se ve DISTINTO de una cifra, en cursiva y en tono tenue, y lleva
-// su motivo debajo. Las dos cosas son la quinta casilla del ticket: un
-// proveedor que no contestó nunca puede parecer barato ni parecer caro.
+// **Las cuatro frases del ahorro son cuatro hechos distintos** y por eso son
+// cuatro y no una con un número adentro:
+//
+// 1. Se ahorra: la resta se pudo hacer y dio a favor.
+// 2. NADRO ya es el más barato: la resta se pudo hacer y dio CERO. Es el único
+//    cero legítimo, y se dice con palabras para que no se lea como un hueco.
+// 3. Cuesta más: NADRO era más barato y no lo tiene. No es un ahorro negativo;
+//    es lo que se paga de más por comprarle a quien sí lo tiene. Decirlo al
+//    revés es exactamente el error que Marlowe ya cometió con el IVA.
+// 4. No se puede calcular: NADRO no dio precio, o no se le consultó. **Sale el
+//    motivo, nunca un $0.00** — un cero ahí diría "da lo mismo a quién
+//    comprarle", que es lo contrario de lo que pasa (regla 4 de CLAUDE.md).
+const veredicto = (comparacion) => {
+  const caja = document.createElement('div');
+  caja.className = 'veredicto';
+
+  // Cuando SÍ hay ganador, la marca ya está pegada a su proveedor allá arriba
+  // —con su palabra— y repetirla aquí sería decir dos veces lo mismo en una
+  // celda de 13 rem. Lo que aquí falta decir es por qué NO lo hay: sin ganador
+  // el renglón no se esconde, se explica. Una fila sin marca y sin motivo se
+  // lee como un error de la pantalla.
+  if (!comparacion.ganador.proveedores.length) {
+    const gano = document.createElement('span');
+    gano.className = 'gano nadie';
+    gano.textContent = comparacion.ganador.motivo || '';
+    caja.append(gano);
+  }
+
+  const a = comparacion.ahorro;
+  const ahorro = document.createElement('span');
+  if (a.hay && a.la_referencia_gana) {
+    ahorro.className = 'ahorro';
+    ahorro.textContent = comparacion.nombre_de_la_referencia
+      + ' ya es el más barato: no hay nada que ahorrar.';
+  } else if (a.es_ahorro) {
+    ahorro.className = 'ahorro gana';
+    ahorro.textContent = 'Ahorro contra ' + comparacion.nombre_de_la_referencia
+      + ': $' + a.magnitud + ' en ' + plural(a.cantidad, 'pieza', 'piezas');
+  } else if (a.es_sobrecosto) {
+    ahorro.className = 'ahorro cuesta';
+    ahorro.textContent = 'Cuesta $' + a.magnitud + ' más que '
+      + comparacion.nombre_de_la_referencia + ' en '
+      + plural(a.cantidad, 'pieza', 'piezas') + '.';
+  } else {
+    ahorro.className = 'ahorro nose';
+    ahorro.textContent = 'Sin ahorro que calcular: ' + (a.motivo || '')
+      + (a.detalle ? ' (' + a.detalle + ')' : '') + '.';
+  }
+  caja.append(ahorro);
+
+  return caja;
+};
+
+// LA COMPARACIÓN DE LOS CUATRO (ticket 14), que es la razón de ser del módulo
+// puesta en una fila: a cómo está el producto en cada proveedor, cuál gana y
+// cuánto se ahorra.
+//
+// **Ninguna cifra se calcula aquí, y ninguna regla se decide aquí.** El precio
+// llega como CADENA desde el servidor —el JSON de JavaScript solo tiene coma
+// flotante, y meter dinero ahí justo en el borde donde acababa de salir es la
+// falla que el `numeric(12,2)` del DDL existe para evitar—, y quién gana, la
+// diferencia contra el ganador y el ahorro contra NADRO vienen resueltos de
+// `comparacion.py`, que es una función pura con su tabla de casos. Aquí solo se
+// pregunta por banderas: `es_ganador`, `es_ahorro`, `la_referencia_gana`.
+//
+// La razón es la misma que la de `vistas.py`: si la regla que decide a quién
+// comprarle viviera en este archivo, viviría en el único que ninguna prueba de
+// Python mira, y el día que alguien "limpiara" la vista se perdería sin que
+// nada se pusiera rojo.
+//
+// Tres aspectos distintos y no tres tonos del mismo gris (quinta casilla):
+// el ganador con fondo, borde y su palabra; los caros con la diferencia en
+// ámbar y alineada como número; los huecos en cursiva, en gris y con su motivo.
+// Un proveedor sin dato NUNCA se pinta como cero, como vacío ni como el más
+// caro (regla 4 de CLAUDE.md).
 const celdaDePrecios = (r, acciones) => {
   const td = document.createElement('td');
   td.className = 'precios';
   td.dataset.etiqueta = 'Precio';
 
   const precios = Array.isArray(r.precios) ? r.precios : [];
+  const comparacion = r.comparacion || null;
   const consulta = r.consulta || null;
+  // Las lecturas por clave, solo para colgar el `detalle` del motivo como
+  // título. No es una regla: es el mismo dato que ya viajó, buscado por su
+  // llave.
+  const porClave = new Map(precios.map(p => [p.proveedor, p]));
+  const casillas = (comparacion && comparacion.por_proveedor) || [];
 
-  precios.forEach(p => {
+  casillas.forEach(c => {
     const linea = document.createElement('div');
-    linea.className = 'precio';
+    linea.className = 'precio'
+      + (c.es_ganador ? ' gana' : '')
+      + (c.es_ganador && !comparacion.ganador.con_existencia ? ' sinconfirmar' : '');
 
     const quien = document.createElement('span');
     quien.className = 'quien';
-    quien.textContent = p.nombre;
+    quien.textContent = c.nombre;
 
-    const cifraOhueco = document.createElement(p.sin_dato ? 'span' : 'b');
-    if (p.sin_dato) {
-      cifraOhueco.className = 'sindato';
-      cifraOhueco.textContent = 'sin dato';
+    // La cifra es un `<b>`; el hueco es un `<span>` en cursiva. Son dos
+    // elementos distintos a propósito: la diferencia tiene que verse aunque
+    // alguien mire la pantalla de lejos o con reflejo.
+    const cifraOhueco = document.createElement(c.precio ? 'b' : 'span');
+    if (c.precio) {
+      cifraOhueco.textContent = c.precio;
     } else {
-      cifraOhueco.textContent = p.precio;
-      // La existencia va como título y no como una tercera columna: a 375 px
-      // no cabe, y lo que decide primero es el precio. El ticket 14 la va a
-      // subir a la vista, junto con la marca del más barato CON existencia.
-      if (p.existencia_como_llego) {
-        cifraOhueco.title = 'existencia: ' + p.existencia_como_llego;
-      }
+      cifraOhueco.className = 'sindato';
+      cifraOhueco.textContent = c.estado === 'sin consultar' ? 'sin consultar' : 'sin dato';
     }
 
-    linea.append(quien, cifraOhueco);
+    // LA EXISTENCIA, en su propia columna (cuarta casilla): el más barato no
+    // sirve si no lo tiene. Se pinta el texto tal como lo dijo el portal
+    // —"+100" dice más que "100"— y el estado decide cómo se ve.
+    const hay = document.createElement('span');
+    hay.className = 'hay';
+    if (c.estado === 'con existencia') {
+      hay.textContent = c.existencia_como_llego;
+    } else if (c.estado === 'sin existencia') {
+      hay.className = 'hay notiene';
+      hay.textContent = c.existencia_como_llego || '0';
+      hay.title = 'no lo tiene: por eso no gana aunque sea el más barato';
+      hay.setAttribute('aria-label', 'no lo tiene');
+    } else if (c.estado === 'no dijo existencia') {
+      hay.className = 'hay nodijo';
+      hay.textContent = c.existencia_como_llego || 'no dijo';
+      hay.title = 'dio precio y no dijo cuántas piezas tiene';
+    }
+
+    linea.append(quien, cifraOhueco, hay);
+
+    // Cuánto más caro es que el ganador, ya restado en Python. Es lo que
+    // convierte cuatro cifras sueltas en una comparación legible.
+    //
+    // Y puede ser MÁS BARATO y no haber ganado: el ganador es el más barato de
+    // los que lo tienen, así que un proveedor con cero piezas queda debajo con
+    // su precio a la vista. Ahí la frase es otra —"más barato, pero no lo
+    // tiene"—, porque un "+-60.33" no es una cifra y no dice nada. El signo lo
+    // decide Python; aquí solo se elige la frase.
+    if (c.diferencia) {
+      const caro = document.createElement('span');
+      caro.className = 'caro';
+      caro.textContent = c.mas_barato_que_el_ganador
+        ? c.diferencia_magnitud + ' más barato por pieza, pero no lo tiene'
+        : '+' + c.diferencia_magnitud + ' por pieza';
+      linea.append(caro);
+    }
+
+    // La marca del ganador va con PALABRA además de color y borde: un verde
+    // más oscuro no es una marca para quien no distingue verdes, ni en una
+    // pantalla de mostrador con reflejo.
+    if (c.es_ganador) {
+      const marca = document.createElement('span');
+      marca.className = 'marca-gana';
+      // Y la palabra dice CUÁL de las dos marcas es. "El más barato con
+      // existencia" y "el más barato que nadie confirmó tener" son dos
+      // afirmaciones distintas: la primera la dijo un portal, la segunda no la
+      // dijo nadie. Pintarlas iguales sería inventar una confirmación.
+      marca.className = 'marca-gana' + (comparacion.ganador.con_existencia ? '' : ' sinconfirmar');
+      marca.textContent = comparacion.ganador.con_existencia
+        ? '✔ el más barato con existencia'
+        : '✔ el más barato, nadie confirmó existencia';
+      linea.append(marca);
+    }
+
     td.append(linea);
 
-    // El motivo, debajo. Es lo que distingue un hueco que el encargado puede
-    // atender de uno que no: "la sesión caducó" se arregla en dos clics.
-    if (p.sin_dato && p.motivo) {
+    // El motivo del hueco, debajo. Es lo que distingue un hueco que el
+    // encargado puede atender de uno que no: "la sesión caducó" se arregla en
+    // dos clics y "sin resultados" no se arregla (historia 23).
+    if (c.motivo) {
       const motivo = document.createElement('span');
       motivo.className = 'precio-motivo';
-      motivo.textContent = p.motivo;
-      if (p.detalle) motivo.title = p.detalle;
+      motivo.textContent = c.motivo;
+      const lectura = porClave.get(c.proveedor);
+      if (lectura && lectura.detalle) motivo.title = lectura.detalle;
       td.append(motivo);
     }
   });
 
+  // EL VEREDICTO: quién gana con todas sus letras, y el ahorro contra NADRO.
+  if (comparacion && comparacion.hay_lecturas) td.append(veredicto(comparacion));
+
   // CUÁNDO SE LEYÓ, a la vista. Sin esto, "$86.05 en NADRO" no dice si se leyó
   // hace una hora o hace tres semanas, y el ticket es literal: un pedido dice a
-  // qué precio se decidió, no a cómo está hoy.
-  if (precios.length) {
+  // qué precio se decidió, no a cómo está hoy. Es el instante MÁS RECIENTE de
+  // las lecturas que se comparan, calculado en Python: tomar la primera de la
+  // lista diría que una lectura de hace tres semanas es de hoy en cuanto
+  // alguien vuelva a consultar y solo dos proveedores contesten.
+  if (comparacion && comparacion.leido_en) {
     const cuando = document.createElement('span');
     cuando.className = 'precio-cuando';
-    cuando.textContent = 'leído el ' + instanteEnPalabras(precios[0].consultado_en);
+    cuando.textContent = 'leído el ' + instanteEnPalabras(comparacion.leido_en)
+      + (comparacion.instantes_distintos ? ' (hay lecturas de varios momentos)' : '');
     td.append(cuando);
   }
 
@@ -1131,6 +1330,10 @@ async function cargarPedido() {
     const r = datos.renglones.find(x => x.renglon_id === renglonId);
     if (!r) return;
     r.precios = respuesta.precios || [];
+    // La comparación llega ya hecha: quién gana, la diferencia de cada uno y el
+    // ahorro contra NADRO. Recalcularla aquí pondría la regla que decide a
+    // quién comprarle en dos lugares, y uno de los dos no tendría pruebas.
+    r.comparacion = respuesta.comparacion || null;
     r.consulta = respuesta.consulta || null;
     repintar();
   };

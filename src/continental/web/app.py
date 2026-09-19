@@ -33,6 +33,7 @@ from continental.almacenamiento import (
     ventana_de_reposicion,
 )
 from continental.clasificacion import reglas_configuradas
+from continental.comparacion import comparacion_como_json, comparar
 from continental.config import cargar
 from continental.consultas import (
     RegistroDeConsultas,
@@ -747,6 +748,9 @@ def consultar_el_precio(
         consultas.de(renglon_id) or consulta,
         nueva,
         _precios_del_renglon(almacenamiento, negocio, renglon_id),
+        # El renglón ya se leyó arriba, así que el ahorro se calcula con la
+        # cantidad de verdad sin una consulta más.
+        cantidad=renglon.cantidad_a_pedir,
     )
 
 
@@ -774,7 +778,34 @@ def precio_del_renglon(
         consultas.de(renglon_id),
         nueva=False,
         precios=_precios_del_renglon(almacenamiento, negocio, renglon_id),
+        cantidad=_cantidad_a_pedir(almacenamiento, negocio, renglon_id),
     )
+
+
+def _cantidad_a_pedir(almacenamiento, negocio: str, renglon_id: int) -> int | None:
+    """Las piezas que se van a pedir de ese renglón, o `None` si no se pudieron leer.
+
+    Es una lectura de una sola fila por su id, y se paga por sondeo porque el
+    ahorro **tiene que ir multiplicado por la cantidad que de verdad se va a
+    pedir**: si alguien corrigió el renglón a diez piezas mientras Doyle
+    consultaba, un ahorro calculado sobre las tres propuestas sería una cifra
+    que no corresponde a la compra que está por hacerse.
+
+    `None` cuando el almacenamiento no contesta, y no una excepción hacia
+    arriba: el precio congelado y el ganador siguen siendo información aunque la
+    cantidad no se sepa, y `calcular_ahorro` ya sabe decir el ahorro por pieza y
+    callar el total con su motivo. La falla entera queda en la bitácora; al
+    navegador no viaja nada (regla 5 de `CLAUDE.md`).
+    """
+    try:
+        renglon = almacenamiento.leer_renglon(negocio, renglon_id)
+    except Exception:  # noqa: BLE001 — sin la cantidad el resto sigue sirviendo
+        log.exception(
+            "No se pudo releer el renglón %s para el ahorro de su comparación",
+            renglon_id,
+        )
+        return None
+    return None if renglon is None else renglon.cantidad_a_pedir
 
 
 def _precios_del_renglon(almacenamiento, negocio: str, renglon_id: int):
@@ -792,7 +823,9 @@ def _precios_del_renglon(almacenamiento, negocio: str, renglon_id: int):
         return ()
 
 
-def _consulta_como_json(consulta, nueva: bool, precios) -> dict:
+def _consulta_como_json(
+    consulta, nueva: bool, precios, cantidad: int | None = None
+) -> dict:
     """El estado de una consulta más lo congelado, como la pantalla lo lee.
 
     `ok` es cierto también cuando la consulta terminó mal, y eso no es
@@ -822,6 +855,11 @@ def _consulta_como_json(consulta, nueva: bool, precios) -> dict:
             }
         ),
         "precios": lecturas_como_json(precios),
+        # La comparación viaja también por aquí y no solo dentro del renglón de
+        # la lista: cuando el botón vuelve, la pantalla sustituye la celda
+        # entera con lo que llegó. Si tuviera que recalcular el ganador ahí, la
+        # regla viviría en dos lugares y uno de los dos no tendría pruebas.
+        "comparacion": comparacion_como_json(comparar(precios, cantidad)),
     }
 
 
@@ -1077,6 +1115,20 @@ def _renglon_como_json(renglon, precios=()) -> dict:
         # JavaScript justo al salir— y no aquí, porque las dos rutas de precio
         # la usan igual.
         "precios": lecturas_como_json(precios),
+        # La comparación de los cuatro (ticket 14): quién gana, cuánto se
+        # ahorra contra NADRO y cómo se ve cada proveedor. Sale de `comparar`,
+        # que es una función pura con su tabla de casos, y **no del
+        # JavaScript**: la regla que decide a quién comprarle no puede vivir en
+        # el único archivo que ninguna prueba de Python mira.
+        #
+        # Las piezas que multiplican el ahorro son `cantidad_a_pedir` —la
+        # corrección de la persona si la hubo, y si no la propuesta del
+        # sistema—, que es la misma cifra que se pinta en la columna de
+        # cantidad y la que el ticket 20 va a copiar al pedido. La regla vive en
+        # `RenglonGuardado.cantidad_a_pedir` y aquí solo se usa.
+        "comparacion": comparacion_como_json(
+            comparar(precios, renglon.cantidad_a_pedir)
+        ),
     }
 
 
