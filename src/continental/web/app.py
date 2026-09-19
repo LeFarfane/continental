@@ -10,12 +10,15 @@ import logging
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from continental import __version__
+from continental.almacen import LecturaDelAlmacen
 from continental.config import cargar
+from continental.doyle import ClienteDeDoyle
+from continental.web.dependencias import obtener_almacen, obtener_doyle
 
 ESTATICOS = Path(__file__).parent / "static"
 
@@ -90,6 +93,59 @@ async def modulos():
         resultado.append(entrada)
 
     return {"modulos": resultado}
+
+
+@app.get("/api/bordes")
+def bordes(
+    almacen: LecturaDelAlmacen = Depends(obtener_almacen),
+    doyle: ClienteDeDoyle = Depends(obtener_doyle),
+):
+    """Le pregunta a los dos bordes del proceso si contestan de verdad.
+
+    No es `/api/salud` con otro nombre: salud dice que el proceso vive sin
+    tocar nada, y esto hace una lectura real. Sirve para saber, antes de armar
+    un pedido, si el rol `continental` sigue pudiendo leer de `marts` —cada
+    `dbt build` recrea las tablas y borra sus permisos, y a farmacia-data le
+    pasó el 2026-09-07 a las 20:30— y si Doyle tiene sesiones vivas.
+
+    Cada borde se atiende por separado: uno caído es un hueco con su motivo y
+    no contagia al otro (regla 4). El motivo es el TIPO de la falla, nunca su
+    texto: un `str(exc)` de SQLAlchemy lleva la cadena de conexión con
+    contraseña y esto corre detrás de un túnel (regla 5).
+
+    Es `def` y no `async def` a propósito: los dos bordes son síncronos
+    —psycopg2 no es asíncrono— y así FastAPI los corre en su pool de hilos sin
+    bloquear el bucle de eventos.
+    """
+    resultado = []
+
+    entrada = {"nombre": "almacen"}
+    try:
+        entrada["productos"] = len(almacen.catalogo())
+        ultima = almacen.ultima_fecha_con_ventas()
+        entrada["ultima_venta"] = ultima.isoformat() if ultima else None
+        entrada["ok"] = True
+    except Exception as exc:  # noqa: BLE001 — cualquier falla del almacén es un hueco, no un 500
+        log.exception("El almacén no contestó")
+        entrada["ok"] = False
+        entrada["detalle"] = f"el almacén no contestó ({type(exc).__name__})"
+    resultado.append(entrada)
+
+    entrada = {"nombre": "doyle"}
+    try:
+        sesiones = doyle.sesiones()
+        entrada["sesiones"] = len(sesiones)
+        entrada["sin_sesion"] = sorted(
+            s.proveedor for s in sesiones if s.estado != "guardada"
+        )
+        entrada["ok"] = True
+    except Exception as exc:  # noqa: BLE001 — Doyle caído no puede tumbar la pantalla
+        log.exception("Doyle no contestó")
+        entrada["ok"] = False
+        entrada["detalle"] = f"Doyle no contestó ({type(exc).__name__})"
+    resultado.append(entrada)
+
+    return {"bordes": resultado}
 
 
 @app.get("/")
