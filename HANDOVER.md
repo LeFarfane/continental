@@ -18,16 +18,20 @@ y **manda sobre el nombre de cualquier cosa**.
 
 ## Qué hay hoy
 
-**El pedido sugerido completo hasta el precio.** Corre, dice si está vivo, dice
-quién entró según Cloudflare Access, arma y guarda la lista del día, deja
-descartar y corregir cantidades, y desde el ticket 12 **le pide a Doyle el
-precio de un renglón en los cuatro proveedores y lo congela con su instante de
-lectura**. Lo que falta de precios —emparejar por EAN, comparar los cuatro,
-contar los huecos, el lote de la noche— son los tickets 13 en adelante.
+**El pedido sugerido completo hasta el precio, y el precio ya emparejado.**
+Corre, dice si está vivo, dice quién entró según Cloudflare Access, arma y
+guarda la lista del día, deja descartar y corregir cantidades, y desde el
+ticket 12 **le pide a Doyle el precio de un renglón en los cuatro proveedores y
+lo congela con su instante de lectura**. Desde el ticket 13 **ese precio solo se
+acepta si empareja**: NADRO, LEVIC y QuePharma por EAN de 13 dígitos directo;
+VICMA únicamente si la búsqueda devuelve exactamente un resultado. Lo que no
+empareja queda como hueco con su motivo —`no empareja` o `varios resultados`—,
+nunca como cero. Lo que falta de precios —comparar los cuatro y decir cuál gana,
+contar los huecos, el lote de la noche— son los tickets 14 en adelante.
 
 ```bash
 python iniciar.py     # http://127.0.0.1:8585
-pytest                # 335 pruebas y 1 saltada, 5.3-5.9 s (2026-09-19, ticket 12)
+pytest                # 399 pruebas y 1 saltada, 5.3-5.7 s (2026-09-19, ticket 13)
                       # el número subió con la torre, no con las pruebas: ese
                       # mismo día, con test_precio.py fuera, el árbol del
                       # ticket 11 costaba 3.7-4.2 s contra los 1.7-1.9 s que
@@ -48,7 +52,7 @@ pytest                # 335 pruebas y 1 saltada, 5.3-5.9 s (2026-09-19, ticket 1
 | `config/continental.yml` | puertos de los módulos y los parámetros del pedido |
 | `src/continental/web/app.py` | `/api/salud`, `/api/modulos`, el pedido sugerido y su cierre, la portada |
 | `src/continental/almacenamiento.py` | donde el pedido sugerido se guarda: el `Protocol`, el SQL real y las reglas de la tabla en un solo lugar |
-| `src/continental/precios.py` | funciones puras: lo que Doyle contestó -> precio `Decimal` o motivo. No toca la red ni el reloj |
+| `src/continental/precios.py` | funciones puras: lo que Doyle contestó + la clave buscada -> precio `Decimal` o motivo de rechazo. Ahí vive `emparejar`, la regla por proveedor. No toca la red ni el reloj |
 | `src/continental/consultas.py` | quién espera a Doyle y dónde queda el resultado si nadie está mirando |
 
 ## Lo que falta, en orden
@@ -223,6 +227,29 @@ más barato y se le pidió a otro.**
    interno y no está confirmado que encuentre por EAN. Hay dos pendientes
    viejos de Doyle que responden esto —probar el EAN en QuePharma, y confirmar
    VICMA por cantidad de resultados—, y ahora sí importan.
+
+   **El ticket 13 ya fijó las reglas y no espera a esas dos respuestas**, a
+   propósito: las dos se resuelven mirando portales, y las cuatro sesiones
+   siguen caducadas (hilo 1). Lo que se decidió es lo más estricto que sostiene
+   el ADR 0002 —QuePharma empareja por EAN como NADRO y LEVIC, así que su final
+   ordinario es `no empareja`; VICMA se acepta solo con exactamente un
+   resultado— y **las dos respuestas solo pueden aflojarlo, nunca apretarlo**.
+   Lo que cambiaría con cada una:
+
+   - Si se confirma que QuePharma **sí encuentra por EAN** pero muestra código
+     interno en la columna de clave, su caso pasa a ser el de VICMA y la línea
+     que cambia es una: su entrada en `precios.REGLA_DEL_PROVEEDOR`. Con su
+     ADR, porque es aflojar una garantía.
+   - Si se confirma que QuePharma **no encuentra por EAN**, no cambia nada: hoy
+     ya queda fuera con `no empareja`, que es lo correcto.
+   - Si VICMA resultara **no** indexar el EAN, su excepción deja de estar
+     sostenida y hay que quitársela: pasaría a `POR_EAN` y quedaría fuera casi
+     siempre, como QuePharma.
+
+   **Cómo se mide cuando haya sesiones:** consultar un renglón con EAN conocido
+   y mirar `resultados` y `clave_del_proveedor` de las cuatro filas que quedan
+   en `pedidos.precio_de_proveedor`. Esa tabla guarda exactamente lo que hace
+   falta para responder las dos preguntas sin volver a los portales.
 7. **El almacén de contraseñas de atlas baja una garantía.** Hoy no hay ninguna
    contraseña de proveedor en disco; después de la mudanza habrá cuatro,
    ofuscadas pero recuperables. Está aceptado con mitigación (permisos `700`,

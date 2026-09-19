@@ -2,8 +2,10 @@
 
 Dice si está vivo, quién está entrando, si los módulos contestan, arma el
 pedido sugerido del día **y lo guarda**, y congela el precio que Doyle trae de
-los cuatro proveedores. Lo que falta de precios —emparejar por EAN, comparar
-los cuatro, contar los huecos— son los tickets 13 en adelante.
+los cuatro proveedores **solo cuando empareja por EAN**: lo que no empareja
+queda como hueco con su motivo, nunca como cero. Lo que falta de precios
+—comparar los cuatro y decir cuál gana, contar los huecos, el lote de la
+noche— son los tickets 14 en adelante.
 """
 
 from __future__ import annotations

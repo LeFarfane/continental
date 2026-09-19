@@ -2,9 +2,22 @@
 
 Este módulo no abre una conexión, no llama a Doyle, no mira el reloj y no lee
 un archivo. Recibe una `RespuestaDeProveedor` —el dato que el borde de
-`doyle.py` ya tradujo— y devuelve una `LecturaDePrecio`: el precio tal como
-llegó, el número al que se pudo convertir, la existencia que el proveedor
-reportó, y **el motivo cuando no hay precio**.
+`doyle.py` ya tradujo— **y la clave que se buscó**, y devuelve una
+`LecturaDePrecio`: el precio tal como llegó, el número al que se pudo
+convertir, la existencia que el proveedor reportó, y **el motivo cuando no hay
+precio**.
+
+## El emparejamiento, que es la mitad que decide
+
+`emparejar` responde la pregunta de la que cuelga todo lo demás: **¿lo que
+contestó este proveedor es el producto que se buscó?** Cuatro portales, dos
+reglas —el EAN de 13 dígitos para NADRO, LEVIC y QuePharma; el único resultado
+para VICMA— y un motivo de rechazo cuando no se puede afirmar que sí. El porqué
+de cada una está junto a `REGLA_DEL_PROVEEDOR`.
+
+Sin eso, la comparación puede poner una caja de 30 contra una de 60 y decir que
+la segunda es más barata. **Marlowe ya se equivocó exactamente así**, y lo peor
+no fue el número: no falló y no avisó.
 
 ## Por qué el motivo es una columna y no un comentario
 
@@ -95,12 +108,18 @@ SIN_RESULTADOS = "sin resultados"
 #: La clave devolvió más de un resultado y ninguno se puede elegir sin
 #: adivinar. Es el caso de VICMA, que muestra código interno y no el EAN (ADR
 #: 0002): "VICMA entra si el EAN devuelve exactamente un resultado".
+#:
+#: Desde el ticket 13 también lo escriben las otras tres reglas en dos casos: el
+#: mismo EAN repetido en varias filas con datos distintos, y una lista que Doyle
+#: cortó en 20 sin el EAN dentro —ahí no se puede afirmar `no empareja`, porque
+#: eso diría algo de las filas que nunca llegaron—.
 VARIOS_RESULTADOS = "varios resultados"
 
-#: Llegaron filas y **ninguna es este producto**. Lo va a escribir el
-#: emparejamiento por EAN del ticket 13 —QuePharma usa código interno—; hoy
-#: nadie lo produce todavía y por eso vive aquí desde ahora: agregarlo después
-#: costaría una migración del `CHECK` y una visita a atlas (ADR 0003).
+#: Llegaron filas y **ninguna es este producto**. Lo escribe el emparejamiento
+#: por EAN (`emparejar`, ticket 13), y es el final ordinario de QuePharma, que
+#: usa código interno: **va a quedar fuera seguido y eso es lo esperado**, no
+#: una falla (ADR 0002). Un hueco visible con su motivo es información; una
+#: comparación mal emparejada es una compra equivocada.
 NO_EMPAREJA = "no empareja"
 
 #: Doyle intentó y el portal falló. Se vuelve a intentar.
@@ -278,16 +297,19 @@ class LecturaDePrecio:
     que este ticket existe para evitar.
 
     `resultados` es cuántas filas encontró el portal, no cuántas trajo Doyle
-    (que corta en 20). Se guarda **aunque hoy solo se use para el motivo**
-    porque es el dato con el que el ticket 13 decide VICMA: "se acepta
-    únicamente si la búsqueda del EAN devuelve exactamente un resultado". Si no
-    se guardara hoy, esa regla tendría que releer el portal mañana —o mentir—.
+    (que corta en 20). **Es el número con el que se decide VICMA** desde el
+    ticket 13 —"se acepta únicamente si la búsqueda del EAN devuelve
+    exactamente un resultado"—, y por eso se guarda: sin él, esa regla tendría
+    que releer el portal mañana, o mentir.
 
     `clave_del_proveedor` y `descripcion_del_proveedor` son lo que el portal
-    mostró de la fila elegida. Son la evidencia de que se comparó el mismo
-    producto, y es la lección que Marlowe pagó: una caja de 60 más barata por
-    pieza se veía como más cara, sin fallar y sin avisar. Con la descripción a
-    la vista, una persona lo caza de un vistazo.
+    mostró de **la fila elegida**, y solo de ella: una lectura sin precio las
+    deja vacías a propósito, porque llenarlas con una fila que se descartó las
+    convertiría en la evidencia falsa de un emparejamiento que no ocurrió. Son
+    la lección que Marlowe pagó —una caja de 60 más barata por pieza se veía
+    como más cara, sin fallar y sin avisar— y con la descripción a la vista una
+    persona lo caza de un vistazo. Es lo único que protege el caso de VICMA, que
+    se acepta sin poder compararlo con nada.
     """
 
     proveedor: str
@@ -336,94 +358,328 @@ def _recortar(mensaje: str) -> str:
 _HUELE_A_SESION = re.compile(r"sesi[oó]n", re.IGNORECASE)
 
 
-def _una_sola_fila(respuesta: RespuestaDeProveedor) -> FilaDeProveedor | None:
-    """La fila del portal cuando hay **exactamente una**, y si no `None`.
+# ------------------------------------------- el emparejamiento (ticket 13)
+#
+# El corazón del ticket 13: **decidir si lo que contestó un proveedor es el
+# producto que se buscó**. Todo lo demás de este módulo cuelga de aquí.
+#
+# Sin esto, la comparación puede poner una caja de 30 contra una de 60 y decir
+# que la segunda es más barata. Marlowe ya se equivocó exactamente así, y lo
+# peor del caso es lo que NO pasó: no falló, no avisó, y la flecha apuntaba al
+# revés.
 
-    Ésta es la regla provisional del ticket 12 y conviene que se lea como tal:
-    el emparejamiento de verdad —NADRO y LEVIC por EAN de 13 dígitos directo,
-    VICMA solo con un resultado, QuePharma por código interno— es el **ticket
-    13**, y meterlo aquí sería hacer dos tickets en uno y dejar sin prueba
-    propia la mitad que más duele equivocar.
+#: Un EAN tiene trece dígitos. El glosario de `CONTEXT.md` no deja margen:
+#: "**Clave** — el código de barras del producto (EAN de 13 dígitos). Es lo
+#: único que significa lo mismo en nuestro catálogo y en el de un proveedor".
+LARGO_DEL_EAN = 13
 
-    Mientras tanto se elige lo **más estricto que existe**, y esa dirección no
-    es casual: equivocarse hacia "sin dato con su motivo" cuesta un hueco
-    visible que alguien puede completar con un clic; equivocarse hacia "este
-    precio es el de tu producto" cuesta una compra mala que nadie ve. El ticket
-    13 solo puede aflojar esto para NADRO y LEVIC, nunca apretarlo.
+#: Emparejar por el EAN de 13 dígitos, y solo por él. Es la regla estricta y la
+#: de omisión: lo que no se conoce se trata así.
+POR_EAN = "por EAN"
 
-    Se mira `total` —cuántas encontró el portal— y no `len(filas)`, porque
-    Doyle corta la lista en 20: un portal con 43 resultados manda 20 filas, y
-    contar las filas diría "20" donde la verdad es "43". Con `total` el motivo
-    sale bien; con `len` diría un número falso en la pantalla.
+#: Aceptar el único resultado de la búsqueda, sin poder compararlo con nada.
+#: Es una **excepción razonada** y hoy la tiene un solo proveedor.
+POR_UN_SOLO_RESULTADO = "por un solo resultado"
+
+#: Con qué regla se acepta el precio de cada proveedor. Las cuatro vienen del
+#: ADR 0002 y del ticket 13, y están las cuatro escritas aunque tres sean
+#: iguales: una tabla que solo lista la excepción obliga a deducir el resto.
+#:
+#: **Por qué QuePharma está con NADRO y LEVIC, y no con VICMA** — es la
+#: decisión que más cuesta ver de este ticket. Los tres portales que no son
+#: NADRO/LEVIC muestran código interno, así que la tentación es darle a
+#: QuePharma la misma excepción que a VICMA. La diferencia está medida en el
+#: ADR 0002: de VICMA se sabe que **sí indexa el EAN**, así que un único
+#: resultado de una búsqueda por EAN es ese producto; de QuePharma **ni
+#: siquiera está confirmado que encuentre por EAN**, así que su único resultado
+#: puede ser el de una búsqueda que ignoró el término. Aceptarlo sería comprar
+#: por lo que devolvió una búsqueda que quizá no buscó nada.
+#:
+#: La consecuencia está aceptada y escrita en el ADR 0002: **QuePharma va a
+#: quedar fuera seguido**, y eso es lo esperado, no una falla. "El más barato"
+#: a veces querrá decir "el más barato de los que contestaron", y por eso el
+#: hueco se muestra con su motivo.
+REGLA_DEL_PROVEEDOR: dict[str, str] = {
+    "nadro": POR_EAN,        # el portal muestra el EAN de 13 dígitos
+    "levic": POR_EAN,        # igual que NADRO
+    "quepharma": POR_EAN,    # usa código interno: casi nunca va a emparejar
+    "vicma": POR_UN_SOLO_RESULTADO,  # código interno, pero indexa el EAN
+}
+
+#: Con qué regla se trata un proveedor que esta tabla no conoce. **La
+#: estricta**, y la dirección no es casual: equivocarse hacia "sin dato con su
+#: motivo" cuesta un hueco visible que alguien completa con un clic;
+#: equivocarse hacia "este precio es el de tu producto" cuesta una compra mala
+#: que nadie ve. Un quinto proveedor no nace con una excepción regalada.
+REGLA_POR_OMISION = POR_EAN
+
+
+def regla_del_proveedor(proveedor: str) -> str:
+    """Con qué regla se acepta un precio de ese proveedor."""
+    return REGLA_DEL_PROVEEDOR.get(proveedor, REGLA_POR_OMISION)
+
+
+_NO_ES_DIGITO = re.compile(r"\D")
+
+
+def _solo_digitos(texto: str) -> str:
+    """El código sin adornos. `"750 1349-028234"` → `"7501349028234"`.
+
+    Los portales pintan el código de barras con espacios, guiones o un espacio
+    duro. Comparar el texto crudo convertiría una presentación distinta de **la
+    misma cifra** en un hueco, y un hueco de mentira manda a alguien a teclear
+    el precio a mano, que es peor que no tenerlo.
+
+    Lo que **no** se hace es normalizar de más: no se rellenan ceros a la
+    izquierda para convertir un UPC de 12 en un EAN de 13. Eso sí es adivinar, y
+    adivinar aquí compra la presentación equivocada; si alguna vez hace falta,
+    es una decisión con su ADR y no una línea de más en esta función.
     """
-    if respuesta.total != 1 or len(respuesta.filas) != 1:
-        return None
-    return respuesta.filas[0]
+    return _NO_ES_DIGITO.sub("", texto or "")
 
 
-def leer_el_precio(respuesta: RespuestaDeProveedor) -> LecturaDePrecio:
-    """Lo que un proveedor contestó → la lectura que se va a congelar.
+@dataclass(frozen=True, slots=True)
+class Emparejamiento:
+    """La respuesta de `emparejar`: **la fila aceptada, o el motivo del rechazo**.
 
-    Función pura: el mismo `RespuestaDeProveedor` da siempre la misma
-    `LecturaDePrecio`. No mira el reloj —el instante de la lectura lo pone la
-    base con `now()`, que es el único que no depende de qué máquina corrió
-    esto— ni toca la red.
+    Nunca las dos y nunca ninguna. Es la misma invariante que `LecturaDePrecio`
+    un escalón más abajo, y es lo que hace que un precio faltante sea
+    información en vez de un `NULL` mudo.
 
-    **Toda salida sin precio lleva motivo.** No hay un camino por el que se
-    devuelva `precio=None, motivo=None`: eso sería el `NULL` mudo.
+    Se devuelve la **fila entera** y no solo su precio a propósito: `clave` y
+    `descripcion` son la evidencia de que se comparó el mismo producto, y son
+    justo lo que le faltaba a Marlowe cuando tomó la caja de 60 por la de 30.
+
+    `detalle` explica el rechazo con números —cuántas encontró el portal,
+    cuántas llegaron— para que el hueco de la pantalla diga algo más que su
+    motivo. No lleva nunca el texto de una excepción nuestra (regla 5 de
+    `CLAUDE.md`): es una frase redactada aquí, sobre datos que ya viajaban.
     """
-    proveedor = respuesta.proveedor
-    detalle = _recortar(respuesta.mensaje)
 
+    fila: FilaDeProveedor | None = None
+    motivo: str | None = None
+    detalle: str = ""
+
+    @property
+    def aceptado(self) -> bool:
+        """Si esta respuesta es el producto que se buscó."""
+        return self.fila is not None
+
+
+def emparejar(respuesta: RespuestaDeProveedor, clave: str) -> Emparejamiento:
+    """Lo que devolvió un proveedor + la clave buscada → fila aceptada o motivo.
+
+    **La función pura del ticket 13.** No abre una conexión, no llama a Doyle,
+    no mira el reloj y no lee un archivo: los mismos dos argumentos dan siempre
+    la misma respuesta, y por eso su tabla de casos se puede escribir entera sin
+    Postgres y sin red (`tests/test_emparejamiento.py`).
+
+    `clave` es **lo que Continental buscó**, no el `termino` que Doyle repite en
+    su respuesta. Son dos cosas distintas: si Doyle devolviera un término
+    recortado, vacío o de otro trabajo, emparejar contra él movería la portería
+    sin que nadie lo viera.
+
+    El orden importa y es el único posible: primero cómo le fue al proveedor
+    —sin filas no hay nada que emparejar, y decir `no empareja` de un portal que
+    ni contestó sería mentir sobre qué hay que arreglar— y solo al final la
+    regla del proveedor.
+    """
     if respuesta.estado in ESTADOS_PENDIENTES:
         # Solo se lee una respuesta después de esperar, así que "sigue
         # buscando" en este punto quiere decir que se acabó el tiempo. Es el
         # motivo que la historia 31 pide distinguir de un portal caído.
-        return LecturaDePrecio(
-            proveedor=proveedor, motivo=SIN_TIEMPO, detalle=detalle
-        )
+        return Emparejamiento(motivo=SIN_TIEMPO)
 
     if respuesta.estado == "error":
-        return LecturaDePrecio(
-            proveedor=proveedor,
+        return Emparejamiento(
             motivo=(
                 SESION_CADUCADA
                 if _HUELE_A_SESION.search(respuesta.mensaje or "")
                 else PORTAL_SIN_CONTESTAR
-            ),
-            detalle=detalle,
+            )
         )
 
     if respuesta.estado == "reconocimiento":
-        return LecturaDePrecio(
-            proveedor=proveedor, motivo=SIN_SELECTORES, detalle=detalle
-        )
+        return Emparejamiento(motivo=SIN_SELECTORES)
 
     if respuesta.estado != "listo":
         # Un estado que Doyle estrene y este código no conozca. Se trata como
         # "el portal no contestó" y se guarda el estado en el detalle, en vez
         # de tronar: un estado nuevo no puede dejar sin pedido a la farmacia, y
         # tampoco puede pasar callado.
-        return LecturaDePrecio(
-            proveedor=proveedor,
+        return Emparejamiento(
             motivo=PORTAL_SIN_CONTESTAR,
             detalle=f"Doyle contestó un estado que no se conoce: {respuesta.estado!r}",
         )
 
-    if respuesta.total == 0 and not respuesta.filas:
-        return LecturaDePrecio(
-            proveedor=proveedor, motivo=SIN_RESULTADOS, detalle=detalle, resultados=0
+    if not respuesta.filas:
+        if respuesta.total <= 0:
+            # El portal buscó y no encontró nada: ese producto no está en ese
+            # catálogo. No hay nada que hacer y el hueco es la respuesta
+            # correcta.
+            return Emparejamiento(motivo=SIN_RESULTADOS)
+        # Dijo cuántas encontró y no mandó ninguna. **No es `sin resultados`**
+        # —encontró— ni `no empareja` —no llegó nada que comparar—: es una
+        # lectura que se quedó a medias, y eso se reintenta.
+        return Emparejamiento(
+            motivo=PORTAL_SIN_CONTESTAR,
+            detalle=(
+                f"el portal dijo que encontró {respuesta.total} y no llegó "
+                "ninguna fila que leer."
+            ),
         )
 
-    fila = _una_sola_fila(respuesta)
-    if fila is None:
+    if regla_del_proveedor(respuesta.proveedor) == POR_UN_SOLO_RESULTADO:
+        return _por_un_solo_resultado(respuesta)
+    return _por_el_ean(respuesta, clave)
+
+
+def _por_un_solo_resultado(respuesta: RespuestaDeProveedor) -> Emparejamiento:
+    """La regla de VICMA: se acepta **únicamente con exactamente un resultado**.
+
+    VICMA muestra código interno y no el EAN, así que no hay nada con qué
+    comparar la fila; lo que sostiene la aceptación es que su búsqueda **sí
+    indexa el EAN** (ADR 0002), de modo que un único resultado para un EAN es
+    ese producto. Con dos o más no se puede elegir sin adivinar, y adivinar aquí
+    es la caja de 60 contra la de 30.
+
+    **El número que manda es `total` y no `len(filas)`**, y conviene decir
+    exactamente por qué, porque las dos cifras coinciden casi siempre:
+
+    - `total` es cuántas encontró el portal; `filas` es cuántas trajo Doyle, que
+      **corta en 20**. Un portal con 43 resultados manda 20 filas: contar filas
+      diría "20" donde la verdad es "43", y ese 20 es el número que se guarda en
+      `resultados` y se pinta en la pantalla. La regla saldría igual de estricta
+      por casualidad y el dato de al lado estaría mal.
+    - En la dirección que importa —aceptar— `len(filas) == 1` sería **más
+      flojo**: un portal que encontró 43 y mandó una sola fila se leería como
+      "exactamente un resultado". `total` no se deja engañar por eso.
+
+    Que la fila esté además es un requisito aparte y no una segunda regla:
+    `total == 1` con cero filas ya se atendió antes, porque sin fila no hay
+    precio que congelar y aceptar sería inventarlo.
+    """
+    if respuesta.total != 1:
+        return Emparejamiento(
+            motivo=VARIOS_RESULTADOS,
+            detalle=(
+                f"la búsqueda del EAN devolvió {respuesta.total} resultados y "
+                "este portal muestra código interno, no el EAN: con más de uno "
+                "no se puede elegir sin adivinar."
+            ),
+        )
+
+    if len(respuesta.filas) != 1:
+        return Emparejamiento(
+            motivo=PORTAL_SIN_CONTESTAR,
+            detalle=(
+                f"el portal encontró 1 resultado y llegaron "
+                f"{len(respuesta.filas)} filas: no se puede saber cuál es."
+            ),
+        )
+
+    return Emparejamiento(fila=respuesta.filas[0])
+
+
+def _por_el_ean(respuesta: RespuestaDeProveedor, clave: str) -> Emparejamiento:
+    """La regla estricta: la fila cuyo código **es** el EAN de 13 dígitos buscado.
+
+    Es la de NADRO y LEVIC, que muestran el EAN, y también la de QuePharma —que
+    usa código interno y por eso va a caer casi siempre en `no empareja`, que es
+    lo que el ADR 0002 ya da por probable—.
+
+    Con varias filas **sí** se puede aceptar, al revés que en VICMA, y esa es la
+    diferencia entre las dos reglas: un EAN de 13 dígitos identifica una
+    presentación concreta, así que encontrarlo entre tres filas no es adivinar,
+    es leer. Lo que no se puede es elegir cuando el mismo EAN aparece dos veces
+    —dos almacenes, dos presentaciones de venta— porque ahí quedarse con la
+    primera sería elegir por el orden en que el portal pintó la tabla.
+    """
+    buscado = _solo_digitos(clave)
+    if len(buscado) != LARGO_DEL_EAN:
+        # Sin EAN no hay emparejamiento posible. La ruta ya se niega a consultar
+        # un renglón sin clave, así que esto es el cinturón: si llegara aquí,
+        # sale hueco con motivo y nunca un precio de un producto cualquiera.
+        return Emparejamiento(
+            motivo=NO_EMPAREJA,
+            detalle=(
+                f"se buscó {clave!r}, que no es un EAN de 13 dígitos: no hay con "
+                "qué emparejar lo que contestó el portal."
+            ),
+        )
+
+    iguales = [f for f in respuesta.filas if _solo_digitos(f.clave) == buscado]
+
+    if len(iguales) == 1:
+        return Emparejamiento(fila=iguales[0])
+
+    if len(iguales) > 1:
+        return Emparejamiento(
+            motivo=VARIOS_RESULTADOS,
+            detalle=(
+                f"{len(iguales)} filas del portal traen el EAN {buscado} con "
+                "datos distintos: quedarse con una sería elegir por el orden en "
+                "que el portal las pintó."
+            ),
+        )
+
+    if len(respuesta.filas) < respuesta.total:
+        # La lista venía cortada (Doyle trae 20 como mucho) y el EAN no está
+        # entre las que llegaron. **No se puede decir `no empareja`**: eso
+        # afirmaría algo sobre las filas que nunca se vieron. Lo que de verdad
+        # pasó es que había demasiadas para decidir con lo que se trajo.
+        return Emparejamiento(
+            motivo=VARIOS_RESULTADOS,
+            detalle=(
+                f"el portal encontró {respuesta.total} y llegaron "
+                f"{len(respuesta.filas)}: el EAN {buscado} no está entre las que "
+                "llegaron, y de las demás no se sabe."
+            ),
+        )
+
+    return Emparejamiento(
+        motivo=NO_EMPAREJA,
+        detalle=(
+            f"llegaron {len(respuesta.filas)} fila(s) del portal y ninguna trae "
+            f"el EAN {buscado}: lo que contestó es otro producto."
+        ),
+    )
+
+
+# --------------------------------------------- de la fila al precio congelado
+
+
+def leer_el_precio(respuesta: RespuestaDeProveedor, clave: str) -> LecturaDePrecio:
+    """Lo que un proveedor contestó + la clave buscada → la lectura a congelar.
+
+    Función pura: los mismos argumentos dan siempre la misma `LecturaDePrecio`.
+    No mira el reloj —el instante de la lectura lo pone la base con `now()`, que
+    es el único que no depende de qué máquina corrió esto— ni toca la red.
+
+    Es `emparejar` más la conversión del texto a `Decimal`: quién decide si esta
+    fila es el producto buscado está arriba, y aquí solo se traduce lo aceptado.
+    Separarlo no es ceremonia — es lo que permite probar la regla de cada
+    proveedor sin arrastrar el formato de los precios, y al revés.
+
+    **Toda salida sin precio lleva motivo.** No hay un camino por el que se
+    devuelva `precio=None, motivo=None`: eso sería el `NULL` mudo.
+    """
+    proveedor = respuesta.proveedor
+    detalle = _recortar(respuesta.mensaje)
+    elegido = emparejar(respuesta, clave)
+
+    if elegido.fila is None:
         return LecturaDePrecio(
             proveedor=proveedor,
-            motivo=VARIOS_RESULTADOS,
-            detalle=detalle,
-            resultados=respuesta.total,
+            motivo=elegido.motivo,
+            # El detalle del emparejamiento manda sobre el de Doyle: cuando hay
+            # uno, es más específico —dice cuántas encontró el portal y por qué
+            # ninguna sirve— que el mensaje genérico del otro lado.
+            detalle=elegido.detalle or detalle,
+            resultados=max(respuesta.total, 0),
         )
 
+    fila = elegido.fila
     precio = precio_a_numero(fila.precio)
     # La advertencia que Doyle anotó al leer la fila —varios precios sin
     # tachar, por ejemplo— viaja aunque el precio se haya podido leer: un dato
@@ -445,8 +701,15 @@ def leer_el_precio(respuesta: RespuestaDeProveedor) -> LecturaDePrecio:
     )
 
 
-def congelar(estado: EstadoDeBusqueda) -> tuple[LecturaDePrecio, ...]:
-    """La búsqueda entera → una lectura por proveedor, ordenadas por clave.
+def congelar(
+    estado: EstadoDeBusqueda, clave: str
+) -> tuple[LecturaDePrecio, ...]:
+    """La búsqueda entera + la clave buscada → una lectura por proveedor.
+
+    `clave` es **la que Continental buscó**, y no el `estado.termino` que Doyle
+    repite: contra qué se empareja no lo puede decidir el otro proceso. Un
+    `termino` recortado, vacío o de otro trabajo movería la portería sin que
+    nadie lo viera, y lo que se decide con esto es a qué proveedor comprarle.
 
     **Una por proveedor, siempre, aunque no haya contestado ninguno.** Ésa es
     la decisión: un proveedor que falló deja una fila con su motivo, no deja de
@@ -459,6 +722,6 @@ def congelar(estado: EstadoDeBusqueda) -> tuple[LecturaDePrecio, ...]:
     pueden leer en paralelo sin que el orden confunda a nadie.
     """
     return tuple(
-        leer_el_precio(respuesta)
+        leer_el_precio(respuesta, clave)
         for _, respuesta in sorted(estado.proveedores.items())
     )

@@ -692,10 +692,11 @@ CREATE TABLE IF NOT EXISTS pedidos.precio_de_proveedor (
     -- Cerrado y no texto libre porque el ticket 15 tiene que CONTAR los huecos
     -- por motivo, y un conteo sobre texto libre cuenta faltas de ortografía.
     --
-    -- `no empareja` todavía no lo escribe nadie: lo va a producir el
-    -- emparejamiento por EAN del ticket 13. Está desde hoy a propósito, porque
-    -- agregarlo después cuesta una migración del CHECK y una visita a atlas
-    -- con credenciales de dueño (ADR 0003).
+    -- `no empareja` lo escribe el emparejamiento por EAN (ticket 13), y es el
+    -- final ordinario de QuePharma, que usa código interno. Estaba en esta
+    -- lista desde el ticket 12, un día antes de que nadie lo escribiera, y eso
+    -- ahorró lo que costaba agregarlo después: una migración del CHECK y una
+    -- visita a atlas con credenciales de dueño (ADR 0003).
     --
     -- LOS ACENTOS DE ESTOS OCHO TEXTOS VIAJAN DENTRO DEL CHECK, igual que el
     -- de 'en tránsito' en `ck_renglon_estado`: si psql manda este archivo como
@@ -808,13 +809,12 @@ COMMENT ON COLUMN pedidos.precio_de_proveedor.detalle IS
 
 -- CUÁNTAS ENCONTRÓ EL PORTAL, no cuántas trajo Doyle (que corta en 20). La
 -- diferencia decide: el ticket 13 acepta VICMA "únicamente si la búsqueda del
--- EAN devuelve exactamente un resultado", y con len(filas) un portal con 43
--- resultados diría 20. Se guarda desde hoy aunque hoy solo alimente el motivo
--- `varios resultados`: si no se guardara, esa regla tendría que releer el
--- portal mañana -o mentir-.
+-- EAN devuelve exactamente un resultado", y ESTE es el número que se compara
+-- contra 1 -con len(filas), un portal con 43 resultados diría 20-. Sin esta
+-- columna, esa regla tendría que releer el portal mañana -o mentir-.
 COMMENT ON COLUMN pedidos.precio_de_proveedor.resultados IS
-    'Cuántos resultados encontró el portal para esa clave. Es el dato con el '
-    'que el ticket 13 decide VICMA.';
+    'Cuántos resultados encontró el portal para esa clave. Es el número con el '
+    'que se decide VICMA: se acepta únicamente con exactamente uno.';
 
 -- LA EVIDENCIA DE QUE SE COMPARÓ EL MISMO PRODUCTO. Es la lección que Marlowe
 -- pagó: una caja de 60 más barata por pieza se veía como más cara, sin fallar

@@ -175,7 +175,10 @@ def consultar_a_doyle(
     while True:
         estado = doyle.estado_de_busqueda(pedida.job_id)
         if estado.terminada:
-            return ResultadoDeConsulta(pedida.job_id, congelar(estado))
+            # Se empareja contra la `clave` con la que se pidió la búsqueda, no
+            # contra el `termino` que Doyle repite: contra qué se compara no lo
+            # decide el otro proceso (ticket 13).
+            return ResultadoDeConsulta(pedida.job_id, congelar(estado, clave))
 
         transcurrido = ahora() - inicio
         if transcurrido >= tope_seg:
@@ -191,7 +194,7 @@ def consultar_a_doyle(
                 )
             return ResultadoDeConsulta(
                 pedida.job_id,
-                congelar(estado),
+                congelar(estado, clave),
                 detalle=(
                     f"Doyle no terminó en {tope_seg:g} s. Lo que alcanzó a "
                     "contestar quedó guardado; el resto se puede volver a "

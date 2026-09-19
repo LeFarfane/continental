@@ -132,6 +132,21 @@ sondeo de ciento veinte segundos simulados cuesta microsegundos reales. Y la
 fixture `consultas` sustituye el hilo por un lanzador que ejecuta la tarea ahí
 mismo: si una prueba de precios llega a tardar, está mal planteada.
 
+**Con el ticket 13 dentro el suite no se movió, y eso es lo esperado.** Medido
+el 2026-09-19, en tres corridas seguidas, 400 recolectadas —399 pasan, 1
+saltada— en **5.27-5.70 s**. Las 64 pruebas nuevas de
+`test_emparejamiento.py` cuestan **0.24-0.27 s corriendo solas**, y la
+diferencia contra el árbol del ticket 12 medido en la misma sesión
+(`pytest --ignore=tests/test_emparejamiento.py`: 4.75-5.27 s) cabe dentro del
+ruido de ±0.4 s de la torre.
+
+Que cuesten tan poco no es suerte: **63 de los 64 casos llaman a una función
+pura** —`precios.emparejar` recibe dos objetos congelados y devuelve otro— sin
+almacén, sin archivo y sin `TestClient`. **Uno solo** pasa por la aplicación
+entera, y es el que demuestra que `no empareja` llega hasta la fila guardada. **Ninguna aparece entre las doce más lentas**
+(`pytest --durations=12`): la más lenta del suite sigue siendo
+`test_la_pantalla_dice_el_rango_de_ventas...`, con 0.33 s.
+
 La saltada bajó de 2 a 1 con el ticket 07: `sql/crear_tablas.sql` estrenó los
 casos de `.sql` de `test_compila.py` y solo queda saltado el del shebang, que
 espera a que exista un `.sh`.

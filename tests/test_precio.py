@@ -811,7 +811,7 @@ def test_cada_final_de_doyle_deja_su_propio_motivo(respuesta, motivo):
     el tiempo` se arregla volviendo a consultar; `sin resultados` no lo arregla
     nadie y el hueco es la respuesta correcta.
     """
-    lectura = leer_el_precio(respuesta)
+    lectura = leer_el_precio(respuesta, CLAVE)
 
     assert lectura.motivo == motivo
     assert lectura.precio is None
@@ -839,7 +839,9 @@ def test_el_mensaje_real_de_una_sesion_caida_se_reconoce_como_tal():
         "    python -m doyle.sesion --proveedor nadro\n"
     )
 
-    lectura = leer_el_precio(RespuestaDeProveedor("nadro", "error", mensaje=real))
+    lectura = leer_el_precio(
+        RespuestaDeProveedor("nadro", "error", mensaje=real), CLAVE
+    )
 
     assert lectura.motivo == SESION_CADUCADA
     assert "\n" not in lectura.detalle
@@ -860,7 +862,7 @@ def test_una_falla_de_playwright_no_se_confunde_con_una_sesion_caida():
     )
 
     assert leer_el_precio(
-        RespuestaDeProveedor("levic", "error", mensaje=real)
+        RespuestaDeProveedor("levic", "error", mensaje=real), CLAVE
     ).motivo == PORTAL_SIN_CONTESTAR
 
 
@@ -871,8 +873,10 @@ def test_la_sesion_caducada_se_distingue_del_portal_caido():
     caída— y lo único que las separa es el mensaje. Confundirlas le quita al
     encargado el único hueco que puede resolver él (historia 33).
     """
-    caida = leer_el_precio(respuesta_con_sesion_caducada("nadro"))
-    portal = leer_el_precio(respuesta_con_error("nadro", "el portal no cargó"))
+    caida = leer_el_precio(respuesta_con_sesion_caducada("nadro"), CLAVE)
+    portal = leer_el_precio(
+        respuesta_con_error("nadro", "el portal no cargó"), CLAVE
+    )
 
     assert caida.motivo == SESION_CADUCADA
     assert portal.motivo == PORTAL_SIN_CONTESTAR
@@ -882,9 +886,10 @@ def test_la_sesion_caducada_se_distingue_del_portal_caido():
 def test_varios_resultados_no_produce_precio_y_guarda_cuantos_fueron():
     """VICMA con dos resultados **no** produce precio (spec, ADR 0002).
 
-    Y `resultados` guarda el 2, que es el dato con el que el ticket 13 va a
-    decidir: "VICMA se acepta únicamente si la búsqueda del EAN devuelve
-    exactamente un resultado".
+    Y `resultados` guarda el 2, que es el dato con el que el ticket 13 decide:
+    "VICMA se acepta únicamente si la búsqueda del EAN devuelve exactamente un
+    resultado". La regla por proveedor y su tabla de casos viven en
+    `tests/test_emparejamiento.py`; aquí se cuida que el número no se pierda.
     """
     respuesta = RespuestaDeProveedor(
         proveedor="vicma",
@@ -896,7 +901,7 @@ def test_varios_resultados_no_produce_precio_y_guarda_cuantos_fueron():
         total=2,
     )
 
-    lectura = leer_el_precio(respuesta)
+    lectura = leer_el_precio(respuesta, CLAVE)
 
     assert lectura.motivo == VARIOS_RESULTADOS
     assert lectura.precio is None
@@ -945,7 +950,7 @@ def test_una_respuesta_real_de_doyle_se_lee_sin_perder_el_total():
     assert respuesta.filas[0].clave == "7501349028234"
     assert respuesta.filas[0].precio == "86.05"
 
-    lectura = leer_el_precio(respuesta)
+    lectura = leer_el_precio(respuesta, "7501349028234")
     assert lectura.precio == Decimal("86.05")
     assert lectura.existencia == Decimal("8700.000")
     assert lectura.resultados == 1
@@ -968,7 +973,7 @@ def test_resultados_es_lo_que_encontro_el_portal_y_no_lo_que_doyle_trajo():
         total=43,
     )
 
-    assert leer_el_precio(respuesta).resultados == 43
+    assert leer_el_precio(respuesta, CLAVE).resultados == 43
 
 
 def test_un_hueco_nunca_se_queda_sin_motivo():
@@ -989,7 +994,7 @@ def test_un_hueco_nunca_se_queda_sin_motivo():
     ]
 
     for respuesta in finales:
-        lectura = leer_el_precio(respuesta)
+        lectura = leer_el_precio(respuesta, CLAVE)
         assert (lectura.precio is None) == (lectura.motivo is not None), (
             f"{respuesta.estado!r} produjo precio y motivo a la vez, o ninguno "
             "de los dos. Un precio faltante no es un NULL mudo."
@@ -998,18 +1003,18 @@ def test_un_hueco_nunca_se_queda_sin_motivo():
             assert lectura.motivo in MOTIVOS
 
 
-def test_el_motivo_del_ticket_13_ya_cabe_en_la_tabla_aunque_nadie_lo_escriba():
-    """`no empareja` está reservado desde hoy, y esto lo deja dicho.
+def test_el_motivo_que_el_ticket_12_reservo_cabe_en_la_tabla():
+    """`no empareja` estaba reservado antes de que nadie lo escribiera.
 
-    Lo va a producir el emparejamiento por EAN del ticket 13 —QuePharma usa
-    código interno, así que sus filas van a llegar y ninguna va a ser este
-    producto—. Hoy ningún camino de `leer_el_precio` lo devuelve, y aun así el
-    `CHECK` lo conoce: agregarlo después cuesta una migración y una visita a
-    atlas con credenciales de dueño (ADR 0003), porque el rol no puede alterar
-    sus tablas.
+    Lo dejó puesto el ticket 12 y **lo escribe el 13**: el emparejamiento por
+    EAN lo produce cada vez que llegan filas y ninguna es este producto, que es
+    el final ordinario de QuePharma. Tenerlo en el `CHECK` desde el día anterior
+    ahorró exactamente lo que costaba agregarlo después: una migración y una
+    visita a atlas con credenciales de dueño (ADR 0003), porque el rol no puede
+    alterar sus tablas.
 
-    Es exactamente el tipo de cosa que este ticket tenía que dejar lista para
-    no rehacer la tabla en tres días.
+    Quién lo produce se prueba en `tests/test_emparejamiento.py`. Lo que se
+    cuida aquí es que la tabla lo acepte.
     """
     assert NO_EMPAREJA in MOTIVOS
 
@@ -1027,7 +1032,7 @@ def test_un_estado_que_doyle_estrene_no_tumba_la_consulta():
     Sale como "el portal no contestó" y con el estado desconocido escrito en el
     detalle: ni se truena, ni pasa callado.
     """
-    lectura = leer_el_precio(RespuestaDeProveedor("nadro", "reiniciando"))
+    lectura = leer_el_precio(RespuestaDeProveedor("nadro", "reiniciando"), CLAVE)
 
     assert lectura.motivo == PORTAL_SIN_CONTESTAR
     assert "reiniciando" in lectura.detalle
@@ -1053,7 +1058,7 @@ def test_un_precio_en_cero_llega_a_la_fila_como_hueco_con_motivo():
     portal escribió un cero — un hueco sin su texto no se puede investigar.
     """
     lectura = leer_el_precio(
-        respuesta_lista("nadro", [(CLAVE, "0.00", "40")])
+        respuesta_lista("nadro", [(CLAVE, "0.00", "40")]), CLAVE
     )
 
     assert lectura.precio is None
@@ -1377,7 +1382,7 @@ def test_el_doble_de_doyle_representa_los_cuatro_finales(doyle):
 
     estado = doyle.estado_de_busqueda(doyle.pedir_busqueda(CLAVE).job_id)
     motivos = {
-        lectura.proveedor: lectura.motivo for lectura in congelar(estado)
+        lectura.proveedor: lectura.motivo for lectura in congelar(estado, CLAVE)
     }
 
     assert motivos == {
@@ -1403,7 +1408,7 @@ def test_congelar_deja_una_lectura_por_proveedor_en_orden_de_clave(doyle):
 
     estado = doyle.estado_de_busqueda(doyle.pedir_busqueda(CLAVE).job_id)
 
-    assert tuple(l.proveedor for l in congelar(estado)) == LOS_CUATRO
+    assert tuple(l.proveedor for l in congelar(estado, CLAVE)) == LOS_CUATRO
 
 
 def test_el_registro_no_deja_dos_consultas_del_mismo_renglon_a_la_vez():
@@ -1502,9 +1507,11 @@ def test_los_motivos_del_ddl_son_exactamente_los_del_codigo():
     el CHECK aceptara uno que nadie escribe, sería vocabulario muerto invitando
     a que alguien lo use.
 
-    `no empareja` es la excepción conocida y va en la lista a propósito: hoy no
-    lo escribe nadie y lo va a producir el ticket 13. Agregarlo después costaría
-    una migración del CHECK y una visita a atlas (ADR 0003).
+    Los ocho siguen siendo ocho después del ticket 13: el emparejamiento por
+    EAN no estrenó vocabulario, estrenó **quién escribe** `no empareja` —que el
+    ticket 12 había dejado reservado— y dos casos más de `varios resultados`.
+    Por eso no hay una migración `0004`: si hubiera hecho falta un motivo nuevo,
+    iría en este CHECK **y** en `sql/migraciones/` (ADR 0003).
     """
     sql = _texto(CREAR_TABLAS)
     bloque = sql[sql.index("CONSTRAINT ck_precio_motivo_conocido") :]
