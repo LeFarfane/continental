@@ -6,8 +6,8 @@
 
 **Status:** ready-for-agent
 
-- [ ] Cada renglón muestra la existencia actual del producto.
-- [ ] Cada renglón muestra sus días de cobertura.
-- [ ] La lista viene ordenada por urgencia: agotado primero, luego menor cobertura.
-- [ ] **Nada se filtra por cobertura.** Un producto con anaquel lleno aparece igual, solo más abajo: filtrar sería meter la lógica de la tarjeta O2 por la puerta de atrás, y el dueño pidió explícitamente no usarla.
-- [ ] La existencia y la cobertura que se muestran son las del momento en que se propuso el renglón.
+- [x] Cada renglón muestra la existencia actual del producto.
+- [x] Cada renglón muestra sus días de cobertura.
+- [x] La lista viene ordenada por urgencia: agotado primero, luego menor cobertura.
+- [x] **Nada se filtra por cobertura.** Un producto con anaquel lleno aparece igual, solo más abajo: filtrar sería meter la lógica de la tarjeta O2 por la puerta de atrás, y el dueño pidió explícitamente no usarla.
+- [x] La existencia y la cobertura que se muestran son las del momento en que se propuso el renglón.

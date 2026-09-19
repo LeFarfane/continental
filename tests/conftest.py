@@ -21,6 +21,16 @@ aparece entre las cinco más lentas. La recolección no se movió: 0.13-0.17 s, 
 ahí es donde `--durations` no mira (ver la nota de `CARPETAS_QUE_NO_SE_MIRAN`
 en `test_compila.py`).
 
+**Con el ticket 04 dentro el suite no subió: bajó.** Medido el 2026-09-19, en
+tres corridas seguidas, 52 recolectadas —50 pasan, 2 saltadas— en
+**0.39-0.49 s**, con la recolección en 0.04-0.05 s. Las 9 pruebas nuevas no
+aparecen entre las ocho más lentas. La diferencia contra los 0.95-1.37 s de
+arriba no está en ellas: la prueba más lenta sigue siendo la primera que sirve
+un archivo estático, y aquí costó 0.17 s contra los 0.37-0.49 s del día
+anterior. Ese `mimetypes.init()` leyendo el registro de Windows cuesta distinto
+según lo que el sistema tenga en caché, y es justo por eso que aquí se anotan
+rangos de varias corridas y no un número solo.
+
 **La medición en la torre tiene ruido de ±0.4 s**, así que una sola corrida no
 dice nada: corre tres. Y si el número se sale de lo anterior, mide antes de
 culpar a las pruebas nuevas: `pytest --durations=8` para el tiempo de las

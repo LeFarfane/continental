@@ -8,6 +8,13 @@ verde con la ruta rota, con el borde mal cableado o con la pantalla vacía.
 que la llama directo, y es a propósito: comprueba justo lo que por HTTP no se
 ve, que la función no necesita almacén, conexión ni configuración.
 
+Del ticket 04, la que más vale es
+`test_la_lista_va_ordenada_por_urgencia_y_nada_se_filtra`: comprueba el orden y,
+en la misma corrida, que los cinco renglones sigan ahí. Si alguien "limpia" la
+lista escondiendo lo que tiene anaquel lleno —que es la lógica de la tarjeta O2
+de Metabase, la que el dueño pidió explícitamente no usar como fuente del
+pedido—, ese `== 5` se pone rojo.
+
 La prueba que más vale de este archivo es
 `test_la_ventana_se_ancla_en_el_ultimo_dato_y_nunca_en_el_reloj`: usa un
 almacén cuyo último dato es de hace años, así que si alguien ancla la ventana
@@ -21,6 +28,7 @@ Ninguna prueba de este archivo toca Postgres ni la red.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 from pathlib import Path
 
@@ -264,15 +272,38 @@ def test_la_pantalla_trae_la_lista_con_clave_descripcion_y_cantidad(cliente):
 
     La portada es HTML+JS a mano, sin framework ni build —atlas es un Athlon II
     X4 de 2010—, así que lo que se puede comprobar barato es que la sección, la
-    consulta y los tres encabezados sigan ahí. Si alguien construye la API y se
-    olvida de la pantalla, esto se pone rojo.
+    consulta y los cinco encabezados sigan ahí. Si alguien construye la API y
+    se olvida de la pantalla, esto se pone rojo.
     """
     portada = cliente.get("/").text
 
     assert "Pedido sugerido" in portada
     assert RUTA in portada
-    for encabezado in (">Clave<", ">Producto<", ">Cantidad a pedir<"):
+    for encabezado in (
+        ">Clave<",
+        ">Producto<",
+        ">Cantidad a pedir<",
+        ">Existencia<",
+        ">Días de cobertura<",
+    ):
         assert encabezado in portada, f"falta el encabezado {encabezado}"
+
+
+def test_la_pantalla_pinta_la_existencia_del_renglon_y_no_la_vuelve_a_buscar(cliente):
+    """La existencia y la cobertura que se ven son las del renglón.
+
+    Se comprueba sobre el código de la pantalla y no sobre el resultado porque
+    es justo lo que un resultado no distingue: una pantalla que volviera a
+    pedir el catálogo se vería igual hoy y mostraría otro número mañana, con
+    la lista ya propuesta diciendo una cosa y el renglón guardado otra. La
+    pantalla lee `r.existencia` y `r.dias_de_cobertura`, y la única consulta
+    del pedido es la de la ruta.
+    """
+    portada = cliente.get("/").text
+
+    assert "r.existencia" in portada
+    assert "r.dias_de_cobertura" in portada
+    assert portada.count("fetch('/api/") == 3  # pedido, salud y módulos
 
 
 # ------------------------------------------------------- la función, directo
@@ -299,31 +330,186 @@ def test_el_calculo_es_una_funcion_pura_que_recibe_ventas_y_catalogo():
     assert calcular_pedido_sugerido(ventas=[], catalogo=[]).fecha_de_ventas is None
 
 
-def test_el_orden_es_estable_y_legible_mientras_llega_el_de_urgencia():
-    """El orden por urgencia es el ticket 04. Hasta entonces, alfabético.
+# --------------------------- existencia, cobertura y el orden por urgencia
+#
+# El ticket 04 entero. Lo que estas pruebas cuidan por encima de todo es que
+# nada se filtre: un producto con el anaquel lleno baja, nunca desaparece.
 
-    Se prueba porque "sin orden definido" en la práctica significa "el orden en
-    que Python recorrió un diccionario", y eso cambia bajo los pies de quien
-    lea la pantalla dos días seguidos.
+
+def test_cada_renglon_dice_la_existencia_que_tenia_el_producto(cliente, almacen):
+    """Primer criterio del ticket: "cada renglón muestra la existencia actual".
+
+    Sin ella la lista es una enumeración: "se vendieron 3" se lee idéntico con
+    el anaquel vacío que con 40 piezas guardadas, y el encargado no puede
+    decidir nada de un vistazo.
+    """
+    almacen.catalogo_en_memoria = [
+        _producto(1, "7501000000001", "PARACETAMOL", existencia=12)
+    ]
+    almacen.ventas_en_memoria = [_venta(dt.date(2026, 9, 16), 1, 3)]
+
+    renglon = cliente.get(RUTA).json()["renglones"][0]
+
+    assert renglon["existencia"] == 12
+
+
+def test_cada_renglon_dice_sus_dias_de_cobertura(cliente, almacen):
+    """Segundo criterio, con la definición del glosario y nada más.
+
+    "Cuántos días duraría la existencia actual al ritmo al que se ha vendido"
+    (CONTEXT.md). Aquí el ritmo son 4 piezas en 4 días con datos —1 al día— y
+    quedan 10 piezas: 10 días de cobertura. El ritmo sale de las ventas, que
+    es lo único que la función tiene; no hay reloj que mirar.
+    """
+    almacen.catalogo_en_memoria = [
+        _producto(1, "7501000000001", "PARACETAMOL", existencia=10)
+    ]
+    almacen.ventas_en_memoria = [
+        _venta(dt.date(2026, 9, 13), 1, 1),
+        _venta(dt.date(2026, 9, 14), 1, 1),
+        _venta(dt.date(2026, 9, 15), 1, 1),
+        _venta(dt.date(2026, 9, 16), 1, 1),
+    ]
+
+    cuerpo = cliente.get(RUTA).json()
+
+    assert cuerpo["renglones"][0]["dias_de_cobertura"] == 10.0
+    # La reposición sigue siendo la del último día: el ritmo se mide sobre una
+    # ventana larga, pero no es lo que se pide.
+    assert cuerpo["renglones"][0]["cantidad_propuesta"] == 1
+
+
+def test_la_lista_va_ordenada_por_urgencia_y_nada_se_filtra(cliente, almacen):
+    """El criterio central del ticket, entero y en una sola corrida.
+
+    Agotado primero, luego menor cobertura, y **los cinco renglones siguen
+    ahí**: el de 900 días de cobertura baja hasta el fondo, no desaparece.
+    Filtrarlo sería meter la lógica de la tarjeta O2 de Metabase por la puerta
+    de atrás, y el dueño pidió explícitamente no usarla como fuente del pedido
+    (ADR 0002). Si alguien agrega un filtro, este `== 5` se pone rojo.
+
+    El último es el que no está en el catálogo: de ése no se sabe la
+    existencia, y "no sé" no encabeza una lista de urgencias.
+    """
+    almacen.catalogo_en_memoria = [
+        _producto(1, "7501000000001", "AMOXICILINA", existencia=0),
+        _producto(2, "7501000000002", "BENZAL", existencia=900),
+        _producto(3, "7501000000003", "CLORFENAMINA", existencia=2),
+        _producto(4, "7501000000004", "DICLOFENACO", existencia=20),
+    ]
+    almacen.ventas_en_memoria = [
+        _venta(dt.date(2026, 9, 16), producto_id=2, cantidad=1),
+        _venta(dt.date(2026, 9, 16), producto_id=4, cantidad=1),
+        _venta(dt.date(2026, 9, 16), producto_id=99, cantidad=1),  # sin catálogo
+        _venta(dt.date(2026, 9, 16), producto_id=1, cantidad=1),
+        _venta(dt.date(2026, 9, 16), producto_id=3, cantidad=1),
+    ]
+
+    renglones = cliente.get(RUTA).json()["renglones"]
+
+    assert len(renglones) == 5
+    assert [r["producto_id"] for r in renglones] == [1, 3, 4, 2, 99]
+    assert [r["dias_de_cobertura"] for r in renglones] == [0.0, 2.0, 20.0, 900.0, None]
+
+
+def test_un_producto_fuera_del_catalogo_no_tiene_existencia_de_cero(cliente, almacen):
+    """Regla 4 de CLAUDE.md: `0` y "no sé" no son lo mismo.
+
+    De un producto que `dim_producto` no conoce no se sabe cuánto queda. Un
+    cero ahí lo mandaría a lo más urgente de la lista **mintiendo**, y un
+    "agotado" falso arriba empuja hacia abajo a lo que de verdad se acabó. Se
+    muestra igual, al final, marcado y contado.
+    """
+    almacen.catalogo_en_memoria = [_producto(1, "7501000000001", "PARACETAMOL")]
+    almacen.ventas_en_memoria = [
+        _venta(dt.date(2026, 9, 16), producto_id=1, cantidad=1),
+        _venta(dt.date(2026, 9, 16), producto_id=99, cantidad=2),
+    ]
+
+    renglones = cliente.get(RUTA).json()["renglones"]
+    huerfano = next(r for r in renglones if r["producto_id"] == 99)
+
+    assert huerfano["existencia"] is None
+    assert huerfano["dias_de_cobertura"] is None
+    assert huerfano["esta_agotado"] is False  # no sabemos que se acabó
+    assert renglones[-1]["producto_id"] == 99
+
+
+def test_un_producto_que_no_se_vendio_en_la_ventana_no_tiene_cobertura_de_cero():
+    """Existencia 30 y ritmo cero no son cero días de cobertura: son "sin dato".
+
+    Pintarlo como `0` se leería **agotado**, que es lo contrario de lo que
+    pasa: hay mercancía y no se está moviendo. Dividir entre cero tampoco es
+    opción, y un infinito no se puede serializar a JSON ni leer en una
+    pantalla. Hoy la ruta siempre manda un ritmo que contiene las ventas del
+    renglón, así que esta rama se prueba llamando a la función directo — pero
+    deja de ser hipotética con el ticket 09, cuando la ventana de reposición
+    acumule desde el cierre y ya no coincida con la del ritmo.
     """
     pedido = calcular_pedido_sugerido(
-        ventas=[
-            _venta(dt.date(2026, 9, 16), 1, 1),
-            _venta(dt.date(2026, 9, 16), 2, 1),
-            _venta(dt.date(2026, 9, 16), 3, 1),
-        ],
-        catalogo=[
-            _producto(1, "7501000000001", "NAPROXENO"),
-            _producto(2, "7501000000002", "AMOXICILINA"),
-            _producto(3, "7501000000003", "PARACETAMOL"),
-        ],
+        ventas=[_venta(dt.date(2026, 9, 16), producto_id=1, cantidad=2)],
+        catalogo=[_producto(1, "7501000000001", "PARACETAMOL", existencia=30)],
+        ventas_del_ritmo=[_venta(dt.date(2026, 9, 16), producto_id=2, cantidad=5)],
     )
 
-    assert [r.descripcion for r in pedido.renglones] == [
+    assert pedido.renglones[0].dias_de_cobertura is None
+    assert pedido.renglones[0].esta_agotado is False
+
+
+def test_el_desempate_es_determinista_y_el_orden_no_baila_entre_corridas():
+    """Dos corridas seguidas tienen que dar el mismo orden.
+
+    "Sin desempate definido" acaba siendo "el orden en que Python recorrió un
+    diccionario": la pantalla cambia bajo los pies de quien la lee dos días
+    seguidos y deja de ser confiable. Con la misma cobertura manda la
+    descripción, y con la misma descripción el `producto_id`, que es único.
+    """
+    catalogo = [
+        _producto(1, "7501000000001", "NAPROXENO", existencia=4),
+        _producto(2, "7501000000002", "AMOXICILINA", existencia=4),
+        _producto(3, "7501000000003", "PARACETAMOL", existencia=4),
+    ]
+    ventas = [
+        _venta(dt.date(2026, 9, 16), 1, 1),
+        _venta(dt.date(2026, 9, 16), 2, 1),
+        _venta(dt.date(2026, 9, 16), 3, 1),
+    ]
+
+    primera = calcular_pedido_sugerido(ventas=ventas, catalogo=catalogo)
+    # Las mismas filas en otro orden: el almacén no promete uno, y un `order
+    # by` de Postgres que cambie no debe mover la pantalla.
+    segunda = calcular_pedido_sugerido(
+        ventas=list(reversed(ventas)), catalogo=list(reversed(catalogo))
+    )
+
+    assert [r.descripcion for r in primera.renglones] == [
         "AMOXICILINA",
         "NAPROXENO",
         "PARACETAMOL",
     ]
+    assert [r.producto_id for r in primera.renglones] == [
+        r.producto_id for r in segunda.renglones
+    ]
+
+
+def test_la_existencia_y_la_cobertura_viajan_congeladas_dentro_del_renglon():
+    """Son las del momento en que se propuso el renglón, no las de después.
+
+    El renglón se lleva el número dentro, copiado; no guarda una referencia al
+    catálogo ni una manera de volver a preguntarle. Por eso, cuando el
+    catálogo cambia debajo —llegó mercancía—, la lista que ya se propuso sigue
+    diciendo lo que se vio al proponerla. El día que el renglón se guarde
+    (ticket 08), ese número se guarda con él.
+    """
+    catalogo = [_producto(1, "7501000000001", "PARACETAMOL", existencia=4)]
+
+    pedido = calcular_pedido_sugerido(
+        ventas=[_venta(dt.date(2026, 9, 16), 1, 2)], catalogo=catalogo
+    )
+    catalogo[0] = dataclasses.replace(catalogo[0], existencia=400)
+
+    assert pedido.renglones[0].existencia == 4
+    assert pedido.renglones[0].dias_de_cobertura == 2.0
 
 
 # ------------------------------------------------------------------ ayudas
@@ -340,7 +526,9 @@ def _venta(fecha: dt.date, producto_id: int, cantidad: float) -> LineaDeVenta:
     )
 
 
-def _producto(producto_id: int, clave: str, descripcion: str) -> Producto:
+def _producto(
+    producto_id: int, clave: str, descripcion: str, existencia: float = 4
+) -> Producto:
     return Producto(
         producto_id=producto_id,
         clave=clave,
@@ -350,7 +538,7 @@ def _producto(producto_id: int, clave: str, descripcion: str) -> Producto:
         anaquel="PATENTE 1",
         precio_lista_sin_iva=50.0,
         costo=30.0,
-        existencia=4,
+        existencia=existencia,
         esta_activo=True,
         es_granel=False,
     )

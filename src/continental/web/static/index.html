@@ -46,8 +46,8 @@
   .detalle { color: var(--tenue); font-size: .88rem; }
   code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
 
-  /* El pedido sugerido. Tabla y no lista: son tres datos por renglón y la
-     cantidad se lee en columna, que es como se verifica de un vistazo. */
+  /* El pedido sugerido. Tabla y no lista: son cinco datos por renglón y las
+     cifras se leen en columna, que es como se verifica de un vistazo. */
   .corte { margin: 0 0 1rem; font-size: 1.05rem; }
   .corte strong { font-weight: 600; }
   .nota { margin: 0 0 1rem; color: var(--tenue); font-size: .9rem; }
@@ -59,12 +59,46 @@
   th { font-size: .72rem; text-transform: uppercase; letter-spacing: .07em; color: var(--tenue); font-weight: 600; }
   tbody tr:nth-child(even) { background: var(--realce); }
   td.clave, th.clave { width: 9.5rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; color: var(--tenue); }
-  td.cantidad, th.cantidad { width: 8rem; text-align: right; }
+  td.cantidad, th.cantidad { width: 7.5rem; text-align: right; }
   td.cantidad b { font-size: 1.05rem; font-weight: 600; }
+  /* Existencia y cobertura: a la derecha y con cifras de ancho fijo, que es lo
+     que deja comparar dos renglones sin leerlos. */
+  td.numero, th.numero { text-align: right; width: 6.5rem; }
+  td.numero { font-variant-numeric: tabular-nums; }
+  /* "sin dato" no es un cero y no se pinta como uno: un cero en existencia se
+     lee "agotado", que es lo contrario de "no sé qué queda". */
+  td.numero.sindato { color: var(--tenue); font-size: .85em; }
+  td.numero.urgente { color: var(--mal); font-weight: 600; }
   .marca { color: var(--aviso); font-size: .8rem; display: block; }
   .vendido { color: var(--tenue); font-size: .8rem; display: block; }
   @media (max-width: 34rem) {
-    td.clave, th.clave { width: auto; }
+    /* A ancho de teléfono las cinco columnas NO caben, medido a 375 px: la
+       clave de 13 dígitos se parte en una letra por renglón y la cantidad se
+       sale de la pantalla. Así que a este ancho la tabla deja de ser rejilla y
+       cada renglón se apila, con su etiqueta pegada a cada cifra. Se apila en
+       vez de esconder una columna: un dato que no se ve es un dato que nadie
+       sabe que existe, y esconder la existencia justo aquí sería tan malo como
+       filtrar el renglón. */
+    thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+    table, tbody { display: block; }
+    /* Con la tabla en `block` el `caption` deja de medir el ancho de la
+       rejilla y se encoge a una palabra por renglón. Se le devuelve el ancho
+       a mano. */
+    caption { display: block; }
+    tr { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 .9rem;
+         padding: .55rem .4rem; border-bottom: 1px solid var(--linea); }
+    td { display: block; border: 0; padding: 0; }
+    td.clave, td.producto { flex: 0 0 100%; width: auto; }
+    td.numero, td.cantidad { width: auto; text-align: left; }
+    td.numero::before { content: attr(data-etiqueta) " "; color: var(--tenue); font-size: .78rem; }
+    /* La cantidad se va al extremo derecho de la última línea: es la cifra
+       que el encargado copia al pedido, y en el teléfono sigue siendo la que
+       se lee sola. */
+    td.cantidad { margin-left: auto; text-align: right; }
+    /* La etiqueta cuelga del número y no de la celda: si colgara de la celda
+       quedaría DEBAJO del "se vendieron 2.5" del granel, y se leería
+       "3 · se vendieron 2.5 · a pedir". */
+    td.cantidad b::after { content: " a pedir"; color: var(--tenue); font-size: .78rem; font-weight: 400; }
     .detalle { display: block; }
   }
 </style>
@@ -84,6 +118,8 @@
         <tr>
           <th class="clave">Clave</th>
           <th>Producto</th>
+          <th class="numero">Existencia</th>
+          <th class="numero">Días de cobertura</th>
           <th class="cantidad">Cantidad a pedir</th>
         </tr>
       </thead>
@@ -150,6 +186,33 @@ const nota = (texto, clase) => {
   p.hidden = !texto;
 };
 
+// Las cifras se escriben cortas: "12" y no "12.0", "2.7" y no "2.7000000001".
+// Solo el granel trae decimales de verdad (5 artículos con `granel = 1`).
+const cifra = (n) => Number.isInteger(n) ? String(n) : n.toFixed(1);
+
+// Existencia y días de cobertura salen del RENGLÓN, tal como venían cuando se
+// propuso. La pantalla no vuelve a preguntarle al catálogo: si lo hiciera,
+// mostraría un número y la lista estaría ordenada por otro, y el día que el
+// renglón se guarde (ticket 08) lo guardado no coincidiría con lo que se vio.
+// `etiqueta` es el encabezado de la columna repetido en el atributo: a ancho
+// de teléfono la tabla se apila y el `<thead>` deja de estar arriba de la
+// cifra, así que cada número lleva su nombre pegado. Sin eso, "3" y "42 días"
+// serían dos cifras sueltas.
+const celdaDeCifra = (valor, etiqueta, sufijo, urgente) => {
+  const td = document.createElement('td');
+  td.className = 'numero';
+  td.dataset.etiqueta = etiqueta;
+  // `null` es "no se sabe", nunca un cero: un cero aquí se leería "agotado".
+  if (valor === null || valor === undefined) {
+    td.className += ' sindato';
+    td.textContent = 'sin dato';
+    return td;
+  }
+  if (urgente) td.className += ' urgente';
+  td.textContent = cifra(valor) + sufijo;
+  return td;
+};
+
 const renglon = (r) => {
   const tr = document.createElement('tr');
 
@@ -158,12 +221,28 @@ const renglon = (r) => {
   clave.textContent = r.clave || '—';
 
   const producto = document.createElement('td');
+  producto.className = 'producto';
   producto.textContent = r.descripcion;
   if (!r.esta_en_el_catalogo) {
     const marca = document.createElement('span');
     marca.className = 'marca';
     marca.textContent = 'No está en el catálogo: revísalo en SICAR.';
     producto.append(marca);
+  }
+
+  const existencia = celdaDeCifra(r.existencia, 'Existencia', '', r.esta_agotado);
+
+  // Agotado se dice con la palabra y no con un "0.0 días": es el renglón más
+  // urgente de la lista y tiene que saltar a la vista sin hacer aritmética.
+  let cobertura;
+  if (r.esta_agotado) {
+    cobertura = document.createElement('td');
+    cobertura.className = 'numero urgente';
+    cobertura.dataset.etiqueta = 'Cobertura';
+    cobertura.textContent = 'agotado';
+  } else {
+    cobertura = celdaDeCifra(r.dias_de_cobertura, 'Cobertura',
+      r.dias_de_cobertura === 1 ? ' día' : ' días');
   }
 
   const cantidad = document.createElement('td');
@@ -180,7 +259,7 @@ const renglon = (r) => {
     cantidad.append(d);
   }
 
-  tr.append(clave, producto, cantidad);
+  tr.append(clave, producto, existencia, cobertura, cantidad);
   return tr;
 };
 
@@ -228,9 +307,13 @@ async function cargarPedido() {
         : datos.sin_catalogo + ' renglones son de productos que el catálogo no conoce. Se muestran igual: se vendieron y hay que reponerlos.')
     : '', datos.sin_catalogo ? 'aviso' : '');
 
+  // El resumen dice el orden a propósito: una lista larga ordenada por un
+  // criterio que no se anuncia se lee como si no tuviera ninguno. Y dice que
+  // nada se filtró, que es lo que distingue esta lista de la tarjeta O2.
   document.getElementById('pedido-resumen').textContent =
     plural(datos.renglones.length, 'renglón', 'renglones') +
-    ', uno por producto vendido. Se propone reponer lo que salió, pieza por pieza.';
+    ', uno por producto vendido. Se propone reponer lo que salió, pieza por ' +
+    'pieza. Arriba lo que se va a acabar primero; nada se quitó de la lista.';
   document.getElementById('pedido-renglones').replaceChildren(...datos.renglones.map(renglon));
   tabla.hidden = false;
 }

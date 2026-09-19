@@ -8,6 +8,7 @@ tickets 08 y 12 en adelante.
 from __future__ import annotations
 
 import dataclasses
+import datetime as dt
 import logging
 from pathlib import Path
 
@@ -20,7 +21,7 @@ from continental import __version__
 from continental.almacen import LecturaDelAlmacen
 from continental.config import cargar
 from continental.doyle import ClienteDeDoyle
-from continental.sugerido import calcular_pedido_sugerido
+from continental.sugerido import DIAS_DE_RITMO, calcular_pedido_sugerido
 from continental.web.dependencias import obtener_almacen, obtener_doyle
 
 ESTATICOS = Path(__file__).parent / "static"
@@ -162,10 +163,16 @@ def pedido_sugerido(almacen: LecturaDelAlmacen = Depends(obtener_almacen)):
     corre en UTC y su `current_date` puede ir dos días adelante del último
     dato; a farmacia-data le costó 11.7 puntos de crecimiento inventados.
 
-    Hoy la ventana es **el último día con datos**. Acumular desde el cierre del
-    pedido sugerido anterior —que es lo que ADR 0002 decide, porque lo del
-    sábado llega hasta el lunes en la noche— necesita que el sugerido se
-    guarde, y eso es el ticket 09.
+    Hoy la ventana de reposición es **el último día con datos**. Acumular
+    desde el cierre del pedido sugerido anterior —que es lo que ADR 0002
+    decide, porque lo del sábado llega hasta el lunes en la noche— necesita que
+    el sugerido se guarde, y eso es el ticket 09.
+
+    **La cobertura se mide sobre otra ventana**, más larga (`DIAS_DE_RITMO`), y
+    las dos salen de **una sola lectura**: la de reposición es un subconjunto
+    de la del ritmo, así que se recorta aquí en memoria —del orden de 600
+    filas— en vez de pedirle dos veces lo mismo a Postgres. El porqué de los 28
+    días está junto a la constante, en `sugerido.py`.
 
     Un almacén caído sale como `ok: false` con su motivo y no como una lista
     vacía (regla 4): "hoy no se vendió nada" y "no pude leer" se ven idénticos
@@ -180,9 +187,16 @@ def pedido_sugerido(almacen: LecturaDelAlmacen = Depends(obtener_almacen)):
     """
     try:
         ultima = almacen.ultima_fecha_con_ventas()
-        # Sin ventas no hay nada que reponer, y leer el catálogo entero (3,429
-        # filas) para descubrirlo sería trabajo tirado.
-        ventas = almacen.ventas(ultima, ultima) if ultima else []
+        # Dos cosas en una lectura. Sin ventas no hay nada que reponer, y leer
+        # el catálogo entero (3,429 filas) para descubrirlo sería trabajo
+        # tirado; y el `- 1` es el rango completo menos el propio día: de
+        # `ultima - 27` a `ultima` son 28 días, porque el almacén incluye los
+        # dos extremos.
+        ventas_del_ritmo = (
+            almacen.ventas(ultima - dt.timedelta(days=DIAS_DE_RITMO - 1), ultima)
+            if ultima
+            else []
+        )
         catalogo = almacen.catalogo() if ultima else []
     except Exception as exc:  # noqa: BLE001 — el almacén caído es un hueco, no un 500
         log.exception("El almacén no contestó al armar el pedido sugerido")
@@ -194,7 +208,12 @@ def pedido_sugerido(almacen: LecturaDelAlmacen = Depends(obtener_almacen)):
             "sin_catalogo": 0,
         }
 
-    pedido = calcular_pedido_sugerido(ventas=ventas, catalogo=catalogo)
+    # Lo que se repone es solo el último día: se recorta de lo ya leído en vez
+    # de hacer una segunda consulta por un subconjunto de las mismas filas.
+    ventas = [v for v in ventas_del_ritmo if v.fecha == ultima]
+    pedido = calcular_pedido_sugerido(
+        ventas=ventas, catalogo=catalogo, ventas_del_ritmo=ventas_del_ritmo
+    )
 
     if pedido.sin_catalogo:
         # A la bitácora con nombre y apellido: el hueco se ve en la pantalla,
@@ -211,7 +230,14 @@ def pedido_sugerido(almacen: LecturaDelAlmacen = Depends(obtener_almacen)):
         "fecha_de_ventas": (
             pedido.fecha_de_ventas.isoformat() if pedido.fecha_de_ventas else None
         ),
-        "renglones": [dataclasses.asdict(r) for r in pedido.renglones],
+        # `esta_agotado` va explícito porque `asdict` no incluye propiedades, y
+        # la regla —existencia conocida y en cero o negativa— tiene que vivir
+        # en un solo lugar probado, no repetida en el JavaScript de la
+        # pantalla.
+        "renglones": [
+            {**dataclasses.asdict(r), "esta_agotado": r.esta_agotado}
+            for r in pedido.renglones
+        ],
         "sin_catalogo": pedido.sin_catalogo,
     }
 
