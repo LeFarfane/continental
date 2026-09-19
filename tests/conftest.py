@@ -168,6 +168,27 @@ comparación llega hasta la pantalla con la cantidad correcta.
 Si se hubiera mirado nada más el total, este ticket parecería haber hecho el
 suite tres veces más rápido.
 
+**Con el ticket 15 dentro el suite sigue igual, y la resta está medida.**
+Medido el 2026-09-19, en tres corridas seguidas, 500 recolectadas —499 pasan, 1
+saltada— en **1.96-2.02 s**, con la recolección en 0.13 s. Con el archivo nuevo
+fuera (`pytest --ignore=tests/test_huecos.py`) y en la misma sesión, el árbol
+del ticket 14 costó **1.80-1.86 s**: las 46 pruebas nuevas de `test_huecos.py`
+cuestan ~0.15 s, y corriendo solas, **0.19-0.22 s**.
+
+Por lo mismo de siempre: **33 de las 46 no levantan la aplicación**
+—`contar_la_lista` recibe comparaciones y devuelve un conteo; `elegir_ganador`
+recibe lecturas y devuelve un ganador; nueve leen `index.html` y comparan
+cadenas—. Las **siete** que pasan por `TestClient` son las que demuestran que
+el conteo llega hasta el JSON de la lista y que descartar lo recalcula; tres de
+ellas aparecen entre las ocho más lentas, con 0.02-0.03 s. La más lenta del
+suite sigue sin ser una prueba de este ticket:
+`test_la_pantalla_dice_el_rango_de_ventas...`, con 0.13 s.
+
+Lo que este ticket **sí** costó y conviene anotar: descartar, devolver y
+ajustar cambiaron su lectura de *los precios de un renglón* por *los precios de
+la lista*. Es **la misma consulta**, no una más —un `DISTINCT ON` con otro
+`WHERE`—, y a cambio el conteo de arriba no envejece con cada clic.
+
 La saltada bajó de 2 a 1 con el ticket 07: `sql/crear_tablas.sql` estrenó los
 casos de `.sql` de `test_compila.py` y solo queda saltado el del shebang, que
 espera a que exista un `.sh`.

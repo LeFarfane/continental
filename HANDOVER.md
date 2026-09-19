@@ -30,8 +30,13 @@ nunca como cero. Y desde el ticket 14 **la fila compara**: los cuatro
 proveedores con su precio y su existencia, el más barato **con existencia**
 marcado, la diferencia por pieza de cada uno contra él, y el ahorro contra NADRO
 en pesos y por renglón —multiplicado por `cantidad_a_pedir`, que es lo que de
-verdad se va a pedir—. Lo que falta de precios —contar los huecos, el lote de la
-noche— son los tickets 15 en adelante.
+verdad se va a pedir—. Y desde el ticket 15 **la lista dice lo que le falta**:
+arriba, antes de la tabla, cuántos renglones quedaron sin comparar y por qué
+—nadie los consultó, se consultaron y ninguno dio precio, o hay un solo precio—;
+en cada renglón, contra cuántos de los consultados se comparó; en cada hueco, su
+motivo dicho con palabras de persona; y **un renglón con una sola lectura ya no
+se marca como "el más barato" sino como "el único que contestó"**. Lo que falta
+de precios —el lote de la noche— es el ticket 18.
 
 **Tres cosas del 14 que conviene no redescubrir.** La existencia tiene **tres**
 categorías y no dos: la confirmó, dijo cero, o **no dijo** —los portales la
@@ -45,9 +50,24 @@ diferencia sale negativa: la pantalla escribe "60.33 más barato por pieza, pero
 no lo tiene", y el signo lo decide Python. Ese último caso lo cazó el recorrido
 del navegador, no el suite: la pantalla había escrito `+-60.33`.
 
+**Tres cosas del 15 que conviene no redescubrir.** *"El más barato"* es un
+**superlativo**: afirma algo sobre los otros tres precios, y con una sola
+cotización eso no se miró. Por eso la certeza del ganador pasó de dos valores a
+cuatro —se cruzan "¿confirmó existencia?" y "¿hubo con qué comparar?"— y **la
+frase viaja hecha desde Python**: hasta el 14 el JavaScript elegía entre dos
+literales suyos, que es exactamente por qué el caso salía mal sin que ninguna
+prueba se pusiera roja. "Sin comparar" son **tres** cosas y no una —nadie lo
+consultó, se consultó y ninguno dio precio, hay un solo precio— porque el
+encargado las arregla de tres maneras; el conteo desglosa las tres y **solo mira
+los renglones de trabajo**, al revés que `sin_clasificar`. Y el recorrido del
+navegador volvió a cazar lo que el suite no: con NADRO como único proveedor con
+precio, el ahorro daba un cero legítimo y la pantalla escribía *"NADRO ya es el
+más barato"* tres renglones debajo de la marca que decía *"el único que
+contestó"*.
+
 ```bash
 python iniciar.py     # http://127.0.0.1:8585
-pytest                # 453 pruebas y 1 saltada, 1.8-2.1 s (2026-09-19, ticket 14)
+pytest                # 499 pruebas y 1 saltada, 1.96-2.02 s (2026-09-19, ticket 15)
                       # el número subió con la torre, no con las pruebas: ese
                       # mismo día, con test_precio.py fuera, el árbol del
                       # ticket 11 costaba 3.7-4.2 s contra los 1.7-1.9 s que
@@ -70,7 +90,7 @@ pytest                # 453 pruebas y 1 saltada, 1.8-2.1 s (2026-09-19, ticket 1
 | `src/continental/almacenamiento.py` | donde el pedido sugerido se guarda: el `Protocol`, el SQL real y las reglas de la tabla en un solo lugar |
 | `src/continental/precios.py` | funciones puras: lo que Doyle contestó + la clave buscada -> precio `Decimal` o motivo de rechazo. Ahí vive `emparejar`, la regla por proveedor. No toca la red ni el reloj |
 | `src/continental/consultas.py` | quién espera a Doyle y dónde queda el resultado si nadie está mirando |
-| `src/continental/comparacion.py` | funciones puras: las cuatro lecturas congeladas + las piezas -> quién gana y cuánto se ahorra contra NADRO. No toca la red, la base ni el reloj |
+| `src/continental/comparacion.py` | funciones puras: las cuatro lecturas congeladas + las piezas -> quién gana, con qué certeza, cuánto se ahorra contra NADRO y, para la lista entera, cuántos renglones quedaron sin comparar (`contar_la_lista`). No toca la red, la base ni el reloj |
 
 ## Lo que falta, en orden
 
@@ -233,7 +253,24 @@ más barato y se le pidió a otro.**
    ciegas—. Se mide con `select proveedor, existencia_como_llego, count(*)`
    sobre `pedidos.precio_de_proveedor` en cuanto haya lecturas reales.
 
-2. **Un fallo de Doyle al PEDIR la búsqueda no deja rastro guardado.** Si
+2. **El conteo de huecos envejece al consultar un precio, y lo dice.** La
+   respuesta de `/api/renglon/{id}/precio` es de **un** renglón: no trae el
+   conteo de la lista, y recalcularlo ahí necesitaría leer la lista entera por
+   su id —`AlmacenamientoDelPedido` solo sabe leerla por fecha—. Volver a pedir
+   la lista está descartado por un acuerdo anterior (*la lista se pide una sola
+   vez*, fijado por tres pruebas en `test_vistas`, `test_sugerido` y
+   `test_clasificacion`): dos lecturas en momentos distintos pueden no coincidir
+   y nadie sabría cuál tiene razón. Así que la pantalla **marca el conteo como
+   viejo y lo escribe** ("este conteo es de antes de eso; recarga la página").
+   Envejece hacia el lado seguro —dice más huecos de los que quedan— pero es un
+   remiendo. Descartar, devolver y ajustar **sí** lo traen recalculado y sin una
+   consulta más: esas tres rutas cambiaron su lectura de *los precios de un
+   renglón* por *los precios de la lista*, que es la misma consulta con otro
+   `WHERE`. **Condición de disparo:** cuando el lote nocturno (ticket 18)
+   consulte la lista entera de golpe, o cuando entre un `leer_por_id` al
+   almacenamiento por otra razón, esto se cierra en una línea.
+
+3. **Un fallo de Doyle al PEDIR la búsqueda no deja rastro guardado.** Si
    `pedir_busqueda` truena —Doyle apagado, el puerto ocupado por otra cosa— no
    se escribe ninguna fila: no se sabe siquiera a qué proveedores se iba a
    preguntar, porque esa lista sale del acuse. El motivo vive solo en el
@@ -246,16 +283,16 @@ más barato y se le pidió a otro.**
    (ticket 18) corre con Doyle caído y a la mañana no hay forma de saber que
    corrió, esto deja de ser un detalle.
 
-3. **El horario del respaldo de SICAR está en `propuesta`** (ADR 0017 de
+4. **El horario del respaldo de SICAR está en `propuesta`** (ADR 0017 de
    farmacia-data): lo decide el dueño. Si se acepta mover el respaldo a las
    ~20:15, **hay que mover el timer de la cadena a las 21:00 en el mismo
    movimiento**, o el colchón baja de hora y media a 15 minutos.
-4. **Falta probar `google-chrome --version` en atlas.** Si ese CPU de 2010 no
+5. **Falta probar `google-chrome --version` en atlas.** Si ese CPU de 2010 no
    lo aguanta, Doyle usa el Chromium de `apt` —que ya está medido— y la parte
    del ADR 0004 que dependía de Chrome queda cerrada.
-5. **Qué hay en VITRINA 1-3.** Entró a la lista blanca de "medicamento" a
+6. **Qué hay en VITRINA 1-3.** Entró a la lista blanca de "medicamento" a
    petición del dueño, pero nadie escribió qué se guarda ahí.
-6. **QuePharma casi seguro va a quedar fuera de la comparación**: usa código
+7. **QuePharma casi seguro va a quedar fuera de la comparación**: usa código
    interno y no está confirmado que encuentre por EAN. Hay dos pendientes
    viejos de Doyle que responden esto —probar el EAN en QuePharma, y confirmar
    VICMA por cantidad de resultados—, y ahora sí importan.
@@ -282,12 +319,12 @@ más barato y se le pidió a otro.**
    y mirar `resultados` y `clave_del_proveedor` de las cuatro filas que quedan
    en `pedidos.precio_de_proveedor`. Esa tabla guarda exactamente lo que hace
    falta para responder las dos preguntas sin volver a los portales.
-7. **El almacén de contraseñas de atlas baja una garantía.** Hoy no hay ninguna
+8. **El almacén de contraseñas de atlas baja una garantía.** Hoy no hay ninguna
    contraseña de proveedor en disco; después de la mudanza habrá cuatro,
    ofuscadas pero recuperables. Está aceptado con mitigación (permisos `700`,
    fuera de respaldos) en el ADR 0008 de Doyle. Si alguien saca una copia del
    disco, se cambian las cuatro contraseñas.
-8. **El día del corte se cierra a medias y ese pedacito se pierde.** El
+9. **El día del corte se cierra a medias y ese pedacito se pierde.** El
    respaldo de SICAR corta a las 18:51, así que el último día del almacén
    siempre está incompleto: lo que se venda después llega al día siguiente. El
    sugerido acumula desde el corte del último cerrado y **arranca al día

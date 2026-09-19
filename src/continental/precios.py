@@ -157,6 +157,65 @@ MOTIVOS: tuple[str, ...] = (
     PRECIO_ILEGIBLE,
 )
 
+# Cómo se le dice cada motivo al encargado.
+#
+# El ticket 15 pide que **cada precio faltante diga su motivo**, y lo pide con
+# estas palabras: *el producto no está en ese catálogo, el EAN dio varios
+# resultados, el portal no contestó, la sesión caducó*. Dos de los ocho ya se
+# llaman así con todas sus letras; los otros seis se llaman en corto porque lo
+# que se **guarda** tiene que ser corto, estable y contable —el `CHECK` del DDL
+# los repite y el conteo se hace sobre ellos—.
+#
+# Así que hay dos cadenas por motivo y no una, y cada una tiene su trabajo:
+#
+# - `MOTIVOS` es lo que se escribe en la tabla y lo que se cuenta. No cambia
+#   sin una migración.
+# - `EXPLICACION_DEL_MOTIVO` es lo que se lee en la pantalla. Se puede reescribir
+#   cuantas veces haga falta para que se entienda, sin tocar una sola fila.
+#
+# Un `.title()` o un diccionario a medias no sirven: "sin resultados" no se
+# convierte en "el producto no está en ese catálogo" con reglas de texto, y ese
+# salto es justo el que hace que un hueco se pueda atender.
+EXPLICACION_DEL_MOTIVO: dict[str, str] = {
+    SIN_RESULTADOS: "el producto no está en ese catálogo",
+    VARIOS_RESULTADOS: (
+        "el EAN dio varios resultados y ninguno se puede elegir sin adivinar"
+    ),
+    # Se parece al primero y **no es el mismo**: allá el portal no encontró
+    # nada; aquí encontró filas y ninguna es este producto. La diferencia
+    # importa porque la segunda es el final ordinario de QuePharma, que busca
+    # por código interno (ADR 0002), y confundirlas escondería que ese portal
+    # casi nunca empareja.
+    NO_EMPAREJA: (
+        "llegaron resultados y ninguno es este producto: no está en ese "
+        "catálogo con este EAN"
+    ),
+    PORTAL_SIN_CONTESTAR: "el portal no contestó; se vuelve a intentar",
+    SESION_CADUCADA: (
+        "la sesión de ese proveedor caducó: ábrela y vuelve a consultar"
+    ),
+    SIN_SELECTORES: "Doyle todavía no sabe leer esa página",
+    SIN_TIEMPO: "se acabó el tiempo con ese proveedor todavía buscando",
+    PRECIO_ILEGIBLE: (
+        "el precio llegó con un formato que no se puede leer sin adivinar"
+    ),
+}
+
+
+def explicacion_del_motivo(motivo: str | None) -> str | None:
+    """El motivo dicho para una persona, o el motivo mismo si no se conoce.
+
+    Nunca `None` cuando hay motivo, y nunca cadena vacía: un hueco que pierde su
+    explicación por no estar en el diccionario se queda con la corta, que dice
+    menos pero dice algo. Es la regla 4 de `CLAUDE.md` aplicada al propio mapa
+    de presentación —lo mismo que hace `nombre_del_proveedor` con un proveedor
+    que no reconoce—.
+    """
+    if motivo is None:
+        return None
+    return EXPLICACION_DEL_MOTIVO.get(motivo, motivo)
+
+
 #: Cómo se escribe el nombre de cada proveedor, para la pantalla. La clave es
 #: la de Doyle (`config/proveedores.yml` de ese repo) y el valor es el del
 #: glosario de `CONTEXT.md`.

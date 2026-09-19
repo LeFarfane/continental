@@ -87,6 +87,24 @@
   .nota { margin: 0 0 1rem; color: var(--tenue); font-size: .9rem; }
   .nota.mal { color: var(--mal); }
   .nota.aviso { color: var(--aviso); }
+  /* EL CONTEO DE LO QUE FALTA POR COMPARAR (ticket 15, cuarta casilla: *el
+     conteo es legible sin abrir cada renglón*). Va con recuadro y no como una
+     nota más porque no describe un renglón ni un problema del catálogo: dice
+     qué tan completa está la lista entera, que es lo que decide si la pregunta
+     "¿NADRO nos da el mejor precio?" vale algo hoy. Sin recuadro, a la tercera
+     pantalla se lee como el tercer párrafo gris de arriba y se deja de leer. */
+  .nota.conteo {
+    border: 1px solid var(--linea); border-left-width: 3px; border-radius: .4rem;
+    padding: .55rem .75rem; line-height: 1.45;
+  }
+  .nota.conteo.aviso { border-left-color: var(--aviso); }
+  /* Y cuando NO falta ninguno se dice igual, en verde. Callar dejaría el
+     silencio con dos significados —"ya está" y "esta pantalla no lo cuenta"—
+     y el encargado no puede distinguirlos. */
+  .nota.conteo.todo { border-left-color: var(--ok); color: var(--ok); }
+  .nota.conteo b { color: var(--tinta); font-variant-numeric: tabular-nums; }
+  .nota.conteo.todo b { color: inherit; }
+  .nota.conteo .desglose { display: block; margin-top: .25rem; font-size: .85rem; }
   /* El interruptor entre las dos vistas. Son radios de verdad y no botones:
      se recorren con las flechas del teclado, un lector de pantalla los anuncia
      como "1 de 2", y el navegador ya sabe que solo uno puede estar encendido.
@@ -180,6 +198,14 @@
   .precio.gana.sinconfirmar { border-left-color: var(--aviso); }
   .precio.gana.sinconfirmar b { color: var(--aviso); }
   .precio .marca-gana.sinconfirmar { color: var(--aviso); }
+  /* Y lo mismo cuando fue EL ÚNICO que dio precio (ticket 15), aunque haya
+     confirmado su existencia: el verde entero es la marca de "el más barato",
+     y con una sola cotización no hay contra qué serlo. Es una clase aparte y
+     no la de arriba porque son dos cosas distintas —una habla de la
+     existencia, la otra de la cobertura— y un renglón puede traer las dos. */
+  .precio.gana.unico { border-left-color: var(--aviso); }
+  .precio.gana.unico b { color: var(--aviso); }
+  .precio .marca-gana.unico { color: var(--aviso); }
   /* LO CARO. La diferencia por pieza contra el ganador, calculada en Python.
      Es lo que hace legible una fila de cuatro cifras sin restar de cabeza, y
      es lo que vuelve "caro" un aspecto y no una conjetura. */
@@ -222,6 +248,13 @@
      leería "da lo mismo a quién comprarle", que es lo contrario de lo que
      pasa. */
   .veredicto .ahorro.nose { color: var(--tenue); font-style: italic; }
+  /* CONTRA CUÁNTOS PROVEEDORES SE COMPARÓ ESTE RENGLÓN (ticket 15, primera
+     casilla, el número de renglón). Va arriba del ahorro porque es lo que
+     dice cuánto vale todo lo demás de la celda: "NADRO es el más barato" solo
+     significa algo si se sabe contra cuántos se midió. En ámbar cuando no hubo
+     comparación, que es cuando hay algo que saber. */
+  .veredicto .cobertura { display: block; font-size: .75rem; color: var(--tenue); }
+  .veredicto .cobertura.escasa { color: var(--aviso); }
   /* 2.2rem de alto mínimo: a 375 px esto se toca con el dedo, y un objetivo
      más chico se falla y se descarta el renglón de al lado. Que se pueda
      deshacer no vuelve gratis equivocarse. */
@@ -323,6 +356,10 @@
     <div class="vistas" id="vistas" role="radiogroup" aria-label="Qué se muestra en la lista" hidden></div>
     <p class="nota" id="pedido-nota" hidden></p>
     <p class="nota" id="pedido-sin-clasificar" hidden></p>
+    <!-- Cuántos renglones quedaron SIN COMPARAR (ticket 15). Va aquí arriba,
+         antes de la tabla, porque la casilla lo pide así: se tiene que ver de
+         un vistazo y sin abrir renglón por renglón. -->
+    <p class="nota" id="pedido-sin-comparar" hidden></p>
     <!-- Lo que salió mal al descartar o al devolver. Aparte de las otras dos
          notas porque es pasajero y de otra naturaleza: aquéllas describen la
          lista, ésta describe un clic que no llegó. -->
@@ -599,6 +636,27 @@ const veredicto = (comparacion) => {
   const caja = document.createElement('div');
   caja.className = 'veredicto';
 
+  // CONTRA CUÁNTOS PROVEEDORES SE COMPARÓ ESTE RENGLÓN. Es el segundo número
+  // de la primera casilla del ticket 15, y va **antes** que todo lo demás de
+  // la celda porque es lo que dice cuánto vale lo demás: "el más barato" con
+  // dos precios y con cuatro no son la misma afirmación, y sin este renglón
+  // las dos se ven idénticas.
+  //
+  // Los dos números son distintos a propósito —a cuántos se preguntó y
+  // cuántos contestaron con una cifra— porque se arreglan distinto: al que no
+  // contestó se le mira el motivo, al que no se le preguntó se le pregunta.
+  const cobertura = document.createElement('span');
+  cobertura.className = 'cobertura' + (comparacion.se_comparo ? '' : ' escasa');
+  cobertura.textContent = comparacion.se_comparo
+    ? 'Comparado contra ' + comparacion.con_precio + ' de '
+      + plural(comparacion.consultados, 'proveedor consultado', 'proveedores consultados') + '.'
+    : (comparacion.con_precio === 1
+        ? 'Un solo precio, de ' + plural(comparacion.consultados, 'proveedor consultado', 'proveedores consultados')
+          + ': no hay contra qué compararlo.'
+        : 'Se consultó a ' + plural(comparacion.consultados, 'proveedor', 'proveedores')
+          + ' y ninguno dio precio.');
+  caja.append(cobertura);
+
   // Cuando SÍ hay ganador, la marca ya está pegada a su proveedor allá arriba
   // —con su palabra— y repetirla aquí sería decir dos veces lo mismo en una
   // celda de 13 rem. Lo que aquí falta decir es por qué NO lo hay: sin ganador
@@ -613,7 +671,20 @@ const veredicto = (comparacion) => {
 
   const a = comparacion.ahorro;
   const ahorro = document.createElement('span');
-  if (a.hay && a.la_referencia_gana) {
+  // EL QUINTO CASO, y lo cazó el recorrido del navegador del ticket 15, no el
+  // suite: NADRO único proveedor con precio. La resta se puede hacer y da cero
+  // —comprarle a NADRO en vez de a NADRO no ahorra nada—, así que la frase de
+  // abajo se disparaba y escribía "NADRO ya es el más barato" **justo en el
+  // renglón donde el ticket prohíbe decirlo**. La marca de arriba ya decía "el
+  // único que contestó" y esta línea la contradecía tres renglones más abajo.
+  //
+  // Va primero porque es el caso más específico, y usa la misma bandera que la
+  // marca: `ganador.es_unico`, resuelta en `comparacion.py`.
+  if (a.hay && a.la_referencia_gana && comparacion.ganador.es_unico) {
+    ahorro.className = 'ahorro nose';
+    ahorro.textContent = comparacion.nombre_de_la_referencia
+      + ' fue el único que dio precio: no hay otro costo contra el que medirlo.';
+  } else if (a.hay && a.la_referencia_gana) {
     ahorro.className = 'ahorro';
     ahorro.textContent = comparacion.nombre_de_la_referencia
       + ' ya es el más barato: no hay nada que ahorrar.';
@@ -674,9 +745,13 @@ const celdaDePrecios = (r, acciones) => {
 
   casillas.forEach(c => {
     const linea = document.createElement('div');
+    // Dos avisos distintos y por eso dos clases: "nadie confirmó que lo tenga"
+    // y "fue el único que contestó". Pueden darse los dos a la vez, y el verde
+    // entero es solo para el ganador que no tiene ninguno de los dos.
     linea.className = 'precio'
       + (c.es_ganador ? ' gana' : '')
-      + (c.es_ganador && !comparacion.ganador.con_existencia ? ' sinconfirmar' : '');
+      + (c.es_ganador && !comparacion.ganador.con_existencia ? ' sinconfirmar' : '')
+      + (c.es_ganador && comparacion.ganador.es_unico ? ' unico' : '');
 
     const quien = document.createElement('span');
     quien.className = 'quien';
@@ -735,15 +810,20 @@ const celdaDePrecios = (r, acciones) => {
     // pantalla de mostrador con reflejo.
     if (c.es_ganador) {
       const marca = document.createElement('span');
-      marca.className = 'marca-gana';
-      // Y la palabra dice CUÁL de las dos marcas es. "El más barato con
-      // existencia" y "el más barato que nadie confirmó tener" son dos
-      // afirmaciones distintas: la primera la dijo un portal, la segunda no la
-      // dijo nadie. Pintarlas iguales sería inventar una confirmación.
-      marca.className = 'marca-gana' + (comparacion.ganador.con_existencia ? '' : ' sinconfirmar');
-      marca.textContent = comparacion.ganador.con_existencia
-        ? '✔ el más barato con existencia'
-        : '✔ el más barato, nadie confirmó existencia';
+      // LA FRASE VIENE HECHA DEL SERVIDOR (`ganador.certeza`), y eso es el
+      // ticket 15. Hasta el 14, este archivo elegía entre dos cadenas suyas
+      // mirando una bandera, y por eso un renglón con UNA sola lectura salía
+      // rotulado "el más barato con existencia": el superlativo afirma algo
+      // sobre otros tres precios que nadie vio, y la afirmación se escribía en
+      // el único archivo que ninguna prueba de Python mira. Ahora son cuatro
+      // frases —"el más barato con existencia", "el más barato, pero nadie
+      // confirmó existencia", "el único que contestó" y "el único que contestó,
+      // y no dijo si lo tiene"— y las cuatro se deciden en `comparacion.py`,
+      // con su tabla de casos.
+      marca.className = 'marca-gana'
+        + (comparacion.ganador.con_existencia ? '' : ' sinconfirmar')
+        + (comparacion.ganador.es_unico ? ' unico' : '');
+      marca.textContent = '✔ ' + (comparacion.ganador.certeza || '');
       linea.append(marca);
     }
 
@@ -755,7 +835,14 @@ const celdaDePrecios = (r, acciones) => {
     if (c.motivo) {
       const motivo = document.createElement('span');
       motivo.className = 'precio-motivo';
-      motivo.textContent = c.motivo;
+      // El motivo DICHO PARA UNA PERSONA (segunda casilla del ticket 15: *cada
+      // precio faltante dice su motivo: el producto no está en ese catálogo,
+      // el EAN dio varios resultados, el portal no contestó, la sesión
+      // caducó*). La cadena corta —"sin resultados"— es la que se guarda y la
+      // que se cuenta; la larga es la que se lee, y las dos viven en
+      // `precios.py`. Si el servidor no mandara la larga se escribe la corta:
+      // dice menos, pero dice algo.
+      motivo.textContent = c.motivo_explicado || c.motivo;
       const lectura = porClave.get(c.proveedor);
       if (lectura && lectura.detalle) motivo.title = lectura.detalle;
       td.append(motivo);
@@ -1185,6 +1272,12 @@ async function cargarPedido() {
   // sustituye un renglón dentro de ella.
   let vistaActiva = vistas ? elegirVista(vistas, vistaRecordada()) : null;
 
+  // Si se consultó algún precio después de que llegó el conteo de arriba. Ver
+  // `aplicarPrecios`: descartar y devolver traen el conteo recalculado, pero
+  // consultar un precio no, y esta bandera es lo que hace que la pantalla lo
+  // diga en vez de enseñar un número viejo como si fuera de ahora.
+  let conteoEnvejecido = false;
+
   // Descartar saca el renglón de la lista de trabajo y lo baja al bloque de
   // abajo. El reparto se hace por el ESTADO que trae cada renglón, que es el
   // del glosario y el de la columna: la pantalla no decide qué es descartado,
@@ -1224,6 +1317,10 @@ async function cargarPedido() {
       datos.renglones.filter(r => r.estado === DESCARTADO),
       datos.descartados,
       devolver);
+    // El conteo de huecos, arriba y en cada repintado: descartar, devolver y
+    // consultar un precio lo cambian, y un número que envejece en la pantalla
+    // se lee como verdad igual que uno al día.
+    pintarConteoDePrecios(datos.conteo_de_precios, conteoEnvejecido);
     tabla.hidden = false;
   };
 
@@ -1241,6 +1338,14 @@ async function cargarPedido() {
     if (i >= 0) datos.renglones[i] = respuesta.renglon;
     datos.descartados = respuesta.descartados;
     datos.tiene_renglones_sin_atender = respuesta.tiene_renglones_sin_atender;
+    // El conteo viene recalculado porque descartar y devolver lo mueven: el
+    // que se cuenta es el de los renglones DE TRABAJO. Va `null` cuando el
+    // servidor no pudo releer los precios, y entonces se conserva el anterior:
+    // viejo pero verdadero, en vez de estrenar uno inventado.
+    if (respuesta.conteo_de_precios) {
+      datos.conteo_de_precios = respuesta.conteo_de_precios;
+      conteoEnvejecido = false;
+    }
     repintar();
   };
 
@@ -1335,6 +1440,22 @@ async function cargarPedido() {
     // quién comprarle en dos lugares, y uno de los dos no tendría pruebas.
     r.comparacion = respuesta.comparacion || null;
     r.consulta = respuesta.consulta || null;
+    // CONSULTAR UN PRECIO CAMBIA EL CONTEO DE ARRIBA Y ESTA RESPUESTA NO LO
+    // TRAE: es de un renglón, y el conteo es de la lista.
+    //
+    // No se recuenta aquí —sería la regla de "qué es sin comparar" escrita por
+    // segunda vez, en el archivo sin pruebas— y **no se vuelve a pedir la
+    // lista**: la pantalla la pide UNA sola vez a propósito, y tres pruebas lo
+    // fijan (`test_vistas`, `test_sugerido`, `test_clasificacion`). Dos
+    // lecturas en momentos distintos pueden no coincidir y nadie sabría cuál
+    // tiene razón; ese acuerdo es más viejo que este ticket y no se rompe por
+    // un número.
+    //
+    // Lo que queda es decirlo: el conteo se marca como viejo y la pantalla
+    // escribe que lo es. Un número envejecido que se presenta como fresco es
+    // exactamente la falla silenciosa que la regla 4 de CLAUDE.md prohíbe — y
+    // envejece hacia el lado seguro, diciendo más huecos de los que quedan.
+    if (!r.consulta || !r.consulta.en_curso) conteoEnvejecido = true;
     repintar();
   };
 
@@ -1426,6 +1547,87 @@ const pintarRenglones = (visibles, total, otra, descartados, acciones) => {
       : '');
   document.getElementById('pedido-renglones').replaceChildren(
     ...visibles.map(r => renglon(r, acciones)));
+};
+
+// EL CONTEO DE LA LISTA (ticket 15): cuántos renglones quedaron sin comparar.
+//
+// Es la frase que define el ticket puesta en una línea: *que nadie lea la lista
+// como si estuviera completa*. Veinte renglones con su tabla de cuatro
+// proveedores se ven exactamente igual tengan cuatro precios o ninguno, y la
+// única forma de saberlo sin esto es abrirlos uno por uno — que es justo lo que
+// la cuarta casilla prohíbe.
+//
+// **Ningún número se calcula aquí.** Los seis llegan de `contar_la_lista`, que
+// es una función pura con su tabla de casos; este archivo los acomoda en una
+// frase. Contar renglones en el navegador habría puesto la regla de qué es
+// "sin comparar" —que no es obvia: consultado sin precios y no consultado son
+// dos cosas— en el único archivo que ninguna prueba de Python mira.
+//
+// El desglose va porque las tres se atienden distinto: la primera es un botón,
+// la segunda es mirar el motivo de cada hueco, y la tercera no se arregla —es
+// una advertencia sobre lo que ese precio puede decir de sí mismo—.
+const pintarConteoDePrecios = (conteo, envejecido) => {
+  const p = document.getElementById('pedido-sin-comparar');
+  // Un servidor viejo que no mande el conteo no escribe nada, en vez de
+  // escribir "undefined renglones sin comparar". Falla hacia no decir, nunca
+  // hacia decir un número inventado.
+  if (!conteo || !conteo.renglones) { p.hidden = true; p.textContent = ''; return; }
+
+  p.className = 'nota conteo ' + (conteo.hay_sin_comparar ? 'aviso' : 'todo');
+  p.replaceChildren();
+
+  // Lo que se consultó desde que llegó este conteo no está dentro de él, y se
+  // dice con todas sus letras. Va al final de la frase y no en lugar de ella:
+  // el número sigue siendo el último que el servidor calculó, y sigue siendo
+  // la cota alta de lo que falta.
+  const coletilla = envejecido
+    ? ' Se han consultado precios desde que se cargó la lista: este conteo es '
+      + 'de antes de eso. Recarga la página para ponerlo al día.'
+    : '';
+
+  if (!conteo.hay_sin_comparar) {
+    // El singular se escribe porque pasa: una lista donde se descartó todo
+    // menos un renglón. "los 1 renglones" se lee como un error de la pantalla,
+    // y una pantalla que parece rota se deja de creer justo donde este ticket
+    // necesita que se le crea.
+    p.append('Precios: ' + (conteo.renglones === 1
+      ? 'el único renglón de la lista se comparó'
+      : 'los ' + conteo.renglones + ' renglones de la lista se compararon')
+      + ' contra dos o más proveedores.' + coletilla);
+    p.hidden = false;
+    return;
+  }
+
+  const titular = document.createElement('b');
+  titular.textContent = conteo.sin_comparar + ' de ' + conteo.renglones
+    + (conteo.renglones === 1 ? ' renglón' : ' renglones') + ' sin comparar';
+  p.append(titular, ' — la lista NO está completa: ' + (conteo.comparados === 1
+    ? 'solo 1 tiene dos precios o más.'
+    : conteo.comparados + ' tienen dos precios o más.'));
+
+  // Las tres partes, y solo las que valen algo: un "0 sin consultar" en medio
+  // de la frase es ruido que hace más difícil leer las que sí importan.
+  const partes = [];
+  if (conteo.sin_consultar) {
+    partes.push(conteo.sin_consultar + ' sin consultar (nadie ha pedido su precio)');
+  }
+  if (conteo.sin_un_solo_precio) {
+    partes.push(conteo.sin_un_solo_precio + (conteo.sin_un_solo_precio === 1
+      ? ' se consultó y ningún proveedor dio precio'
+      : ' se consultaron y ningún proveedor dio precio') + ' (cada hueco dice su motivo)');
+  }
+  if (conteo.con_un_solo_precio) {
+    partes.push(conteo.con_un_solo_precio + (conteo.con_un_solo_precio === 1
+      ? ' tiene un solo precio' : ' tienen un solo precio')
+      + ': eso no es «el más barato», es el único que contestó');
+  }
+
+  const desglose = document.createElement('span');
+  desglose.className = 'desglose';
+  desglose.textContent = partes.join(' · ') + '.' + coletilla;
+  p.append(desglose);
+
+  p.hidden = false;
 };
 
 // Los descartados, aparte. El bloque se esconde entero cuando no hay ninguno:

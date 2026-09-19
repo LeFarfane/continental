@@ -12,6 +12,35 @@ reciente de cada uno— más las piezas que se van a pedir, y contesta tres cosa
 3. **cómo se ve cada uno de los cuatro**, para que la pantalla no tenga que
    deducir nada.
 
+Y desde el ticket 15, una cuarta que no es de un renglón sino de la lista:
+
+4. **cuántos renglones quedaron sin comparar, y por qué cada uno**
+   (`contar_la_lista`). Es lo que impide que alguien lea la lista como si
+   estuviera completa.
+
+## "El más barato" es un superlativo, y con un solo precio no se puede decir
+
+La casilla del ticket 15 que más cambia este módulo: *un renglón comparado
+contra un solo proveedor no se presenta como "el más barato": se presenta como
+"el único que contestó"*. Decir "el más barato" afirma algo sobre los otros
+tres —que se miraron y que costaban más— y con una sola lectura eso no se miró.
+
+Quién gana no cambia: sigue siendo el mismo proveedor, con el mismo precio y la
+misma existencia. Cambia **lo que se afirma de él**, y eso vive en la `certeza`
+del `Ganador`, que viaja como frase hecha hasta la pantalla. Hasta el ticket 14
+esa frase se elegía en el JavaScript entre dos literales suyos, y por eso un
+renglón con una sola lectura salía rotulado *"el más barato con existencia"*
+sin que ninguna prueba de Python se pusiera roja.
+
+## "Sin comparar" son tres cosas, no una
+
+Nadie lo consultó · se consultó y ninguno dio precio · hay un solo precio. Las
+tres son "sin comparar" —de ninguna salió una cifra puesta al lado de otra— y
+se cuentan por separado porque **el encargado las arregla distinto**: la
+primera con un botón, la segunda mirando el motivo de cada hueco, y la tercera
+no se arregla: es una advertencia sobre lo que ese precio puede decir de sí
+mismo.
+
 Vive aparte de la ruta y de la pantalla por la misma razón que `precios.py`: es
 la regla con la que se decide a quién comprarle, y una regla que vive dentro de
 un `if` de FastAPI o dentro del JavaScript solo se puede probar levantando un
@@ -97,12 +126,16 @@ de `precios.precio_a_numero`, se opera en `Decimal`, y al navegador sale como
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 
 from continental.almacenamiento import PrecioDeProveedor
-from continental.precios import NOMBRES_DE_PROVEEDOR, nombre_del_proveedor
+from continental.precios import (
+    NOMBRES_DE_PROVEEDOR,
+    explicacion_del_motivo,
+    nombre_del_proveedor,
+)
 
 # --------------------------------------------------------------- la referencia
 
@@ -160,6 +193,48 @@ GANADOR_CON_EXISTENCIA = "el más barato con existencia"
 #: palabras: nadie afirmó tenerlo.
 GANADOR_SIN_CONFIRMAR = "el más barato, pero nadie confirmó existencia"
 
+#: **Hubo un solo precio en todo el renglón.** Es la casilla del ticket 15 que
+#: el 14 dejó incumplida a propósito: *un renglón comparado contra un solo
+#: proveedor no se presenta como "el más barato": se presenta como "el único que
+#: contestó"*.
+#:
+#: No es una pega de redacción. "El más barato" es un **superlativo**, y un
+#: superlativo afirma algo sobre los otros tres: que se miraron y que costaban
+#: más. Con una sola lectura eso no se miró, así que la frase dice algo que
+#: nadie comprobó — y el encargado la lee como si hubiera visto cuatro precios
+#: cuando vio uno. El precio sigue a la vista y el proveedor sigue marcado: lo
+#: que cambia es lo que se afirma de él.
+GANADOR_UNICO = "el único que contestó"
+
+#: Lo mismo, y encima ese único no dijo cuántas piezas tiene. Son **dos**
+#: cosas que faltan y por eso es una certeza propia y no la anterior: colapsar
+#: las dos en "el único que contestó" callaría justo la advertencia ámbar en el
+#: caso peor informado de todos (regla 4 de `CLAUDE.md`, el hueco con su
+#: motivo).
+GANADOR_UNICO_SIN_CONFIRMAR = "el único que contestó, y no dijo si lo tiene"
+
+#: Las dos certezas de un solo precio. Existe para que `es_unico` no compare
+#: cadenas sueltas y para que una prueba pueda recorrerlas.
+CERTEZAS_DE_UN_SOLO_PRECIO: tuple[str, ...] = (
+    GANADOR_UNICO,
+    GANADOR_UNICO_SIN_CONFIRMAR,
+)
+
+#: Las dos certezas en las que un portal **confirmó** la existencia del ganador.
+#: Es otro eje que el de arriba y se cruzan: el ganador puede ser el único y
+#: haber confirmado, o ser uno de cuatro y no haberlo dicho.
+CERTEZAS_CON_EXISTENCIA: tuple[str, ...] = (
+    GANADOR_CON_EXISTENCIA,
+    GANADOR_UNICO,
+)
+
+#: Cuántos precios hacen falta para que haya **comparación**. Dos, porque
+#: comparar es poner uno al lado de otro: con un solo precio no hay contra qué
+#: medirlo. Es el número que parte la lista en "comparados" y "sin comparar", y
+#: vive aquí —con nombre— porque un `>= 2` suelto en cuatro sitios se cambia en
+#: tres.
+MINIMO_PARA_COMPARAR = 2
+
 
 # ------------------------------------------- por qué a veces no hay ganador
 
@@ -173,6 +248,43 @@ NADIE_DIO_PRECIO = "ninguno de los proveedores dio precio"
 #: renglón se ve entero, con sus precios, y sin ganador: comprarle a quien no lo
 #: tiene no es comprar.
 NINGUNO_LO_TIENE = "los que dieron precio no lo tienen"
+
+
+# ------------------------------------- por qué un renglón se quedó sin comparar
+#
+# Las tres maneras de no tener comparación, y son tres porque **el encargado
+# las arregla distinto**. Un solo número —"12 sin comparar"— diría cuánto falta
+# y nada de qué hacer; tres dicen a qué se parece ese hueco.
+#
+# Y las tres son "sin comparar" de verdad, no una gradación amable: de ninguna
+# de ellas salió una cifra puesta al lado de otra, que es lo único que este
+# módulo llama comparar.
+
+#: Nadie le preguntó el precio a este renglón. Es el más numeroso hoy —hasta el
+#: lote de la noche (ticket 18) el precio se pide renglón por renglón— y el más
+#: fácil de atender: es un botón.
+SIN_CONSULTAR_EL_RENGLON = "no se le ha consultado el precio"
+
+#: Se le preguntó y **ninguno** de los proveedores dio precio. No es lo mismo
+#: que el anterior ni de lejos: aquí ya se molestó a los portales y cada hueco
+#: trae su motivo, que es lo que dice si se puede hacer algo (la sesión caducada
+#: se abre, el portal caído se reintenta, "no está en ese catálogo" no).
+NINGUN_PRECIO = "se consultó y ninguno dio precio"
+
+#: Hay **un** precio y nada contra qué medirlo. Es el caso que el ticket nombra
+#: con todas sus letras: ese precio no es "el más barato", es el único que
+#: contestó. No hay nada que arreglar —el dato está— y aun así cuenta como sin
+#: comparar, porque una decisión de compra tomada sobre él se tomó sobre una
+#: sola cotización.
+UN_SOLO_PRECIO = "un solo proveedor dio precio"
+
+#: Los tres, en el orden en que se dicen en la pantalla: de "falta todo" a
+#: "falta el contraste".
+MOTIVOS_DE_SIN_COMPARAR: tuple[str, ...] = (
+    SIN_CONSULTAR_EL_RENGLON,
+    NINGUN_PRECIO,
+    UN_SOLO_PRECIO,
+)
 
 
 # --------------------------------------- por qué a veces no hay ahorro
@@ -212,9 +324,21 @@ class Ganador:
     ADR 0002 ya dice que la suite propone y la persona elige, que hay razones que
     el sistema no ve —mínimo de pedido, días de entrega, crédito—.
 
-    `certeza` dice **de qué tipo** es la marca: `GANADOR_CON_EXISTENCIA` cuando
-    el portal confirmó que lo tiene, `GANADOR_SIN_CONFIRMAR` cuando nadie lo
-    dijo. Son dos afirmaciones distintas y la pantalla las escribe distinto.
+    `certeza` dice **de qué tipo** es la marca, y son cuatro porque se cruzan
+    dos preguntas que no son la misma: *¿confirmó alguien la existencia?* y
+    *¿hubo con qué comparar?*
+
+    | | confirmó existencia | no la dijo |
+    |---|---|---|
+    | dos o más precios | `GANADOR_CON_EXISTENCIA` | `GANADOR_SIN_CONFIRMAR` |
+    | un solo precio | `GANADOR_UNICO` | `GANADOR_UNICO_SIN_CONFIRMAR` |
+
+    **La segunda fila es el ticket 15.** Un renglón con una sola lectura no
+    tiene "el más barato" porque no hay contra qué serlo, y la certeza lo dice
+    con las palabras del ticket: *el único que contestó*. La frase es un dato
+    puro y viaja hecha —la pantalla la escribe tal cual— para que la regla que
+    decide qué se afirma de un proveedor no viva en el único archivo que
+    ninguna prueba de Python mira.
 
     `motivo` solo viene cuando no hay ganador, y viene **siempre** que no lo hay:
     una fila sin marca y sin explicación se lee como un error de la pantalla.
@@ -232,8 +356,25 @@ class Ganador:
 
     @property
     def con_existencia(self) -> bool:
-        """Si la marca es la entera: *el más barato **con existencia***."""
-        return self.certeza == GANADOR_CON_EXISTENCIA
+        """Si un portal **confirmó** que el ganador lo tiene.
+
+        Es una de las dos preguntas de la tabla de arriba y solo ésa: un
+        ganador único que confirmó existencia la cumple, aunque no sea "el más
+        barato" de nada. Mezclar los dos ejes aquí obligaría a la pantalla a
+        deducir el otro comparando cadenas.
+        """
+        return self.certeza in CERTEZAS_CON_EXISTENCIA
+
+    @property
+    def es_unico(self) -> bool:
+        """Si fue **el único** que dio precio en todo el renglón.
+
+        La otra pregunta. Es lo que decide que la marca diga *el único que
+        contestó* en vez de *el más barato*, y lo que hace que la fila no se vea
+        verde entera: un solo precio no es una comparación, y una lista donde
+        todo sale en verde se lee como completa.
+        """
+        return self.certeza in CERTEZAS_DE_UN_SOLO_PRECIO
 
 
 @dataclass(frozen=True, slots=True)
@@ -344,6 +485,87 @@ class Comparacion:
         """Si a este renglón se le consultó el precio alguna vez."""
         return self.consultados > 0
 
+    @property
+    def se_comparo(self) -> bool:
+        """Si de este renglón salió una **comparación**: dos precios o más.
+
+        Es el corte del ticket 15, y no se mide con `consultados`: preguntarle
+        a cuatro portales y que los cuatro devuelvan hueco es haber consultado,
+        no haber comparado. Lo que hace comparado a un renglón es que haya dos
+        cifras que poner una al lado de otra.
+        """
+        return self.con_precio >= MINIMO_PARA_COMPARAR
+
+    @property
+    def por_que_no_se_comparo(self) -> str | None:
+        """Cuál de las tres situaciones de "sin comparar" es ésta, o `None`.
+
+        Tres y no una, porque **cada una se arregla distinto** y ésa es la
+        única razón por la que un conteo se desglosa:
+
+        - `SIN_CONSULTAR_EL_RENGLON` — nadie preguntó. Se arregla apretando el
+          botón, o dejándoselo al lote de la noche (ticket 18).
+        - `NINGUN_PRECIO` — se preguntó y ninguno de los cuatro dio precio. Se
+          arregla —o no— según el motivo de cada hueco: la sesión caducada son
+          dos clics, el portal caído es reintentar, y "no está en ese catálogo"
+          no lo arregla nadie.
+        - `UN_SOLO_PRECIO` — hay precio, pero no hay comparación. **No es un
+          hueco que arreglar**: es una advertencia sobre lo que ese precio puede
+          afirmar de sí mismo.
+        """
+        if self.se_comparo:
+            return None
+        if self.consultados == 0:
+            return SIN_CONSULTAR_EL_RENGLON
+        return NINGUN_PRECIO if self.con_precio == 0 else UN_SOLO_PRECIO
+
+
+@dataclass(frozen=True, slots=True)
+class ConteoDeLaLista:
+    """Cuántos renglones de la lista se compararon de verdad, y cuántos no.
+
+    Es la primera casilla del ticket 15 —*se ve cuántos renglones quedaron sin
+    comparar*— y el número que impide que alguien lea la lista como si
+    estuviera completa. El otro número que pide esa casilla —*contra cuántos
+    proveedores se comparó cada uno*— es de renglón y ya viaja en
+    `Comparacion.consultados` y `Comparacion.con_precio`: son dos preguntas
+    distintas y por eso son dos números en dos sitios distintos de la pantalla.
+
+    **El desglose no es adorno.** `sin_comparar` es uno solo para el vistazo de
+    arriba, pero se atiende de tres maneras que no se parecen —ver
+    `MOTIVOS_DE_SIN_COMPARAR`—, y un total sin desglose manda al encargado a
+    mirar renglón por renglón para saber cuál de las tres le tocó. Los tres
+    suman exactamente `sin_comparar` y hay una prueba que lo fija: un conteo que
+    no cuadra consigo mismo es peor que no tenerlo.
+
+    **Se cuenta sobre los renglones de trabajo**, no sobre la lista entera. El
+    porqué está en `contar_la_lista`.
+    """
+
+    renglones: int = 0
+    comparados: int = 0
+    sin_consultar: int = 0
+    sin_un_solo_precio: int = 0
+    con_un_solo_precio: int = 0
+
+    @property
+    def sin_comparar(self) -> int:
+        """Los que no tienen dos precios que poner uno al lado de otro.
+
+        Se deriva de los tres y no se guarda aparte: dos números que tienen que
+        coincidir y se calculan por separado dejan de coincidir el día que
+        alguien agregue un cuarto caso y se olvide de sumarlo.
+        """
+        return self.sin_consultar + self.sin_un_solo_precio + self.con_un_solo_precio
+
+    @property
+    def hay_sin_comparar(self) -> bool:
+        """Si queda algo sin comparar. Es lo que decide si se avisa o se
+        confirma, y las dos frases se escriben: **callar cuando está todo
+        comparado dejaría el silencio con dos significados** —"ya está" y "esta
+        pantalla no lo cuenta"— y el encargado no puede distinguirlos."""
+        return self.sin_comparar > 0
+
 
 # ------------------------------------------------------------- las funciones
 
@@ -383,9 +605,18 @@ def elegir_ganador(lecturas: Sequence[PrecioDeProveedor]) -> Ganador:
 
     La tercera fila es la que importa: **un precio más bajo sin existencia
     confirmada no le gana a uno más alto que sí la confirmó.** Es literal la
-    segunda casilla del ticket —*el más barato con existencia*— y la cuarta —*el
-    más barato no sirve si no lo tiene*—. El proveedor descartado no desaparece:
-    sigue en la fila con su precio, y la persona puede llamarle si quiere.
+    segunda casilla del ticket 14 —*el más barato con existencia*— y la cuarta
+    —*el más barato no sirve si no lo tiene*—. El proveedor descartado no
+    desaparece: sigue en la fila con su precio, y la persona puede llamarle si
+    quiere.
+
+    **Y encima de todo eso va el ticket 15**: si el precio fue **uno solo**, el
+    que gana no se presenta como "el más barato" sino como *el único que
+    contestó*. Quién gana no cambia —sigue siendo el mismo proveedor, con el
+    mismo precio y la misma existencia—; cambia lo que se **afirma** de él. La
+    elección y la frase salen de la misma función a propósito: separarlas
+    dejaría la frase en la ruta o en el JavaScript, que es donde nadie la
+    prueba.
     """
     if not lecturas:
         return Ganador(motivo=NADIE_CONSULTO)
@@ -402,10 +633,23 @@ def elegir_ganador(lecturas: Sequence[PrecioDeProveedor]) -> Ganador:
         return Ganador(motivo=NINGUNO_LO_TIENE)
 
     barato = min(l.precio for l in elegibles)
+
+    # Las dos preguntas, por separado, y después la certeza que les corresponde.
+    # `unico` se mide sobre **todas** las lecturas con precio y no sobre las
+    # elegibles: un renglón donde NADRO dio precio con cero piezas y LEVIC dio
+    # precio con cuarenta SÍ se comparó —se vieron dos precios—, aunque solo uno
+    # pudiera ganar. Medirlo sobre las elegibles diría "el único que contestó"
+    # sobre un renglón con dos cifras a la vista, y eso se lee como un error de
+    # la pantalla.
+    if len(con_precio) < MINIMO_PARA_COMPARAR:
+        certeza = GANADOR_UNICO if confirmados else GANADOR_UNICO_SIN_CONFIRMAR
+    else:
+        certeza = GANADOR_CON_EXISTENCIA if confirmados else GANADOR_SIN_CONFIRMAR
+
     return Ganador(
         proveedores=tuple(sorted(l.proveedor for l in elegibles if l.precio == barato)),
         precio=barato,
-        certeza=GANADOR_CON_EXISTENCIA if confirmados else GANADOR_SIN_CONFIRMAR,
+        certeza=certeza,
     )
 
 
@@ -537,6 +781,74 @@ def comparar(
     )
 
 
+def contar_la_lista(comparaciones: Iterable[Comparacion]) -> ConteoDeLaLista:
+    """Las comparaciones de una lista → cuántas lo son de verdad y cuántas no.
+
+    ## Dónde vive este conteo, y por qué aquí
+
+    Había tres sitios posibles y el repositorio ya usa dos de ellos:
+
+    1. **Una propiedad de `PedidoSugeridoGuardado`**, como `sin_catalogo`,
+       `sin_clasificar` y `descartados`. Esas tres se calculan sobre los
+       renglones que el propio dato ya trae dentro; ésta no puede, porque
+       depende de `precios_de_la_lista`, que es **otra lectura**. Ponerla ahí
+       obligaría a una de dos cosas malas: meter los precios dentro del objeto
+       que representa "la lista tal como se guardó" —que no los tiene, y que se
+       arma en `armar_guardado` con cabecera y filas— o dejar que una propiedad
+       abra una conexión. Lo segundo es peor: una propiedad que consulta es una
+       consulta que nadie ve al leer el código que la usa.
+    2. **Armarlo en la ruta.** Es donde los dos datos se encuentran, pero
+       entonces la regla de qué cuenta como "sin comparar" viviría dentro de un
+       `if` de FastAPI y solo se podría probar levantando la aplicación. Es
+       exactamente lo que `comparacion.py` existe para no hacer.
+    3. **Una función pura aquí**, junto a `comparar`. La ruta trae las dos
+       lecturas —ya las hace las dos— y las junta; la regla se prueba con una
+       tabla de casos y sin `TestClient`.
+
+    Se eligió la 3, y la consecuencia de elegirla está a la vista: la ruta tiene
+    que pasarle las comparaciones, que es una línea, y a cambio el corte de "dos
+    precios o más" se puede cambiar en un solo sitio probado.
+
+    ## Qué entra al conteo
+
+    **Los renglones de trabajo, no todos.** Un renglón descartado ya se
+    atendió: alguien lo miró y decidió no pedirlo, así que no falta comparar
+    nada de él. Contarlo mandaría al encargado a conseguir precios de mercancía
+    que nadie va a comprar, y —peor— el número seguiría subiendo justo mientras
+    la lista se va resolviendo.
+
+    Se aparta a propósito de `sin_clasificar`, que **sí** se cuenta sobre la
+    lista entera: esa pregunta es sobre el catálogo de SICAR ("¿vale la pena
+    ponerles anaquel?") y no cambia porque alguien descarte un renglón hoy.
+    Ésta es sobre la compra que se está por decidir.
+
+    Quién es "de trabajo" lo decide `PedidoSugeridoGuardado.de_trabajo`, que ya
+    es la regla probada: aquí solo se cuenta lo que llega.
+    """
+    conteo = {
+        SIN_CONSULTAR_EL_RENGLON: 0,
+        NINGUN_PRECIO: 0,
+        UN_SOLO_PRECIO: 0,
+    }
+    renglones = 0
+    comparados = 0
+    for comparacion in comparaciones:
+        renglones += 1
+        porque = comparacion.por_que_no_se_comparo
+        if porque is None:
+            comparados += 1
+        else:
+            conteo[porque] += 1
+
+    return ConteoDeLaLista(
+        renglones=renglones,
+        comparados=comparados,
+        sin_consultar=conteo[SIN_CONSULTAR_EL_RENGLON],
+        sin_un_solo_precio=conteo[NINGUN_PRECIO],
+        con_un_solo_precio=conteo[UN_SOLO_PRECIO],
+    )
+
+
 def _cadena(valor: Decimal | None) -> str | None:
     """Un `Decimal` al navegador: **cadena** o `None`, jamás un número de JSON.
 
@@ -559,8 +871,18 @@ def comparacion_como_json(comparacion: Comparacion) -> dict:
     """
     return {
         "hay_lecturas": comparacion.hay_lecturas,
+        # Los dos números por renglón de la primera casilla del ticket 15:
+        # a cuántos se les preguntó y cuántos contestaron con una cifra. Van
+        # los dos porque son dos hechos —"se preguntó a cuatro y contestaron
+        # dos" no es "se preguntó a dos"— y porque se arreglan distinto.
         "consultados": comparacion.consultados,
         "con_precio": comparacion.con_precio,
+        # Si de este renglón salió una comparación de verdad, y cuál de las
+        # tres situaciones es si no. Resueltos aquí y no en el JavaScript con
+        # un `>= 2`: es el corte que decide qué se le puede llamar "el más
+        # barato", y vive en un solo sitio probado.
+        "se_comparo": comparacion.se_comparo,
+        "por_que_no_se_comparo": comparacion.por_que_no_se_comparo,
         "leido_en": (
             None if comparacion.leido_en is None else comparacion.leido_en.isoformat()
         ),
@@ -573,8 +895,19 @@ def comparacion_como_json(comparacion: Comparacion) -> dict:
                 nombre_del_proveedor(p) for p in comparacion.ganador.proveedores
             ],
             "precio": _cadena(comparacion.ganador.precio),
+            # La frase de la marca viaja **hecha**, y la pantalla la escribe
+            # tal cual. Hasta el ticket 14 el JavaScript elegía entre dos
+            # cadenas suyas mirando `con_existencia`, y por eso un renglón con
+            # una sola lectura salía rotulado "el más barato con existencia":
+            # la afirmación que el ticket 15 prohíbe vivía en el único archivo
+            # que ninguna prueba de Python mira.
             "certeza": comparacion.ganador.certeza,
             "con_existencia": comparacion.ganador.con_existencia,
+            # Los dos ejes van por separado —confirmó existencia, y fue el
+            # único— porque la pantalla necesita los dos para decidir el color:
+            # el verde entero es solo para el más barato de varios que además
+            # confirmó tenerlo.
+            "es_unico": comparacion.ganador.es_unico,
             "motivo": comparacion.ganador.motivo,
         },
         "ahorro": {
@@ -614,8 +947,38 @@ def comparacion_como_json(comparacion: Comparacion) -> dict:
                 ),
                 "mas_barato_que_el_ganador": c.mas_barato_que_el_ganador,
                 "existencia_como_llego": c.existencia_como_llego,
+                # El motivo corto —el que se guarda y el que se cuenta— y el
+                # mismo motivo dicho para una persona. Los dos viajan: la
+                # pantalla escribe el largo, que es lo que pide la segunda
+                # casilla del ticket 15, y el corto sigue siendo lo que
+                # identifica el hueco en la tabla y en la bitácora.
                 "motivo": c.motivo,
+                "motivo_explicado": explicacion_del_motivo(c.motivo),
             }
             for c in comparacion.por_proveedor
         ],
+    }
+
+
+def conteo_como_json(conteo: ConteoDeLaLista) -> dict:
+    """El conteo de la lista como la pantalla lo lee, con las tres sumas aparte.
+
+    Viaja el total y el desglose, no uno de los dos: el total es lo que se lee
+    de un vistazo —la cuarta casilla del ticket, *el conteo es legible sin abrir
+    cada renglón*— y el desglose es lo que dice qué hacer con él.
+
+    `hay_sin_comparar` viaja resuelto para que el JavaScript no pregunte por un
+    `> 0`: es la misma razón de siempre, y aquí además decide **cuál de las dos
+    frases** se escribe. Las dos se escriben, la de aviso y la de confirmación:
+    no decir nada cuando está todo comparado dejaría el silencio con dos
+    significados.
+    """
+    return {
+        "renglones": conteo.renglones,
+        "comparados": conteo.comparados,
+        "sin_comparar": conteo.sin_comparar,
+        "hay_sin_comparar": conteo.hay_sin_comparar,
+        "sin_consultar": conteo.sin_consultar,
+        "sin_un_solo_precio": conteo.sin_un_solo_precio,
+        "con_un_solo_precio": conteo.con_un_solo_precio,
     }

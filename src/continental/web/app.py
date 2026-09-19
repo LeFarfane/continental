@@ -33,7 +33,12 @@ from continental.almacenamiento import (
     ventana_de_reposicion,
 )
 from continental.clasificacion import reglas_configuradas
-from continental.comparacion import comparacion_como_json, comparar
+from continental.comparacion import (
+    comparacion_como_json,
+    comparar,
+    contar_la_lista,
+    conteo_como_json,
+)
 from continental.config import cargar
 from continental.consultas import (
     RegistroDeConsultas,
@@ -823,6 +828,30 @@ def _precios_del_renglon(almacenamiento, negocio: str, renglon_id: int):
         return ()
 
 
+def _precios_de_la_lista(almacenamiento, negocio: str, pedido_sugerido_id: int):
+    """Lo congelado de **toda** la lista, o `None` si el almacenamiento no contestó.
+
+    `None` y no `{}`, y la diferencia importa: un diccionario vacío quiere decir
+    "ningún renglón tiene precio", que es un dato de verdad y el que hace decir
+    al conteo *los 18 están sin comparar*. Una lectura que falló no dice eso
+    —no dice nada— y afirmarlo sería inventarse un número, que es exactamente
+    la falla silenciosa que la regla 4 de `CLAUDE.md` prohíbe. Quien recibe el
+    `None` omite el conteo y la pantalla se queda con el que ya tenía.
+
+    Una sola consulta para la lista entera, por lo mismo que en la carga: una
+    por renglón leería en momentos distintos y la tabla podría dejar de
+    coincidir consigo misma mientras alguien la trabaja.
+    """
+    try:
+        return almacenamiento.precios_de_la_lista(negocio, pedido_sugerido_id)
+    except Exception:  # noqa: BLE001 — leer precios caído no puede tumbar la pantalla
+        log.exception(
+            "No se pudieron leer los precios congelados de la lista %s",
+            pedido_sugerido_id,
+        )
+        return None
+
+
 def _consulta_como_json(
     consulta, nueva: bool, precios, cantidad: int | None = None
 ) -> dict:
@@ -923,11 +952,20 @@ def _mover_el_renglon(
         return JSONResponse(status_code=409, content={"ok": False, "detalle": choque})
 
     movido = next(r for r in guardado.renglones if r.renglon_id == renglon_id)
-    precios = (
-        ()
+    # Una sola lectura para las dos cosas: los precios del renglón que se movió
+    # —para que la pantalla no borre de la vista precios que siguen guardados—
+    # y los de la lista entera, que son los que vuelven a contar cuántos
+    # renglones quedaron sin comparar. Descartar y devolver **cambian ese
+    # número**: sacan y meten renglones de la lista de trabajo, que es sobre la
+    # que se cuenta. Antes del ticket 15 aquí se leía un solo renglón; leer la
+    # lista cuesta la misma consulta y deja el número de arriba al día, en vez
+    # de un conteo que envejece con cada clic.
+    por_renglon = (
+        None
         if almacenamiento is None
-        else _precios_del_renglon(almacenamiento, negocio, renglon_id)
+        else _precios_de_la_lista(almacenamiento, negocio, guardado.pedido_sugerido_id)
     )
+    precios = () if por_renglon is None else por_renglon.get(renglon_id, ())
     log.info(
         "%s acaba de %s %s (%s) de la lista %s.%s Van %d descartado(s) de %d "
         "renglones.",
@@ -951,6 +989,19 @@ def _mover_el_renglon(
         "descartados": guardado.descartados,
         "de_trabajo": len(guardado.de_trabajo),
         "tiene_renglones_sin_atender": guardado.tiene_renglones_sin_atender,
+        # El conteo de huecos, recalculado. Va `null` cuando no se pudieron
+        # leer los precios: la pantalla se queda entonces con el que tenía, que
+        # es viejo pero verdadero, en vez de estrenar uno inventado.
+        "conteo_de_precios": (
+            None
+            if por_renglon is None
+            else conteo_como_json(
+                contar_la_lista(
+                    comparar(por_renglon.get(r.renglon_id, ()), r.cantidad_a_pedir)
+                    for r in guardado.de_trabajo
+                )
+            )
+        ),
     }
 
 
@@ -1016,7 +1067,18 @@ def _como_json(guardado: PedidoSugeridoGuardado, precios: dict | None = None) ->
     navegador los leería como hora local y el contenedor corre en UTC: seis
     horas de diferencia, que es la misma trampa que ya costó 11.7 puntos de
     crecimiento inventados, solo que del lado del cliente.
+
+    **La comparación de cada renglón se calcula UNA vez aquí** y se usa dos: la
+    pinta el renglón y la cuenta el conteo de arriba. Hacerla dos veces sería
+    barato —son cuatro restas— y aun así está mal: el número de arriba tiene que
+    salir exactamente de la misma `Comparacion` que la fila enseña, o el día que
+    una de las dos llamadas cambie de argumentos la pantalla y su resumen dirán
+    cosas distintas sobre el mismo renglón.
     """
+    comparaciones = {
+        r.renglon_id: comparar((precios or {}).get(r.renglon_id, ()), r.cantidad_a_pedir)
+        for r in guardado.renglones
+    }
     return {
         "ok": True,
         "pedido_sugerido_id": guardado.pedido_sugerido_id,
@@ -1037,7 +1099,11 @@ def _como_json(guardado: PedidoSugeridoGuardado, precios: dict | None = None) ->
         # criterio por el que el interruptor de vistas filtra en el navegador
         # (`vistas.py`).
         "renglones": [
-            _renglon_como_json(r, (precios or {}).get(r.renglon_id, ()))
+            _renglon_como_json(
+                r,
+                (precios or {}).get(r.renglon_id, ()),
+                comparaciones.get(r.renglon_id),
+            )
             for r in guardado.renglones
         ],
         # Los dos conteos se calculan en Python —donde hay pruebas— y no en el
@@ -1050,11 +1116,22 @@ def _como_json(guardado: PedidoSugeridoGuardado, precios: dict | None = None) ->
         # vale la pena ir a ponerles anaquel en SICAR. El porqué está en
         # `PedidoSugerido.sin_clasificar`.
         "sin_clasificar": guardado.sin_clasificar,
+        # CUÁNTOS RENGLONES QUEDARON SIN COMPARAR (ticket 15), y por qué cada
+        # uno. Es lo que impide que la lista se lea como si estuviera completa:
+        # sin este número, veinte renglones con su tabla de cuatro proveedores
+        # se ven igual tengan cuatro precios o ninguno, y la única manera de
+        # saberlo es abrirlos uno por uno.
+        #
+        # Sobre los **de trabajo** y no sobre la lista entera: un descartado ya
+        # se atendió. El porqué entero está en `comparacion.contar_la_lista`.
+        "conteo_de_precios": conteo_como_json(
+            contar_la_lista(comparaciones[r.renglon_id] for r in guardado.de_trabajo)
+        ),
         "vistas": _vistas(),
     }
 
 
-def _renglon_como_json(renglon, precios=()) -> dict:
+def _renglon_como_json(renglon, precios=(), comparacion=None) -> dict:
     """Un renglón guardado, como la pantalla lo lee.
 
     `precios` son las lecturas congeladas de ese renglón, una por proveedor que
@@ -1126,8 +1203,15 @@ def _renglon_como_json(renglon, precios=()) -> dict:
         # sistema—, que es la misma cifra que se pinta en la columna de
         # cantidad y la que el ticket 20 va a copiar al pedido. La regla vive en
         # `RenglonGuardado.cantidad_a_pedir` y aquí solo se usa.
+        #
+        # `comparacion` puede venir ya hecha —la lista la calcula una vez para
+        # todos sus renglones, porque el conteo de arriba tiene que salir de la
+        # misma—. Cuando no viene, se hace aquí: las rutas que devuelven **un**
+        # renglón no tienen ni necesitan la lista entera.
         "comparacion": comparacion_como_json(
             comparar(precios, renglon.cantidad_a_pedir)
+            if comparacion is None
+            else comparacion
         ),
     }
 
