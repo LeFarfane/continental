@@ -16,19 +16,22 @@ ninguna prueba de comportamiento ve:
    importa nadie.
 2. **Un final de línea de Windows en algo que corre en Linux.** Se edita en la
    torre (`core.autocrlf=true`) y corre en atlas. Un `.sh` con CRLF muere en
-   bash con `$'\r': command not found`, y una unidad de systemd con CRLF no
-   carga. `.gitattributes` ya fija `eol=lf` para `.sh`, `.service` y `.timer`;
-   esto es el cinturón que comprueba la copia que de verdad está en disco, que
-   es la que se va a ejecutar.
+   bash con `$'\r': command not found`, una unidad de systemd con CRLF no
+   carga, y un `.sql` con CRLF se lleva el retorno de carro **dentro de las
+   cadenas** —el CHECK de `pedidos.renglon.estado` guardaría `'en tránsito\r'`
+   y el primer `UPDATE` de Continental rebotaría—. `.gitattributes` ya fija
+   `eol=lf` para `.sh`, `.service`, `.timer` y `.sql`; esto es el cinturón que
+   comprueba la copia que de verdad está en disco, que es la que se va a
+   ejecutar.
 
 **Hoy Continental no tiene ni un `.sh` ni una unidad de systemd**: medido el
-2026-09-18, `scripts/desplegar.sh` y `continental-web.service` siguen en la
-lista de "lo que todavía no existe" de `HANDOVER.md`. Por eso los casos de CRLF
-y de shebang se anuncian como **saltados con su motivo** en vez de pasar
-callados: un cero que nadie ve es indistinguible de una prueba que no revisa
-nada. Y para que el detector no llegue sin estrenar el día que los archivos
-aparezcan, `test_los_detectores_cazan_lo_que_deben` lo ejercita hoy contra
-bytes inventados.
+2026-09-19, `scripts/desplegar.sh` y `continental-web.service` siguen en la
+lista de "lo que todavía no existe" de `HANDOVER.md`. Por eso el caso del
+shebang se anuncia como **saltado con su motivo** en vez de pasar callado: un
+cero que nadie ve es indistinguible de una prueba que no revisa nada. Y para
+que el detector no llegue sin estrenar el día que los archivos aparezcan,
+`test_los_detectores_cazan_lo_que_deben` lo ejercita hoy contra bytes
+inventados.
 
 Esto no reemplaza probar el comportamiento; solo cierra el hueco entre "las
 pruebas pasan" y "el proceso al menos levanta".
@@ -73,13 +76,23 @@ CARPETAS_QUE_NO_SE_MIRAN = {".venv", ".git", "__pycache__", "node_modules", ".py
 # Lo que se despliega en atlas y tiene que ir con LF. Es la misma lista de
 # `.gitattributes`, a propósito: si una cambia sin la otra, el repo dice una
 # cosa y el disco otra.
-EXTENSIONES_PARA_ATLAS = (".sh", ".service", ".timer")
+#
+# `.sql` entró el 2026-09-19 con `sql/crear_tablas.sql` (ticket 07). El daño de
+# un CRLF ahí es distinto al de un `.sh` y por eso vale la pena nombrarlo:
+# psql tolera el retorno de carro entre sentencias, pero **no lo quita de
+# dentro de una cadena**. El CHECK de `pedidos.renglon.estado` guardaría
+# `'en tránsito\r'`, y el primer `UPDATE ... SET estado = 'en tránsito'` de
+# Continental rebotaría con una violación de restricción que nadie sabría
+# explicar mirando el código.
+EXTENSIONES_PARA_ATLAS = (".sh", ".service", ".timer", ".sql")
 
 MOTIVO_SIN_ARCHIVOS = (
-    "Todavía no existe ningún .sh, .service ni .timer en el repo (medido el "
-    "2026-09-18). HANDOVER.md los tiene pendientes: scripts/desplegar.sh y "
-    "continental-web.service. El día que se agreguen, estos casos dejan de "
-    "saltarse solos y empiezan a revisarlos."
+    "Todavía no existe ningún archivo de esta clase en el repo. Los .sql sí "
+    "existen desde el 2026-09-19 (sql/crear_tablas.sql y compañía, ticket "
+    "07); los que siguen pendientes son scripts/desplegar.sh y "
+    "continental-web.service, que HANDOVER.md tiene en su lista. El día que "
+    "se agreguen, estos casos dejan de saltarse solos y empiezan a "
+    "revisarlos."
 )
 
 
@@ -124,12 +137,13 @@ def _caminar_el_repo() -> Iterator[tuple[Path, list[str]]]:
 
 
 def _archivos_para_atlas() -> list[Path]:
-    """Los `.sh`, `.service` y `.timer` de todo el repo, vengan de donde vengan.
+    """Los `.sh`, `.service`, `.timer` y `.sql` de todo el repo, vengan de donde
+    vengan.
 
-    Se busca en el repo entero y no solo en `scripts/` porque la carpeta
-    todavía no existe y nadie ha decidido dónde va a vivir cada unidad de
-    systemd. Marlowe las tiene en `scripts/systemd/`; si aquí alguien las pone
-    en otro lado, la prueba las encuentra igual.
+    Se busca en el repo entero y no solo en `scripts/` o en `sql/` porque la
+    primera carpeta todavía no existe y nadie ha decidido dónde va a vivir cada
+    unidad de systemd. Marlowe las tiene en `scripts/systemd/`; si aquí alguien
+    las pone en otro lado, la prueba las encuentra igual.
     """
     return sorted(
         carpeta / nombre

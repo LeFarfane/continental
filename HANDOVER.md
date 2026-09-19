@@ -24,7 +24,7 @@ contestan. Nada más.
 
 ```bash
 python iniciar.py     # http://127.0.0.1:8585
-pytest                # 4 pruebas
+pytest                # 98 pruebas y 1 saltada, ~0.5 s (2026-09-19)
 ```
 
 | Archivo | Qué es |
@@ -33,6 +33,8 @@ pytest                # 4 pruebas
 | `CLAUDE.md` | las reglas no negociables y las trampas heredadas |
 | `docs/decisiones/0001` | la suite como cáscara con módulos por HTTP |
 | `docs/decisiones/0002` | el módulo de Pedido: reposición 1 a 1, EAN, recepción sugerida |
+| `docs/decisiones/0003` | dónde viven las tablas del pedido y por qué el rol no puede crearlas |
+| `sql/` | el DDL de las tres tablas, el rol acotado y el verificador. **Se corren a mano, en ese orden, con credenciales de dueño** |
 | `config/continental.yml` | puertos de los módulos y los parámetros del pedido |
 | `src/continental/web/app.py` | `/api/salud`, `/api/modulos`, la portada |
 
@@ -66,7 +68,35 @@ más barato y se le pidió a otro.**
   `pull`, compila, pruebas, y **solo entonces** reinicia. Marlowe aprendió el
   2026-09-08 por qué: se desplegó un `app.py` que no compilaba y el servicio
   quedó en bucle mientras el dueño trabajaba contra un servidor que no existía.
-- El rol `continental` en Postgres y sus tablas (`sql/crear_rol.sql`).
+- **El rol `continental` y sus tablas, CREADOS EN LA BASE.** El SQL ya está
+  escrito (ticket 07): `sql/crear_tablas.sql`, `sql/crear_rol.sql` y
+  `sql/verificar_rol.sql`, con su cabecera explicando el porqué de cada
+  decisión. **Nadie lo ha corrido todavía**: el almacén vive en Docker en
+  atlas y desde la torre no hay Postgres alcanzable (verificado el
+  2026-09-19). Los tres pasos, en orden, con credenciales de dueño y desde
+  `~/proyectos/Farmacia/Continental` en atlas:
+
+  ```bash
+  docker exec -i farmacia_warehouse psql -U farmacia -d farmacia \
+      -v ON_ERROR_STOP=1 < sql/crear_tablas.sql
+  docker exec -i farmacia_warehouse psql -U farmacia -d farmacia \
+      -v ON_ERROR_STOP=1 -v password="'LA_DEL_.ENV'" < sql/crear_rol.sql
+  docker exec -i farmacia_warehouse psql -U farmacia -d farmacia \
+      -v ON_ERROR_STOP=1 < sql/verificar_rol.sql ; echo "salida: $?"
+  ```
+
+  El tercero es el que **da el veredicto**: 17 comprobaciones con lo que se
+  esperaba y lo que se encontró, y salida distinta de cero si algo quedó mal.
+  Es lo que cierra la última casilla del ticket 07, y solo lo puede correr una
+  persona con credenciales de dueño en atlas.
+
+- **Del lado de farmacia-data, y sin esto lo anterior se borra solo:** agregar
+  `'continental'` al `grants` de `dim_fecha.sql`, `dim_producto.sql`,
+  `fct_ventas.sql` y `fct_compras.sql`, y **agregarle un `grants` entero a
+  `dim_proveedor.sql`, que hoy no tiene ninguno**. Recrear una tabla en
+  Postgres borra sus permisos y cada `dbt build` recrea los modelos de
+  `marts`: un GRANT dado a mano dura hasta las 20:30 de ese día. Marlowe lo
+  midió el 2026-09-06. El detalle está al final de `sql/crear_rol.sql`.
 - El remoto de GitHub y la llave de despliegue de solo lectura para atlas.
 - La ruta del túnel de Cloudflare para `farmacia.farfanlab.uk`, con Access
   delante.

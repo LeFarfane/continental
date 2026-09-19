@@ -6,3 +6,10 @@
 *.sh       text eol=lf
 *.service  text eol=lf
 *.timer    text eol=lf
+
+# Los .sql de `sql/` se pegan en psql dentro del contenedor de atlas. Un CRLF
+# ahi no siempre mata -psql tolera mucho-, pero si se cuela DENTRO de una
+# cadena: el CHECK de `renglon.estado` guardaria 'en transito\r' y el primer
+# UPDATE de Continental rebotaria con una violacion de restriccion que nadie
+# sabria explicar. Misma razon que arriba, distinto sintoma.
+*.sql      text eol=lf
