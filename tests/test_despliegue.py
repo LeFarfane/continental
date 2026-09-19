@@ -480,17 +480,25 @@ def test_el_script_existe_y_se_detiene_al_primer_fallo():
 
 
 def test_los_pasos_van_en_el_orden_del_ticket():
-    """pull entonces compila entonces pruebas entonces reinicia, y verifica.
+    """pull entonces compila entonces pruebas entonces reinicia, vive, verifica.
 
     El orden es la casilla entera: reiniciar antes de compilar y probar es
     exactamente lo que Marlowe hizo el 2026-09-08. Se comprueban las posiciones
-    dentro del archivo y no que los cinco pasos existan sueltos, porque un
-    script con los cinco pasos en desorden pasaría una prueba de existencia.
+    dentro del archivo y no que los seis pasos existan sueltos, porque un
+    script con los seis pasos en desorden pasaría una prueba de existencia.
+
+    **Y se cuentan sobre el "N/6", no sobre "N/5".** El ticket 17 agregó un
+    paso al final, y un rótulo que sigue diciendo "5" mientras hay seis pasos
+    miente en la única parte del despliegue que alguien lee de reojo.
     """
     texto = _desplegar()
 
-    posiciones = [texto.index(f"{n}/5") for n in range(1, 6)]
-    assert posiciones == sorted(posiciones), "Los cinco pasos no están en orden."
+    assert "/5" not in texto, (
+        "Quedó un rótulo 'N/5' después de que el ticket 17 agregara el paso 6. "
+        "Los rótulos de los pasos se ajustan TODOS o ninguno."
+    )
+    posiciones = [texto.index(f"{n}/6") for n in range(1, 7)]
+    assert posiciones == sorted(posiciones), "Los seis pasos no están en orden."
 
     reinicio = texto.index("systemctl restart")
     for antes in ("ast.parse", "-m pytest"):
@@ -543,6 +551,49 @@ def test_el_script_comprueba_por_http_que_quedo_vivo():
         "se separan, la comprobación de salud miente."
     )
     assert PUERTO in texto
+
+
+def test_el_verificador_de_datos_va_al_final_y_despues_de_la_salud():
+    """La casilla 3 del ticket 17: `desplegar.sh` lo encadena **al final**.
+
+    Al final y no antes, porque son dos preguntas distintas: los pasos 1 a 5
+    dicen si el código quedó bien desplegado, y el 6 dice si los datos que hay
+    en la base están sanos. Un dato roto no tiene por qué impedir que un código
+    bueno llegue a atlas — pero sí tiene que verse, y por eso el paso existe en
+    vez de quedar en un comando que alguien correría "cuando se acuerde".
+    """
+    texto = _desplegar()
+
+    assert "-m continental.verificar" in texto, (
+        "El script no encadena continental.verificar. Un verificador que hay "
+        "que acordarse de correr no se corre."
+    )
+    assert texto.index("curl") < texto.index("-m continental.verificar"), (
+        "El verificador de datos corre ANTES de comprobar que el servicio "
+        "quedó vivo. El orden del ticket 17 es al final de todo."
+    )
+    assert '"$PYTHON" -m continental.verificar' in texto, (
+        "Se invoca con un `python` del PATH en vez del venv de atlas: sin "
+        "SQLAlchemy ni dotenv, el paso 6 fallaría por el intérprete y no por "
+        "los datos."
+    )
+
+
+def test_una_falla_de_datos_sale_con_codigo_distinto_de_cero_y_lo_explica():
+    """Salir en rojo es la mitad; decir **qué** está rojo es la otra.
+
+    Sin el mensaje, un paso 6 rojo se lee como "el despliegue falló" y lo
+    primero que hace alguien con prisa es intentar deshacer un despliegue que
+    está bien. El servicio ya contestó en el paso 5: lo que falla son los datos.
+    """
+    texto = _desplegar()
+    desde = texto.index("6/6")
+
+    assert "exit 1" in texto[desde:], "Una falla de datos no aborta el script."
+    assert "DATOS" in texto[desde:], (
+        "El script no distingue 'el código quedó mal desplegado' de 'los datos "
+        "están rotos'. Son dos cosas y se arreglan de maneras distintas."
+    )
 
 
 def test_el_script_limpia_el_estado_failed_antes_de_reiniciar():

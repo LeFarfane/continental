@@ -38,6 +38,16 @@ motivo dicho con palabras de persona; y **un renglón con una sola lectura ya no
 se marca como "el más barato" sino como "el único que contestó"**. Lo que falta
 de precios —el lote de la noche— es el ticket 18.
 
+**Y desde el ticket 17 el despliegue pregunta por los datos, no solo por el
+código.** `python -m continental.verificar` es el paso 6 de `desplegar.sh`:
+comprueba que el rol todavía pueda leer las cinco tablas de `marts` **haciendo
+un `SELECT 1`** sobre cada una —no leyendo el catálogo, porque lo que importa
+es si puede leer *ahora* y cada `dbt build` se lleva los permisos por delante—,
+y revisa los invariantes del pedido sobre las filas de verdad. **Acumula todas
+las fallas y las imprime juntas**, cada una con el comando que la repara listo
+para copiar, y sale con código distinto de cero. **Señala y no repara**: quién
+cierra una lista duplicada es una persona, no un script.
+
 **Tres cosas del 14 que conviene no redescubrir.** La existencia tiene **tres**
 categorías y no dos: la confirmó, dijo cero, o **no dijo** —los portales la
 dicen con palabras a menudo—. El tercero no compite con quien sí la confirmó, y
@@ -67,12 +77,19 @@ contestó"*.
 
 ```bash
 python iniciar.py     # http://127.0.0.1:8585
-pytest                # 499 pruebas y 1 saltada, 1.96-2.02 s (2026-09-19, ticket 15)
-                      # el número subió con la torre, no con las pruebas: ese
-                      # mismo día, con test_precio.py fuera, el árbol del
-                      # ticket 11 costaba 3.7-4.2 s contra los 1.7-1.9 s que
-                      # había medido por la mañana. Las 100 pruebas nuevas
-                      # cuestan ~1.3 s. Ver la nota de `tests/conftest.py`.
+python -m continental.verificar   # los datos de producción, no el código (ticket 17)
+pytest                # 565 pruebas, 0 saltadas, 2.50-2.73 s (2026-09-19, ticket 17)
+                      # 499 y 1 saltada en el ticket 15; 525 en el 16; las 40
+                      # del 17 son 37 de `test_verificar.py`, 2 de
+                      # `test_despliegue.py` y 1 que `test_compila.py` gana sola
+                      # por haber un módulo más que compilar. Ninguna de las 37
+                      # necesita Postgres: prueban la mitad PURA del verificador.
+                      #
+                      # Del ticket 15, y sigue valiendo: el tiempo sube con la
+                      # torre y no con las pruebas. Ese día, con test_precio.py
+                      # fuera, el árbol del ticket 11 costaba 3.7-4.2 s contra
+                      # los 1.7-1.9 s que había medido por la mañana. Ver la
+                      # nota de `tests/conftest.py`.
 ```
 
 | Archivo | Qué es |
@@ -83,13 +100,14 @@ pytest                # 499 pruebas y 1 saltada, 1.96-2.02 s (2026-09-19, ticket
 | `docs/decisiones/0002` | el módulo de Pedido: reposición 1 a 1, EAN, recepción sugerida |
 | `docs/decisiones/0003` | dónde viven las tablas del pedido y por qué el rol no puede crearlas |
 | `docs/decisiones/0004` | el precio congelado: tabla que solo crece, `numeric`, y quién espera a Doyle |
-| `sql/` | el DDL de las cuatro tablas, el rol acotado y el verificador. **Se corren a mano, en ese orden, con credenciales de dueño** |
+| `sql/` | el DDL de las cuatro tablas, el rol acotado y `verificar_rol.sql`, que mira la **forma** de la base. **Se corren a mano, en ese orden, con credenciales de dueño** — no confundirlo con `continental.verificar`, que mira los **datos** en cada despliegue (la cabecera de ese módulo tiene la tabla que los separa) |
 | `sql/migraciones/` | lo que le falta a una base donde las tablas YA existen: `crear_tablas.sql` usa `CREATE TABLE IF NOT EXISTS` y calla si la tabla ya está con otra forma. También a mano y con credenciales de dueño |
 | `config/continental.yml` | puertos de los módulos y los parámetros del pedido |
 | `src/continental/web/app.py` | `/api/salud`, `/api/modulos`, el pedido sugerido y su cierre, la portada |
 | `src/continental/almacenamiento.py` | donde el pedido sugerido se guarda: el `Protocol`, el SQL real y las reglas de la tabla en un solo lugar |
 | `src/continental/precios.py` | funciones puras: lo que Doyle contestó + la clave buscada -> precio `Decimal` o motivo de rechazo. Ahí vive `emparejar`, la regla por proveedor. No toca la red ni el reloj |
 | `src/continental/consultas.py` | quién espera a Doyle y dónde queda el resultado si nadie está mirando |
+| `src/continental/verificar.py` | los invariantes sobre los **datos** de producción, no sobre el código. Mitad pura (recibe listas, devuelve un `Informe`, se prueba) y mitad de recolección (lee de Postgres, no se prueba). Acumula todas las fallas, cada una con su comando de reparación, y sale distinto de cero. Es el paso 6 de `desplegar.sh` |
 | `src/continental/comparacion.py` | funciones puras: las cuatro lecturas congeladas + las piezas -> quién gana, con qué certeza, cuánto se ahorra contra NADRO y, para la lista entera, cuántos renglones quedaron sin comparar (`contar_la_lista`). No toca la red, la base ni el reloj |
 
 ## Lo que falta, en orden
@@ -119,7 +137,9 @@ más barato y se le pidió a otro.**
 ## Lo que todavía no existe y va a hacer falta
 
 - ~~`scripts/desplegar.sh` y `continental-web.service`~~ **ya existen** desde
-  el ticket 16 (2026-09-19), con 23 pruebas en `tests/test_despliegue.py`. Lo
+  el ticket 16 (2026-09-19), con 25 pruebas en `tests/test_despliegue.py`, y
+  desde el ticket 17 el script tiene **seis** pasos: el nuevo corre
+  `python -m continental.verificar` al final. Lo
   que falta no son los archivos: es **instalarlos en atlas**, y eso empieza por
   algo que todavía no hay (ver abajo). Los pasos completos, en orden y con las
   casillas sin marcar, están en `docs/despliegue-en-atlas.md`.
@@ -297,16 +317,35 @@ más barato y se le pidió a otro.**
    (ticket 18) corre con Doyle caído y a la mañana no hay forma de saber que
    corrió, esto deja de ser un detalle.
 
-4. **El horario del respaldo de SICAR está en `propuesta`** (ADR 0017 de
+4. **El tercer invariante del ticket 17 está DECLARADO, no revisado.** "Ningún
+   pedido enviado sin quién lo envió" necesita dos columnas que `pedidos.pedido`
+   **todavía no tiene**: `estado` y `enviado_por`. Llegan con los tickets 20
+   (los pedidos nacen en `borrador`) y 21 (`borrador` -> `enviado`, firmado con
+   el correo que verificó Access). Inventarlas hoy habría sido escribir un
+   `SELECT` que rebota en atlas con "column does not exist" y dejar el paso 6
+   del despliegue rojo por algo que nadie prometió.
+
+   Cómo quedó: la recolección lee `select * from pedidos.pedido` —que de paso
+   es cómo se averigua la forma real de la tabla sin consultar el catálogo— y
+   `revisar_pedidos_enviados` decide. Sin las columnas, el resultado es
+   `PENDIENTE`: **se ve en la salida con su porqué y no tumba el despliegue**.
+   Con ellas, el invariante empieza a revisar solo, sin que nadie vuelva a
+   tocar el archivo. **Condición de disparo:** si los tickets 20 y 21 les ponen
+   otro nombre a esas columnas, lo que hay que cambiar es
+   `verificar.COLUMNAS_QUE_EXIGE_EL_ENVIO` y nada más — y si nadie lo cambia,
+   el pendiente se queda imprimiéndose en cada despliegue, que es justo lo que
+   se quiere.
+
+5. **El horario del respaldo de SICAR está en `propuesta`** (ADR 0017 de
    farmacia-data): lo decide el dueño. Si se acepta mover el respaldo a las
    ~20:15, **hay que mover el timer de la cadena a las 21:00 en el mismo
    movimiento**, o el colchón baja de hora y media a 15 minutos.
-5. **Falta probar `google-chrome --version` en atlas.** Si ese CPU de 2010 no
+6. **Falta probar `google-chrome --version` en atlas.** Si ese CPU de 2010 no
    lo aguanta, Doyle usa el Chromium de `apt` —que ya está medido— y la parte
    del ADR 0004 que dependía de Chrome queda cerrada.
-6. **Qué hay en VITRINA 1-3.** Entró a la lista blanca de "medicamento" a
+7. **Qué hay en VITRINA 1-3.** Entró a la lista blanca de "medicamento" a
    petición del dueño, pero nadie escribió qué se guarda ahí.
-7. **QuePharma casi seguro va a quedar fuera de la comparación**: usa código
+8. **QuePharma casi seguro va a quedar fuera de la comparación**: usa código
    interno y no está confirmado que encuentre por EAN. Hay dos pendientes
    viejos de Doyle que responden esto —probar el EAN en QuePharma, y confirmar
    VICMA por cantidad de resultados—, y ahora sí importan.
@@ -333,12 +372,12 @@ más barato y se le pidió a otro.**
    y mirar `resultados` y `clave_del_proveedor` de las cuatro filas que quedan
    en `pedidos.precio_de_proveedor`. Esa tabla guarda exactamente lo que hace
    falta para responder las dos preguntas sin volver a los portales.
-8. **El almacén de contraseñas de atlas baja una garantía.** Hoy no hay ninguna
+9. **El almacén de contraseñas de atlas baja una garantía.** Hoy no hay ninguna
    contraseña de proveedor en disco; después de la mudanza habrá cuatro,
    ofuscadas pero recuperables. Está aceptado con mitigación (permisos `700`,
    fuera de respaldos) en el ADR 0008 de Doyle. Si alguien saca una copia del
    disco, se cambian las cuatro contraseñas.
-9. **El día del corte se cierra a medias y ese pedacito se pierde.** El
+10. **El día del corte se cierra a medias y ese pedacito se pierde.** El
    respaldo de SICAR corta a las 18:51, así que el último día del almacén
    siempre está incompleto: lo que se venda después llega al día siguiente. El
    sugerido acumula desde el corte del último cerrado y **arranca al día

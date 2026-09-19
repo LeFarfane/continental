@@ -17,15 +17,23 @@
 # detiene en el primer paso que falla y lo dice ANTES de reiniciar un servicio
 # que estaba funcionando.
 #
-# El orden importa, y es el del ticket 16:
+# El orden importa, y es el del ticket 16 más el paso 6 del ticket 17:
 #   1. pull        — trae el código
 #   2. compila     — TODOS los módulos, incluido iniciar.py; si uno no
 #                    compila, ni se intenta lo demás
 #   3. pruebas     — el suite completo, con el venv real de atlas
 #   4. reinicia    — solo si 2 y 3 pasaron; si el servicio estaba en `failed`
 #                    por el límite de reinicios, primero se limpia
-#   5. verifica    — que contesta por HTTP, por la misma interfaz y el mismo
+#   5. vive        — que contesta por HTTP, por la misma interfaz y el mismo
 #                    puerto a los que apunta el túnel
+#   6. verifica    — los invariantes sobre los DATOS de producción
+#                    (`continental.verificar`, ticket 17). Va AL FINAL y no
+#                    antes: los pasos 1 a 5 dicen si el código quedó bien
+#                    desplegado, y éste dice si lo que hay en la base está
+#                    sano. Son preguntas distintas y la segunda no tiene por
+#                    qué impedir que un código bueno llegue a atlas — pero sí
+#                    tiene que salir con código distinto de cero, o nadie la
+#                    mira. Señala y no repara: cada falla trae el comando.
 #
 # `set -e` sale al primer comando que falla, `-u` convierte una variable sin
 # definir en un error en vez de en una cadena vacía, y `-o pipefail` es el que
@@ -50,7 +58,7 @@ trap 'rm -f "$SALIDA_PRUEBAS"' EXIT
 
 paso() { printf '\n==> %s\n' "$*"; }
 
-paso "1/5  git pull"
+paso "1/6  git pull"
 if ! git remote | grep -q .; then
     echo "    !! este repo no tiene ningún remoto configurado."
     echo "       Al 2026-09-19 Continental todavía no tiene remoto de git; está"
@@ -61,7 +69,7 @@ fi
 git -c pull.rebase=true pull -q
 git log --oneline -1
 
-paso "2/5  compilan todos los módulos"
+paso "2/6  compilan todos los módulos"
 "$PYTHON" - <<'PY'
 import ast, pathlib
 
@@ -78,7 +86,7 @@ for m in mods:
 print(f"    {len(mods)} módulos compilan")
 PY
 
-paso "3/5  pruebas (el suite completo, con el venv de atlas)"
+paso "3/6  pruebas (el suite completo, con el venv de atlas)"
 if ! "$PYTHON" -m pytest -q > "$SALIDA_PRUEBAS" 2>&1; then
     echo "    !! el suite falló. NO se reinicia nada; el servicio sigue como estaba."
     tail -25 "$SALIDA_PRUEBAS"
@@ -86,14 +94,14 @@ if ! "$PYTHON" -m pytest -q > "$SALIDA_PRUEBAS" 2>&1; then
 fi
 tail -1 "$SALIDA_PRUEBAS"
 
-paso "4/5  reinicio de $SERVICIO"
+paso "4/6  reinicio de $SERVICIO"
 if [[ "$(systemctl is-active "$SERVICIO" || true)" == "failed" ]]; then
     echo "    estaba en 'failed' (límite de reinicios): se limpia primero"
     sudo systemctl reset-failed "$SERVICIO"
 fi
 sudo systemctl restart "$SERVICIO"
 
-paso "5/5  que quedó vivo, por HTTP"
+paso "5/6  que quedó vivo, por HTTP"
 SALUD="http://$CONTINENTAL_HOST:$PUERTO/api/salud"
 for i in $(seq 1 15); do
     sleep 1
@@ -110,5 +118,19 @@ for i in $(seq 1 15); do
         exit 1
     fi
 done
+
+paso "6/6  invariantes sobre los datos de producción"
+# `if !` en vez de dejar que `set -e` lo mate, para poder explicar QUÉ falló.
+# Un paso 6 rojo no quiere decir que el despliegue haya salido mal: el código
+# ya está puesto y el servicio ya contestó en el paso 5. Lo que está mal son
+# los datos, y quien lo lea tiene que saber la diferencia antes de intentar
+# deshacer un despliegue que no hace falta deshacer.
+if ! "$PYTHON" -m continental.verificar; then
+    echo ""
+    echo "    !! el CÓDIGO quedó desplegado y el servicio está arriba (paso 5)."
+    echo "       Lo que falla son los DATOS. Arriba está cada falla con el"
+    echo "       comando que la repara; esto señala y no repara a propósito."
+    exit 1
+fi
 
 paso "listo"

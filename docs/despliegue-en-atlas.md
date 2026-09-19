@@ -20,7 +20,7 @@ Medido en atlas el 2026-09-19, en solo lectura: `~/proyectos/` contiene
 | Pieza | Dónde | Qué lo prueba |
 |---|---|---|
 | La unidad de systemd | `scripts/systemd/continental-web.service` | `tests/test_despliegue.py` (7 casos) |
-| El script de despliegue | `scripts/desplegar.sh` | `tests/test_despliegue.py` (6 casos) |
+| El script de despliegue | `scripts/desplegar.sh` | `tests/test_despliegue.py` (8 casos) |
 | `--servicio` sin navegador y sin mudarse de puerto | `iniciar.py` | `tests/test_despliegue.py` (4 casos) |
 | La interfaz de escucha, configurable | `iniciar.py`, `.env.example` | `tests/test_despliegue.py` (3 casos) |
 | LF y no CRLF en `.sh` y `.service` | los archivos mismos | `tests/test_compila.py` |
@@ -197,7 +197,7 @@ ssh -t eddie@192.168.100.14 '~/proyectos/Continental/scripts/desplegar.sh'
 El `-t` es para que `sudo` pueda pedir la contraseña: el script corre como
 `eddie` y solo el reinicio necesita root.
 
-`desplegar.sh` hace cinco pasos y **se detiene en el primero que falla**:
+`desplegar.sh` hace seis pasos y **se detiene en el primero que falla**:
 
 1. `git pull`
 2. compila **todos** los módulos, incluido `iniciar.py` —el archivo que el
@@ -207,10 +207,30 @@ El `-t` es para que `sudo` pueda pedir la contraseña: el script corre como
    de reinicios
 5. comprueba por HTTP que quedó vivo, por la misma interfaz y el mismo puerto a
    los que apunta el túnel
+6. corre `python -m continental.verificar`: los invariantes sobre los **datos**
+   de producción (ticket 17)
 
 El orden es el punto entero. El 2026-09-08 Marlowe desplegó un `app.py` que no
 compilaba con "pull, reinicia y ojalá": el servicio entró en bucle de reinicio
 y el dueño estuvo corrigiendo enlaces contra un servidor que no existía.
+
+**El paso 6 pregunta otra cosa que los cinco anteriores, y por eso va al
+final.** Del 1 al 5 dicen si el código quedó bien desplegado; el 6 dice si lo
+que hay en la base está sano: que no haya dos listas abiertas del mismo día,
+que ningún renglón en tránsito se haya quedado sin su pedido, y que el rol
+todavía pueda leer las cinco tablas de `marts` —lo que `dbt build` se lleva por
+delante cada noche a las 20:30—. **Un paso 6 rojo no es un despliegue fallido**:
+el servicio ya contestó en el paso 5. Lo que está roto son los datos, y el
+propio script lo dice con esas palabras para que nadie intente deshacer un
+despliegue que no hace falta deshacer. Cada falla sale con el comando que la
+repara; el verificador **señala y no repara**, a propósito.
+
+No confundirlo con `sql/verificar_rol.sql`, que también "verifica": ése mira la
+**forma** de la base (que el rol no tenga `CREATE`, que los CHECK sigan
+puestos), se corre **a mano y una vez** con credenciales de dueño, y pregunta
+leyendo el catálogo. El paso 6 mira los **datos**, corre en cada despliegue con
+el rol acotado, y comprueba los permisos **haciendo un `SELECT 1`** sobre cada
+tabla. La cabecera de `src/continental/verificar.py` lo tiene en una tabla.
 
 ---
 
@@ -222,5 +242,6 @@ y el dueño estuvo corrigiendo enlaces contra un servidor que no existía.
 | La unidad no arranca: "Cannot assign requested address" | Se recreó la red `borde` y el gateway ya no es `172.19.0.1` (A.7) |
 | `active (running)` pero nada contesta en el 8585 | Arrancó en otro puerto. **No debería poder**: `--servicio` se niega. Si pasa, mirar `ExecStart` |
 | La pantalla dice `sin-identificar` entrando por el túnel | Falta la aplicación de Access, o está sobre otro dominio (B.3) |
-| El despliegue se detiene en "1/5 git pull" | No hay remoto configurado (A.1) |
+| El despliegue se detiene en "1/6 git pull" | No hay remoto configurado (A.1) |
+| El despliegue se detiene en "6/6 invariantes" | Los datos, no el código: el servicio ya está arriba. Lee cada falla con su comando en la salida del paso 6 |
 | "permission denied for table ..." a las 8 de la mañana | `dbt build` recreó los modelos de `marts` y se llevó los GRANT. Ver el final de `sql/crear_rol.sql` |
