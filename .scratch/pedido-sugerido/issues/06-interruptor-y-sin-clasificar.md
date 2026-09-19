@@ -6,7 +6,7 @@
 
 **Status:** ready-for-agent
 
-- [ ] Interruptor entre las dos vistas, que recuerda la última elección.
-- [ ] En la vista de medicamentos no aparecen abarrotes.
-- [ ] **Un producto `sin clasificar` aparece en las dos vistas, marcado como tal.** 688 de 3,429 artículos no tienen anaquel: si se filtran, desaparece mercancía de la lista sin que nadie se entere.
-- [ ] Se ve cuántos renglones quedaron `sin clasificar`, para decidir si vale la pena ponerles anaquel en SICAR.
+- [x] Interruptor entre las dos vistas, que recuerda la última elección.
+- [x] En la vista de medicamentos no aparecen abarrotes.
+- [x] **Un producto `sin clasificar` aparece en las dos vistas, marcado como tal.** 688 de 3,429 artículos no tienen anaquel: si se filtran, desaparece mercancía de la lista sin que nadie se entere.
+- [x] Se ve cuántos renglones quedaron `sin clasificar`, para decidir si vale la pena ponerles anaquel en SICAR.

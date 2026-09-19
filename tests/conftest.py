@@ -37,6 +37,15 @@ Las 14 pruebas nuevas de `test_clasificacion.py` casi no cuestan: la mitad
 llama a una función pura sin almacén ni archivo, y las que leen
 `config/continental.yml` lo hacen sobre un `cargar()` cacheado.
 
+**Con el ticket 06 dentro sigue igual.** Medido el 2026-09-19, en tres corridas
+seguidas, 79 recolectadas —77 pasan, 2 saltadas— en **0.50-0.70 s**, con la
+recolección en 0.05 s. Las 12 pruebas nuevas de `test_vistas.py` cuestan poco y
+solo una aparece entre las ocho más lentas, con 0.01 s: la mitad mira `VISTAS`,
+que es un dato sin archivo ni almacén, y el resto pasa por `TestClient` como
+las de sus vecinas. La más lenta del suite sigue siendo la primera que sirve un
+archivo estático (0.16 s), y sigue siendo `mimetypes.init()` leyendo el
+registro de Windows, no una prueba.
+
 **La medición en la torre tiene ruido de ±0.4 s**, así que una sola corrida no
 dice nada: corre tres. Y si el número se sale de lo anterior, mide antes de
 culpar a las pruebas nuevas: `pytest --durations=8` para el tiempo de las

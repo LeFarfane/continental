@@ -166,6 +166,33 @@ class PedidoSugerido:
         """
         return sum(1 for r in self.renglones if not r.esta_en_el_catalogo)
 
+    @property
+    def sin_clasificar(self) -> int:
+        """Cuántos renglones se quedaron sin anaquel conocido.
+
+        Es la respuesta a "¿vale la pena ponerles anaquel en SICAR?" (historia
+        12 del spec), y por eso se cuenta sobre **la lista completa** y no
+        sobre lo que el interruptor deje ver: la pregunta es sobre el catálogo,
+        no sobre lo que hay en pantalla en este momento. Un número que bajara
+        al mover un interruptor se leería como que hay menos productos sin
+        anaquel, que es justo lo contrario de lo que este conteo existe para
+        decir.
+
+        Que las dos vistas den el mismo número no es casualidad y conviene
+        saberlo: `sin clasificar` aparece en las dos (ver `vistas.py`), así
+        que el conteo de la vista y el de la lista completa **coinciden
+        siempre**. El día que dejen de coincidir, la causa solo puede ser que
+        alguien empezó a esconder los sin anaquel — y hay una prueba que se
+        pone roja justo ahí.
+
+        No es lo mismo que `sin_catalogo` y los dos se cuentan aparte: un
+        producto fuera del catálogo también cae aquí —sin catálogo no hay
+        anaquel que mirar—, pero uno que sí está en el catálogo y no tiene
+        ubicación capturada solo cae aquí. Se arreglan en dos lugares
+        distintos de SICAR, así que se cuentan en dos números distintos.
+        """
+        return sum(1 for r in self.renglones if r.clasificacion == SIN_CLASIFICAR)
+
 
 def calcular_pedido_sugerido(
     ventas: Sequence[LineaDeVenta],

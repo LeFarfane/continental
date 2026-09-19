@@ -23,6 +23,7 @@ from continental.clasificacion import reglas_configuradas
 from continental.config import cargar
 from continental.doyle import ClienteDeDoyle
 from continental.sugerido import DIAS_DE_RITMO, calcular_pedido_sugerido
+from continental.vistas import VISTAS
 from continental.web.dependencias import obtener_almacen, obtener_doyle
 
 ESTATICOS = Path(__file__).parent / "static"
@@ -174,6 +175,12 @@ def pedido_sugerido(almacen: LecturaDelAlmacen = Depends(obtener_almacen)):
     vendió. Las listas de anaqueles salen de `config/continental.yml` y se le
     pasan al cálculo, que no lee archivos.
 
+    **La ruta no recibe qué vista está elegida, y eso es a propósito.** Manda
+    la lista completa más la definición de las dos vistas (`vistas`), y el
+    navegador se queda con los renglones que cada una deja ver. El porqué
+    —una lectura, una lista, dos maneras de verla, y la regla probada en
+    Python en vez de escrita en el JavaScript— está entero en `vistas.py`.
+
     **La cobertura se mide sobre otra ventana**, más larga (`DIAS_DE_RITMO`), y
     las dos salen de **una sola lectura**: la de reposición es un subconjunto
     de la del ritmo, así que se recorta aquí en memoria —del orden de 600
@@ -212,6 +219,8 @@ def pedido_sugerido(almacen: LecturaDelAlmacen = Depends(obtener_almacen)):
             "fecha_de_ventas": None,
             "renglones": [],
             "sin_catalogo": 0,
+            "sin_clasificar": 0,
+            "vistas": _vistas(),
         }
 
     # Lo que se repone es solo el último día: se recorta de lo ya leído en vez
@@ -252,7 +261,22 @@ def pedido_sugerido(almacen: LecturaDelAlmacen = Depends(obtener_almacen)):
             for r in pedido.renglones
         ],
         "sin_catalogo": pedido.sin_catalogo,
+        # De la lista completa, no de la vista: la pregunta que responde es si
+        # vale la pena ir a ponerles anaquel en SICAR. El porqué está en
+        # `PedidoSugerido.sin_clasificar`.
+        "sin_clasificar": pedido.sin_clasificar,
+        "vistas": _vistas(),
     }
+
+
+def _vistas() -> list[dict]:
+    """Las dos vistas como JSON, para que la pantalla no se sepa la regla.
+
+    Viaja en la misma respuesta que la lista y no en una ruta aparte: es lo
+    que hace que el interruptor no cueste ni una consulta más, y que la vista
+    y los renglones que filtra vengan siempre de la misma lectura.
+    """
+    return [dataclasses.asdict(v) for v in VISTAS]
 
 
 @app.get("/")

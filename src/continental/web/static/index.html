@@ -53,6 +53,26 @@
   .nota { margin: 0 0 1rem; color: var(--tenue); font-size: .9rem; }
   .nota.mal { color: var(--mal); }
   .nota.aviso { color: var(--aviso); }
+  /* El interruptor entre las dos vistas. Son radios de verdad y no botones:
+     se recorren con las flechas del teclado, un lector de pantalla los anuncia
+     como "1 de 2", y el navegador ya sabe que solo uno puede estar encendido.
+     El input se esconde de la vista pero NO se quita del árbol (nada de
+     `display:none`), que es lo que lo dejaría sin foco ni nombre.
+     La marca de cuál está activa se pone con una clase desde el JavaScript y
+     no con `:has(input:checked)`: `:has` es de 2022 y si el navegador del
+     mostrador no lo soporta, el interruptor se vería SIN ninguna opción
+     encendida — y una pantalla que no dice qué está mostrando es peor que no
+     tener interruptor. */
+  .vistas { display: flex; flex-wrap: wrap; gap: .4rem; margin: 0 0 1rem; padding: 0; }
+  .vistas label {
+    display: inline-flex; align-items: baseline; gap: .4rem; cursor: pointer;
+    padding: .35rem .75rem; border: 1px solid var(--linea); border-radius: 999px;
+    font-size: .9rem; color: var(--tenue); line-height: 1.3;
+  }
+  .vistas label.activa { background: var(--realce); color: var(--tinta); border-color: var(--tinta); font-weight: 600; }
+  .vistas label.enfocada { outline: 2px solid var(--tinta); outline-offset: 2px; }
+  .vistas input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  .vistas .cuenta { font-weight: 400; color: var(--tenue); font-variant-numeric: tabular-nums; font-size: .85em; }
   table { width: 100%; border-collapse: collapse; }
   caption { text-align: left; color: var(--tenue); font-size: .88rem; padding-bottom: .5rem; }
   th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid var(--linea); vertical-align: baseline; }
@@ -115,7 +135,9 @@
   <section>
     <h2>Pedido sugerido</h2>
     <p class="corte" id="corte">Armando la lista…</p>
+    <div class="vistas" id="vistas" role="radiogroup" aria-label="Qué se muestra en la lista" hidden></div>
     <p class="nota" id="pedido-nota" hidden></p>
+    <p class="nota" id="pedido-sin-clasificar" hidden></p>
     <table id="pedido-tabla" hidden>
       <caption id="pedido-resumen"></caption>
       <thead>
@@ -183,8 +205,12 @@ const enPalabras = (iso) => {
 
 const plural = (n, singular, pluralizado) => n + ' ' + (n === 1 ? singular : pluralizado);
 
-const nota = (texto, clase) => {
-  const p = document.getElementById('pedido-nota');
+// Un renglón de aviso. Recibe el id porque hay dos —el hueco del catálogo y
+// el conteo de los sin anaquel—: son cosas distintas, se arreglan en dos
+// lugares distintos de SICAR, y amontonarlas en un solo párrafo haría que la
+// segunda tapara a la primera.
+const nota = (id, texto, clase) => {
+  const p = document.getElementById(id);
   p.className = 'nota' + (clase ? ' ' + clase : '');
   p.textContent = texto;
   p.hidden = !texto;
@@ -286,6 +312,91 @@ const renglon = (r) => {
   return tr;
 };
 
+// ------------------------------------------------------- las dos vistas
+
+// Dónde se recuerda la última elección. En el navegador y no en el servidor
+// porque hoy Continental no guarda nada —las tablas son el ticket 07— y no
+// hay sesión de usuario: el correo de Cloudflare Access es una firma, no un
+// lugar donde colgar preferencias (regla 3 de CLAUDE.md). El precio se paga y
+// se dice: la elección es POR NAVEGADOR, así que el teléfono y la computadora
+// del mostrador pueden quedar en vistas distintas. Para una preferencia de
+// lectura eso no cuesta nada.
+const CLAVE_DE_VISTA = 'continental.pedido.vista';
+
+// Leer y escribir van cada uno con su `try`: `localStorage` no solo devuelve
+// null cuando no hay nada, TRUENA al tocarlo en una ventana privada o con las
+// cookies de sitio bloqueadas. Sin esto, la excepción subiría y la pantalla se
+// quedaría en blanco — y en blanco, con el pedido del día, significa que no se
+// hace. Una preferencia que no se pudo guardar es una molestia; una lista que
+// no se ve es el trabajo del día detenido.
+const vistaRecordada = () => {
+  try {
+    return localStorage.getItem(CLAVE_DE_VISTA);
+  } catch (e) {
+    return null;
+  }
+};
+
+const recordarVista = (clave) => {
+  try {
+    localStorage.setItem(CLAVE_DE_VISTA, clave);
+  } catch (e) {
+    // Se sigue sin recordar nada. No se avisa en pantalla: el encargado no
+    // puede hacer nada al respecto y el interruptor funciona igual dentro de
+    // esta visita.
+  }
+};
+
+// Una clave guardada que ya no existe —basura, un valor editado a mano, o el
+// nombre de una vista que se quitó— NO puede dejar la lista sin ninguna vista
+// activa. Se cae a la de omisión, que el servidor marca en el mismo JSON.
+const elegirVista = (vistas, clave) =>
+  vistas.find(v => v.clave === clave) ||
+  vistas.find(v => v.es_la_de_omision) ||
+  vistas[0];
+
+// Qué esconde cada vista NO se decide aquí. La lista de clasificaciones viene
+// dentro de la respuesta, calculada en `vistas.py`, y esto solo pregunta si la
+// del renglón está en ella. Escribir la regla en este archivo la pondría en el
+// único lugar que ninguna prueba de Python mira, que es justo donde no debe
+// estar: es la regla que decide si los 688 artículos sin anaquel se ven o
+// desaparecen.
+const renglonesDe = (renglones, vista) =>
+  renglones.filter(r => vista.clasificaciones.includes(r.clasificacion));
+
+const pintarInterruptor = (vistas, activa, alElegir) => {
+  const caja = document.getElementById('vistas');
+  caja.replaceChildren(...vistas.map(v => {
+    const etiqueta = document.createElement('label');
+    etiqueta.className = v.clave === activa.clave ? 'activa' : '';
+
+    const boton = document.createElement('input');
+    boton.type = 'radio';
+    boton.name = 'vista';
+    boton.value = v.clave;
+    boton.checked = v.clave === activa.clave;
+    boton.addEventListener('change', () => alElegir(v));
+    // El foco se ve: el interruptor se recorre con las flechas y quien navega
+    // con teclado tiene que saber dónde está parado.
+    boton.addEventListener('focus', () => etiqueta.classList.add('enfocada'));
+    boton.addEventListener('blur', () => etiqueta.classList.remove('enfocada'));
+
+    const nombre = document.createElement('span');
+    nombre.textContent = v.nombre;
+
+    // Cuántos renglones trae cada vista, dicho en el propio interruptor: así
+    // se ve cuánto se está escondiendo ANTES de mover nada, y el encargado
+    // que no encuentra un producto sabe de inmediato dónde buscarlo.
+    const cuenta = document.createElement('span');
+    cuenta.className = 'cuenta';
+    cuenta.textContent = v.cuantos;
+
+    etiqueta.append(boton, nombre, cuenta);
+    return etiqueta;
+  }));
+  caja.hidden = false;
+};
+
 async function cargarPedido() {
   const corte = document.getElementById('corte');
   const tabla = document.getElementById('pedido-tabla');
@@ -295,7 +406,7 @@ async function cargarPedido() {
     datos = await (await fetch('/api/pedido-sugerido')).json();
   } catch (e) {
     corte.textContent = 'No se pudo armar el pedido sugerido.';
-    nota('Continental no contestó. Vuelve a cargar la página; si sigue igual, avísale a Eddie.', 'mal');
+    nota('pedido-nota', 'Continental no contestó. Vuelve a cargar la página; si sigue igual, avísale a Eddie.', 'mal');
     return;
   }
 
@@ -303,13 +414,13 @@ async function cargarPedido() {
   // vendió nada" y el pedido del día no se hace.
   if (datos.ok === false) {
     corte.textContent = 'No se pudo armar el pedido sugerido.';
-    nota(datos.detalle + '. La lista no está vacía: no se pudo leer. Avísale a Eddie.', 'mal');
+    nota('pedido-nota', datos.detalle + '. La lista no está vacía: no se pudo leer. Avísale a Eddie.', 'mal');
     return;
   }
 
   if (!datos.fecha_de_ventas) {
     corte.textContent = 'Todavía no hay ventas de las cuales reponer.';
-    nota('El almacén no tiene ni una venta registrada.', 'aviso');
+    nota('pedido-nota', 'El almacén no tiene ni una venta registrada.', 'aviso');
     return;
   }
 
@@ -320,26 +431,72 @@ async function cargarPedido() {
   corte.append(cuando);
 
   if (!datos.renglones.length) {
-    nota('Ese día no se vendió nada que reponer.', 'aviso');
+    nota('pedido-nota', 'Ese día no se vendió nada que reponer.', 'aviso');
     return;
   }
 
-  nota(datos.sin_catalogo
+  nota('pedido-nota', datos.sin_catalogo
     ? (datos.sin_catalogo === 1
         ? 'Un renglón es de un producto que el catálogo no conoce. Se muestra igual: se vendió y hay que reponerlo.'
         : datos.sin_catalogo + ' renglones son de productos que el catálogo no conoce. Se muestran igual: se vendieron y hay que reponerlos.')
     : '', datos.sin_catalogo ? 'aviso' : '');
 
-  // El resumen dice el orden a propósito: una lista larga ordenada por un
-  // criterio que no se anuncia se lee como si no tuviera ninguno. Y dice que
-  // nada se filtró, que es lo que distingue esta lista de la tarjeta O2.
-  document.getElementById('pedido-resumen').textContent =
-    plural(datos.renglones.length, 'renglón', 'renglones') +
-    ', uno por producto vendido. Se propone reponer lo que salió, pieza por ' +
-    'pieza. Arriba lo que se va a acabar primero; nada se quitó de la lista.';
-  document.getElementById('pedido-renglones').replaceChildren(...datos.renglones.map(renglon));
-  tabla.hidden = false;
+  // El conteo de los sin anaquel es de la LISTA COMPLETA, no de la vista, y
+  // vale lo mismo en las dos justamente porque esos renglones nunca se
+  // esconden. Responde una pregunta sobre el catálogo —"¿vale la pena ponerles
+  // anaquel en SICAR?"— y un número que bajara al mover el interruptor se
+  // leería como que hay menos productos sin anaquel.
+  nota('pedido-sin-clasificar', datos.sin_clasificar
+    ? plural(datos.sin_clasificar, 'renglón se quedó', 'renglones se quedaron') +
+      ' sin clasificar: no tienen anaquel en SICAR. Se muestran en las dos ' +
+      'vistas, marcados. Ponerles anaquel es lo que los saca de aquí.'
+    : '', 'aviso');
+
+  // Si el servidor no mandó las vistas —una versión vieja, un despliegue a
+  // medias—, se pinta la lista COMPLETA y sin interruptor. Falla hacia mostrar
+  // de más, nunca hacia esconder: lo que no se ve es lo que hace falta sin que
+  // nadie se entere.
+  const vistas = Array.isArray(datos.vistas) && datos.vistas.length ? datos.vistas : null;
+  if (!vistas) {
+    pintarRenglones(datos.renglones, datos.renglones.length, null);
+    tabla.hidden = false;
+    return;
+  }
+
+  vistas.forEach(v => { v.cuantos = renglonesDe(datos.renglones, v).length; });
+
+  const mostrar = (vista) => {
+    recordarVista(vista.clave);
+    pintarInterruptor(vistas, vista, mostrar);
+    pintarRenglones(
+      renglonesDe(datos.renglones, vista),
+      datos.renglones.length,
+      vistas.find(v => v.clave !== vista.clave) || vista);
+    tabla.hidden = false;
+  };
+
+  mostrar(elegirVista(vistas, vistaRecordada()));
 }
+
+// El resumen dice el orden a propósito: una lista larga ordenada por un
+// criterio que no se anuncia se lee como si no tuviera ninguno. Y dice
+// cuántos renglones se quedaron fuera de esta vista, que es lo que distingue
+// "el interruptor los escondió" de "no se vendieron": son dos cosas que en
+// pantalla se ven idénticas —el renglón no está— y solo una se arregla
+// moviendo el interruptor.
+const pintarRenglones = (visibles, total, otra) => {
+  const escondidos = total - visibles.length;
+  document.getElementById('pedido-resumen').textContent =
+    plural(visibles.length, 'renglón', 'renglones') +
+    ', uno por producto vendido. Se propone reponer lo que salió, pieza por ' +
+    'pieza. Arriba lo que se va a acabar primero. ' +
+    (escondidos
+      ? 'Esta vista esconde ' + plural(escondidos, 'renglón de abarrote', 'renglones de abarrote') +
+        ' y nada más: los sin clasificar siguen aquí. Cámbiala a «' + otra.nombre +
+        '» para verlos todos.'
+      : 'Nada se quitó de la lista.');
+  document.getElementById('pedido-renglones').replaceChildren(...visibles.map(renglon));
+};
 
 // ------------------------------------------------------------- el esqueleto
 
