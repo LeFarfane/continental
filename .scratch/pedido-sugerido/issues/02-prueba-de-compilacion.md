@@ -6,7 +6,7 @@
 
 **Status:** ready-for-agent
 
-- [ ] `ast.parse` sobre todos los `.py` de `src/`.
-- [ ] Ningún `.sh`, `.service` ni `.timer` tiene CRLF.
-- [ ] Todo `.sh` tiene shebang.
-- [ ] El docstring del archivo explica de dónde viene: en Marlowe nació de un servicio en bucle de reinicio con 148 pruebas en verde.
+- [x] `ast.parse` sobre todos los `.py` de `src/`.
+- [x] Ningún `.sh`, `.service` ni `.timer` tiene CRLF.
+- [x] Todo `.sh` tiene shebang.
+- [x] El docstring del archivo explica de dónde viene: en Marlowe nació de un servicio en bucle de reinicio con 148 pruebas en verde.
