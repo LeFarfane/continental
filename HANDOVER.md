@@ -24,7 +24,7 @@ contestan. Nada más.
 
 ```bash
 python iniciar.py     # http://127.0.0.1:8585
-pytest                # 98 pruebas y 1 saltada, ~0.5 s (2026-09-19)
+pytest                # 129 pruebas y 1 saltada, ~0.6 s (2026-09-19)
 ```
 
 | Archivo | Qué es |
@@ -36,7 +36,8 @@ pytest                # 98 pruebas y 1 saltada, ~0.5 s (2026-09-19)
 | `docs/decisiones/0003` | dónde viven las tablas del pedido y por qué el rol no puede crearlas |
 | `sql/` | el DDL de las tres tablas, el rol acotado y el verificador. **Se corren a mano, en ese orden, con credenciales de dueño** |
 | `config/continental.yml` | puertos de los módulos y los parámetros del pedido |
-| `src/continental/web/app.py` | `/api/salud`, `/api/modulos`, la portada |
+| `src/continental/web/app.py` | `/api/salud`, `/api/modulos`, el pedido sugerido y su cierre, la portada |
+| `src/continental/almacenamiento.py` | donde el pedido sugerido se guarda: el `Protocol`, el SQL real y las reglas de la tabla en un solo lugar |
 
 ## Lo que falta, en orden
 

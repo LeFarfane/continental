@@ -30,6 +30,7 @@ from pathlib import Path
 
 import pytest
 
+from continental.almacenamiento import ESTADOS_DE_LA_LISTA, ESTADOS_DEL_RENGLON
 from continental.clasificacion import ABARROTE, MEDICAMENTO, SIN_CLASIFICAR
 
 RAIZ = Path(__file__).resolve().parent.parent
@@ -223,6 +224,30 @@ def test_la_clasificacion_guardada_es_la_que_calcula_el_codigo():
         ABARROTE,
         SIN_CLASIFICAR,
     }
+
+
+def test_los_estados_que_escribe_el_codigo_son_los_que_el_ddl_acepta():
+    """Las constantes de `almacenamiento.py` contra los CHECK, en los dos sentidos.
+
+    Es el mismo hueco que `test_lo_que_lee_almacen_py_esta_otorgado` cierra del
+    lado de los permisos: dos archivos que dicen lo mismo y que nadie obliga a
+    decirlo igual. Si el código escribiera un estado que el CHECK no conoce, el
+    `UPDATE` rebotaría en atlas con una violación de restricción que no explica
+    nada; si el CHECK aceptara uno que el código nunca escribe, sería
+    vocabulario muerto invitando a que alguien lo use.
+
+    Se comparan como **tuplas** y no como conjuntos: el orden de los estados es
+    el del glosario —`abierto` → `cerrado` → `vencido`— y ese orden es la
+    máquina de estados escrita.
+    """
+    assert (
+        tuple(_valores_del_check("pedidos.pedido_sugerido", "ck_pedido_sugerido_estado"))
+        == ESTADOS_DE_LA_LISTA
+    )
+    assert (
+        tuple(_valores_del_check("pedidos.renglon", "ck_renglon_estado"))
+        == ESTADOS_DEL_RENGLON
+    )
 
 
 # ------------------------------------------------------- el rol y sus GRANT

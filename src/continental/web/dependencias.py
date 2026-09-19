@@ -1,11 +1,11 @@
-"""Las dos dependencias que FastAPI inyecta, y la única costura de pruebas.
+"""Las tres dependencias que FastAPI inyecta, y la única costura de pruebas.
 
 Todo lo que Continental no controla entra por aquí, y por eso una prueba solo
 necesita `app.dependency_overrides[obtener_almacen] = lambda: doble`. La
 alternativa —la de Marlowe— es parchear módulos con `monkeypatch` porque la
 conexión nace al importar, y cuesta un fixture de ~100 líneas.
 
-**Las dos funciones son perezosas.** Se ejecutan cuando llega una petición, no
+**Las tres funciones son perezosas.** Se ejecutan cuando llega una petición, no
 cuando alguien importa este archivo: sin eso, `import continental.web.app`
 exigiría `.env`, un Postgres vivo y un Doyle despierto solo para recolectar
 pruebas.
@@ -14,6 +14,7 @@ pruebas.
 from __future__ import annotations
 
 from continental.almacen import AlmacenPostgres, LecturaDelAlmacen, motor
+from continental.almacenamiento import AlmacenamientoDelPedido, AlmacenamientoPostgres
 from continental.config import cargar
 from continental.doyle import ClienteDeDoyle, DoylePorHttp
 
@@ -57,3 +58,22 @@ def obtener_doyle() -> ClienteDeDoyle:
             "silenciosa que este repo prohíbe."
         )
     return DoylePorHttp(url=doyle.url, timeout_seg=doyle.timeout_seg)
+
+
+def obtener_almacenamiento() -> AlmacenamientoDelPedido:
+    """El borde de escritura del pedido. Se sustituye en pruebas.
+
+    Es una dependencia **aparte** de `obtener_almacen` aunque las dos acaben en
+    el mismo Postgres, y esa separación es el punto: leer `marts` y escribir
+    `pedidos` son dos permisos distintos que pueden fallar por separado —cada
+    `dbt build` recrea `marts` y se lleva sus GRANT por delante, y a
+    farmacia-data le pasó el 2026-09-07 a las 20:30—. Con una sola dependencia,
+    una prueba no podría tumbar uno sin tumbar el otro y la pantalla no podría
+    distinguirlos.
+
+    Pasa `motor` sin paréntesis, igual que el almacén: la factoría, no el
+    motor. Así esta función no puede fallar y la falla aparece dentro de la
+    escritura, donde el `try` de la ruta la convierte en un hueco con su motivo
+    en vez de un 500 genérico.
+    """
+    return AlmacenamientoPostgres(motor)

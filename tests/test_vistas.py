@@ -257,7 +257,11 @@ def test_la_pantalla_trae_el_interruptor_con_los_dos_nombres(cliente):
     assert "cuerpo.vistas" in portada or "datos.vistas" in portada
     # Y la pantalla sigue haciendo una sola consulta del pedido: el interruptor
     # no vuelve a preguntarle al almacén.
-    assert portada.count("fetch('/api/") == 3
+    # Cuatro consultas y ni una más: el pedido, la salud, los módulos y el
+    # cierre del ticket 08 —que es un POST que ocurre cuando alguien lo pide,
+    # no una lectura de la carga—. La lista se pide UNA vez y todo lo demás se
+    # resuelve con lo que ya llegó.
+    assert portada.count("fetch('/api/") == 4
 
 
 def test_la_pantalla_recuerda_la_eleccion_y_aguanta_un_localStorage_roto(cliente):

@@ -20,6 +20,7 @@ Calcado de `Marlowe/iniciar.py`, que a su vez viene de Doyle y de
    abre un navegador nunca.
 """
 
+import logging
 import os
 import socket
 import sys
@@ -32,6 +33,38 @@ import uvicorn
 HOST = os.environ.get("CONTINENTAL_HOST", "127.0.0.1")
 PUERTO_PREFERIDO = 8585
 INTENTOS = 20
+
+
+def configurar_bitacora():
+    """La bitácora de `continental` en INFO, y solo la de `continental`.
+
+    Sin esto no se pierde un detalle cosmético: se pierde **la firma**. El
+    correo de Cloudflare Access sirve para saber quién hizo qué (regla 3 de
+    CLAUDE.md), y quién cerró un pedido sugerido se anota con `log.info`; con
+    la raíz de `logging` sin configurar, el nivel por omisión es WARNING y esa
+    línea no se escribe en ninguna parte. Una firma que no se guarda no es una
+    firma. Lo mismo vale para los avisos de operación —cuántas listas
+    vencieron al abrir el día—, que es lo que se lee después en `journalctl`.
+
+    **Solo el logger de `continental`**, y no `basicConfig` sobre la raíz:
+    poner la raíz en INFO enciende también a `httpx`, que escribe una línea por
+    cada petición a Doyle y a Marlowe —la pantalla las hace cada vez que
+    alguien la carga— y ahoga en ruido justo lo que esto viene a hacer legible.
+
+    Va aquí y no en `app.py` porque configurar el logging global al importar un
+    módulo se lo impone a quien lo importe, incluidas las pruebas.
+    """
+    bitacora = logging.getLogger("continental")
+    bitacora.setLevel(logging.INFO)
+    if not bitacora.handlers:
+        salida = logging.StreamHandler()
+        salida.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+        )
+        bitacora.addHandler(salida)
+        # No se propaga a la raíz: si algún día alguien la configura, estas
+        # líneas saldrían dos veces.
+        bitacora.propagate = False
 
 
 def puerto_libre(host: str, puerto: int) -> bool:
@@ -57,6 +90,7 @@ def abrir_navegador(url: str):
 
 
 def main():
+    configurar_bitacora()
     argumentos = [a for a in sys.argv[1:] if a != "--servicio"]
     servicio = "--servicio" in sys.argv
     inicial = int(argumentos[0]) if argumentos else PUERTO_PREFERIDO

@@ -342,8 +342,11 @@ def test_la_pantalla_marca_el_renglon_que_no_es_medicamento(cliente):
 
     assert "r.clasificacion" in portada
     assert "sin clasificar" in portada
-    # Y la pantalla no vuelve a preguntar: sigue habiendo tres consultas.
-    assert portada.count("fetch('/api/") == 3
+    # Cuatro consultas y ni una más: el pedido, la salud, los módulos y el
+    # cierre del ticket 08 —que es un POST que ocurre cuando alguien lo pide,
+    # no una lectura de la carga—. La lista se pide UNA vez y todo lo demás se
+    # resuelve con lo que ya llegó.
+    assert portada.count("fetch('/api/") == 4
 
 
 # ------------------------------------------------------------------ ayudas

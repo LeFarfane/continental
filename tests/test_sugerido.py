@@ -303,7 +303,11 @@ def test_la_pantalla_pinta_la_existencia_del_renglon_y_no_la_vuelve_a_buscar(cli
 
     assert "r.existencia" in portada
     assert "r.dias_de_cobertura" in portada
-    assert portada.count("fetch('/api/") == 3  # pedido, salud y módulos
+    # Cuatro consultas y ni una más: el pedido, la salud, los módulos y el
+    # cierre del ticket 08 —que es un POST que ocurre cuando alguien lo pide,
+    # no una lectura de la carga—. La lista se pide UNA vez y todo lo demás se
+    # resuelve con lo que ya llegó.
+    assert portada.count("fetch('/api/") == 4
 
 
 # ------------------------------------------------------- la función, directo

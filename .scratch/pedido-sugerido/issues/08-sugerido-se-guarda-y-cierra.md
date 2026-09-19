@@ -6,8 +6,8 @@
 
 **Status:** ready-for-agent
 
-- [ ] Al abrir el día se crea el pedido sugerido si no existe, y si existe se lee: **nunca se duplica** para el mismo día y negocio.
-- [ ] Estados de la lista: `abierto` → `cerrado` → `vencido`.
-- [ ] Cerrar una lista guarda hasta qué momento de ventas consideró.
-- [ ] Una lista de un día anterior que quedó con renglones sin atender queda `vencida`, no `abierta` para siempre.
-- [ ] La lista guarda cuándo se armó, y eso se ve en la pantalla.
+- [x] Al abrir el día se crea el pedido sugerido si no existe, y si existe se lee: **nunca se duplica** para el mismo día y negocio.
+- [x] Estados de la lista: `abierto` → `cerrado` → `vencido`.
+- [x] Cerrar una lista guarda hasta qué momento de ventas consideró.
+- [x] Una lista de un día anterior que quedó con renglones sin atender queda `vencida`, no `abierta` para siempre.
+- [x] La lista guarda cuándo se armó, y eso se ve en la pantalla.
