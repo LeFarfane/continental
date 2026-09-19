@@ -145,12 +145,61 @@ class SesionDeProveedor:
     guardada_en: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class SesionAbriendose:
+    """Doyle dejó un navegador esperando. **Todavía no hay sesión.**
+
+    `ya_abierta` es verdadero cuando ya había una ventana de ese proveedor
+    esperando de antes —alguien apretó el botón dos veces, o dos pestañas del
+    mostrador lo apretaron a la vez—. **No es un error y no se le dice como
+    tal**: es la misma ventana, y abrir una segunda dejaría dos Chromes
+    peleándose por el mismo login.
+
+    Que este objeto exista **no quiere decir que la sesión sirva**, y eso es lo
+    que hay que no olvidar: lo que hace servible una sesión es que alguien
+    teclee la contraseña y se confirme. El 2026-09-19 los cuatro proveedores
+    decían `guardada` con las cuatro sesiones caducadas.
+    """
+
+    proveedor: str
+    ya_abierta: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class SesionConfirmada:
+    """La persona ya entró y Doyle guardó las cookies.
+
+    `todavia_parece_login` es el aviso honesto de Doyle: confirma de todos
+    modos —la redirección puede no haber terminado cuando se dio el clic— y
+    dice que la página seguía viéndose como un login. Viaja hasta la pantalla
+    porque es la diferencia entre "ya está" y "vuelve a intentarlo", y
+    esconderlo dejaría al encargado creyendo que abrió una sesión que no abrió.
+    """
+
+    proveedor: str
+    todavia_parece_login: bool = False
+
+
 # --------------------------------------------------------------- interfaz
 
 
 @runtime_checkable
 class ClienteDeDoyle(Protocol):
-    """El borde hacia Doyle. Tres verbos y ninguno más."""
+    """El borde hacia Doyle. Cinco verbos y ninguno más.
+
+    Eran tres hasta el ticket 19. Los dos nuevos —`abrir_sesion` y
+    `confirmar_sesion`— son las dos mitades de un solo acto del encargado, y
+    **no rompen la regla 1 de `CLAUDE.md`**: Continental sigue sin tocar un
+    navegador. Lo que hace es pedírselo a Doyle por HTTP, que es exactamente
+    lo que la regla manda hacer cuando una pantalla necesita algo de un portal.
+    El navegador lo abre Doyle, en la máquina donde Doyle corre, y quien teclea
+    la contraseña es una persona (ADR 0001 de Doyle, sin cambios).
+
+    Son **dos** peticiones y no una porque en medio hay un humano: la primera
+    deja el navegador esperando y vuelve de inmediato —abrirlo tarda, y la
+    sesión no está lista cuando vuelve—, y la segunda se manda cuando esa
+    persona ya entró. Es el mismo reparto que Doyle usa en su propia pantalla.
+    """
 
     def pedir_busqueda(self, termino: str) -> BusquedaPedida:
         """Lanza la búsqueda en los proveedores y devuelve el acuse."""
@@ -162,6 +211,26 @@ class ClienteDeDoyle(Protocol):
 
     def sesiones(self) -> list[SesionDeProveedor]:
         """Qué proveedores tienen sesión viva en Doyle."""
+        ...
+
+    def abrir_sesion(self, proveedor: str) -> SesionAbriendose:
+        """Le pide a Doyle que abra el navegador del login de ese proveedor.
+
+        **Vuelve de inmediato y la sesión NO está lista.** Lo que queda abierto
+        es una ventana de Chrome esperando a que una persona teclee usuario y
+        contraseña; hasta que alguien confirme, el portal sigue mandando al
+        login y el motivo `la sesión caducó` sigue siendo verdad.
+        """
+        ...
+
+    def confirmar_sesion(self, proveedor: str) -> SesionConfirmada:
+        """Le dice a Doyle que la persona ya entró: guarda las cookies y cierra.
+
+        Es la otra mitad, y la que de verdad deja la sesión servible: Doyle
+        exporta las cookies **antes** de cerrar el navegador, porque Chrome
+        tira las de sesión al cerrarse y portales como LEVIC quedarían sin
+        sesión aunque alguien acabara de entrar (ADR 0006 de Doyle).
+        """
         ...
 
 
@@ -223,6 +292,29 @@ class DoylePorHttp:
             )
             for clave, datos in sorted((respuesta.json() or {}).items())
         ]
+
+    def abrir_sesion(self, proveedor: str) -> SesionAbriendose:
+        # `POST` y sin cuerpo, que es como Doyle lo expone
+        # (`POST /api/sesion/{clave}/abrir`). El `raise_for_status` importa:
+        # Doyle contesta 400 cuando la clave no es de un proveedor suyo, y sin
+        # esto un proveedor mal escrito se vería como una sesión abriéndose.
+        with self._cliente() as cliente:
+            respuesta = cliente.post(f"/api/sesion/{proveedor}/abrir")
+        respuesta.raise_for_status()
+        datos = respuesta.json() or {}
+        return SesionAbriendose(
+            proveedor=proveedor, ya_abierta=bool(datos.get("ya_abierta"))
+        )
+
+    def confirmar_sesion(self, proveedor: str) -> SesionConfirmada:
+        with self._cliente() as cliente:
+            respuesta = cliente.post(f"/api/sesion/{proveedor}/confirmar")
+        respuesta.raise_for_status()
+        datos = respuesta.json() or {}
+        return SesionConfirmada(
+            proveedor=proveedor,
+            todavia_parece_login=bool(datos.get("todavia_parece_login")),
+        )
 
 
 def _leer_respuesta(proveedor: str, crudo: dict) -> RespuestaDeProveedor:

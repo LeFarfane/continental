@@ -29,6 +29,9 @@ Medido en atlas el 2026-09-19, en solo lectura: `~/proyectos/` contiene
 | El lote nocturno y su timer | `scripts/systemd/continental-lote.{service,timer}` | `tests/test_lote.py` (14 casos) |
 | El lote mismo | `src/continental/lote.py` | `tests/test_lote.py` (40 casos) |
 | El porqué de la hora y del tope | `docs/decisiones/0006-*` | — |
+| El latido a Uptime Kuma | `src/continental/latido.py` | `tests/test_latido.py` (34 casos) |
+| La quinta tabla, `pedidos.corrida_del_lote` | `sql/crear_tablas.sql`, `sql/migraciones/0004-*` | `tests/test_motivos.py` |
+| El porqué de la quinta tabla | `docs/decisiones/0007-*` | — |
 
 ---
 
@@ -86,8 +89,20 @@ python3 -m venv --system-site-packages .venv
 - [ ] Los tres pasos del ticket 07, con credenciales de dueño. Están escritos
       completos en `HANDOVER.md` (sección "Lo que todavía no existe"), con sus
       migraciones y el aviso de volver a correr `crear_rol.sql` después de la
-      0003. El tercero da el veredicto: 20 comprobaciones y salida distinta de
-      cero si algo quedó mal.
+      0003 **y de la 0004**. El tercero da el veredicto: 22 comprobaciones y
+      salida distinta de cero si algo quedó mal.
+
+> **Las dos migraciones que CREAN una tabla exigen volver a correr
+> `crear_rol.sql`, y es el olvido más caro de este esquema.** Un GRANT no se
+> puede dar sobre una tabla que todavía no existía. La `0003` estrena
+> `pedidos.precio_de_proveedor` y la `0004` estrena `pedidos.corrida_del_lote`
+> (ticket 19). El síntoma de la segunda es el peor de los dos porque **nadie lo
+> ve**: el lote de las 22:00 rebota con "permission denied for table
+> corrida_del_lote", la corrida **no** se aborta —los precios de esa noche se
+> guardan igual—, y lo único que pasa es que a la mañana la pantalla dice *"el
+> lote no corrió sobre esta lista"* sobre una noche en la que sí corrió. Es la
+> ausencia de esa fila lo que significa eso. Las comprobaciones 4 y 6 del
+> verificador lo cazan.
 
 ### A.6 — Instalar la unidad
 
@@ -297,6 +312,114 @@ tabla. La cabecera de `src/continental/verificar.py` lo tiene en una tabla.
 
 ---
 
+## Parte D — el monitor de Uptime Kuma (esto lo hace el dueño, en la interfaz de Kuma)
+
+**Qué caza este monitor, y por qué ninguna otra cosa lo caza:** un lote que
+truena deja el journal en rojo y `continental-lote.service` en `failed`. Un
+lote que **no corre** —atlas apagado a las 22:00, el timer sin habilitar, un
+`daemon-reload` a medias— no deja nada en ningún sitio, y a la mañana la lista
+sin precios se ve igual que una noche en la que Doyle no contestó. **El
+silencio es el modo de falla que de verdad muerde**, y Kuma es lo único de esta
+casa que se queja cuando no pasa nada.
+
+**MONITOR PROPIO, y eso es la casilla entera.** El ticket lo pide con su razón
+dentro: *"si compartieran monitor, una noche sin lote no avisaría nada"*. Kuma
+ya vigila la cadena de farmacia-data y a Marlowe; si este latido entrara por el
+mismo *push monitor*, la cadena de las 20:30 seguiría latiendo todas las noches
+y el monitor se vería verde con el lote de las 22:00 muerto desde hace una
+semana. Un monitor compartido mide "algo de esta casa sigue vivo", que no es
+una pregunta que nadie se haga.
+
+Medido en atlas el 2026-09-19, en solo lectura:
+
+- Kuma corre como el contenedor **`borde_kuma`**, publicado en
+  **`127.0.0.1:3002`** (`3002->3001/tcp`), `Up 12 days (healthy)`.
+- Los otros dos ya tienen el suyo, con su propia variable: `KUMA_PUSH_URL` en
+  farmacia-data y `KUMA_PUSH_URL_MARLOWE` en Marlowe. Tres nombres distintos
+  son tres URLs con tres tokens, que es lo que los vuelve tres monitores.
+
+**Nada de esto lo hizo el agente del ticket 19, a propósito:** crear un monitor
+es escribir en la Kuma que Marlowe y la cadena de farmacia-data comparten, y un
+latido de prueba escribiría en el historial de un monitor que alguien mira.
+
+### D.1 — Crear el push monitor
+
+- [ ] Entrar a Kuma (`http://127.0.0.1:3002` desde atlas, o por el túnel si lo
+      tiene) y **Add New Monitor** con estos valores:
+
+| Campo | Valor | Por qué |
+|---|---|---|
+| Monitor Type | **Push** | Es el lote quien avisa; Kuma no puede consultarlo, porque el lote no escucha en ningún puerto |
+| Friendly Name | `Continental — lote nocturno` | Que se distinga del de la cadena y del de Marlowe de un vistazo |
+| Heartbeat Interval | **93600** s (26 h) | El lote corre **lunes a viernes a las 22:00**. Con 24 h justas, el lunes por la noche sería siempre un falso rojo, porque el último latido sería el del viernes. Ver D.3 |
+| Retries | 0 | Un push no se reintenta: o llegó o no llegó |
+| Resend Notification if Down | 1 | Que avise una vez y no cada intervalo |
+
+- [ ] Copiar la **Push URL** que Kuma genera (`http://.../api/push/<token>`).
+
+### D.2 — El token es un secreto y va en el `.env`
+
+- [ ] Ponerlo en `~/proyectos/Continental/.env` como
+      `KUMA_PUSH_URL_CONTINENTAL=...`, y **en ningún otro sitio**.
+
+```bash
+# en atlas, desde ~/proyectos/Continental
+echo 'KUMA_PUSH_URL_CONTINENTAL=http://127.0.0.1:3002/api/push/EL_TOKEN' >> .env
+```
+
+**Quien tenga esa URL puede decirle a Kuma que todo está bien**, que es
+justamente la afirmación que el monitor existe para hacer honesta. Por eso va
+en `.env` —que está en `.gitignore`— y **nunca** en `config/continental.yml`,
+que sí se versiona. Es la misma frontera que ya separa `WAREHOUSE_URL` del
+YAML, y hay una prueba que comprueba que el nombre de la variable no aparezca
+en el YAML.
+
+- [ ] Probarlo a mano, **una vez**, con un tope corto — y mirar Kuma después:
+
+```bash
+cd ~/proyectos/Continental
+PYTHONPATH=src .venv/bin/python -m continental.lote --tope-minutos 5
+journalctl -u continental-lote -n 50 --no-pager | grep -i latido
+```
+
+Si la variable falta, el lote **no falla**: escribe un `WARNING` que la nombra
+y sigue. Si Kuma no contesta, tampoco: escribe otro `WARNING` con el **tipo**
+de la falla —nunca el texto, porque el texto de un error de `httpx` lleva la
+URL completa y la URL completa **es** el token— y la corrida vale lo que valía.
+*"Marcar como rota una corrida buena es peor que perderse un latido."*
+
+### D.3 — Qué se va a ver, para no confundir un rojo bueno con uno malo
+
+- [ ] Dejarlo una semana y mirar el historial. Lo que tiene que pasar:
+
+| Situación | Qué manda el lote | Cómo se ve en Kuma |
+|---|---|---|
+| recorrió la lista entera | `up` | verde |
+| **se detuvo al tope de 60 min** | `up` | **verde, y es lo correcto**: detenerse es lo que se le pide (ticket 18). Un rojo todas las noches por el tope es un monitor que nadie vuelve a mirar |
+| no hubo ventas que consultar | `up` | verde. La farmacia cierra los domingos |
+| la corrida se cortó | `down` | rojo **ahora**, sin esperar al intervalo |
+| **el lote no corrió** | nada | rojo cuando vence el intervalo. **Esto es lo que el monitor existe para cazar** |
+
+> **El fin de semana es el caso que va a confundir.** El timer es
+> `OnCalendar=Mon-Fri 22:00` sin `Persistent=true` (ADR 0006), así que del
+> viernes 22:00 al lunes 22:00 pasan 72 h sin latido. Con el intervalo de 26 h
+> de D.1, Kuma se pone rojo el sábado por la madrugada y se queda así hasta el
+> lunes por la noche, **todas las semanas**. Hay dos salidas y las dos son
+> decisiones del dueño, así que se dejan escritas en vez de elegidas aquí:
+>
+> - **Silenciar el monitor los fines de semana** (Kuma tiene ventanas de
+>   mantenimiento: *Maintenance → sábado y domingo*). Es lo que conserva el
+>   aviso útil de lunes a viernes.
+> - **Subir el intervalo a 73 h** y perder la capacidad de distinguir "no
+>   corrió el martes" hasta el viernes. **No se recomienda**: convierte el
+>   monitor en ruido de fondo, que es exactamente lo que la casilla del ticket
+>   quería evitar.
+>
+> Sin ninguna de las dos, el rojo del fin de semana enseña a ignorar el rojo, y
+> entonces el lunes que el lote de verdad no corra nadie lo va a mirar.
+
+---
+
 ## Diagnóstico rápido
 
 | Síntoma | Causa más probable |
@@ -312,3 +435,7 @@ tabla. La cabecera de `src/continental/verificar.py` lo tiene en una tabla.
 | A la mañana la lista no tiene precios y el journal del lote está vacío | El timer no está habilitado, o atlas estuvo apagado a las 22:00 (no es `Persistent`, a propósito) |
 | El lote dice "se acabó el tiempo" todas las noches | No es una falla: mira el resumen del journal. Antes de subir `pedido.tope_lote_minutos`, ver la condición de disparo del ADR 0006 |
 | "permission denied for table ..." a las 8 de la mañana | `dbt build` recreó los modelos de `marts` y se llevó los GRANT. Ver el final de `sql/crear_rol.sql` |
+| La pantalla dice "el lote no corrió sobre esta lista" y el journal dice que sí corrió | Falta el GRANT sobre `pedidos.corrida_del_lote`: se corrió la migración `0004` y no `crear_rol.sql` después (A.5). Buscar "permission denied for table corrida_del_lote" en el journal de esa noche |
+| El journal del lote dice "NO se mandó latido a Uptime Kuma: falta KUMA_PUSH_URL_CONTINENTAL" | El monitor no está creado o el token no está en el `.env` (D.1 y D.2). **No es una falla de la corrida** |
+| El monitor de Kuma se pone rojo todos los sábados | Es el fin de semana: el timer es `Mon-Fri`. Ver el aviso de D.3 — se silencia con una ventana de mantenimiento, no subiendo el intervalo |
+| El monitor de Kuma se ve verde y la lista no tiene precios | El lote corrió y se detuvo al tope: eso late en verde **a propósito** (D.3). El número está en el journal y arriba de la tabla de la pantalla |

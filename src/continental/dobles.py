@@ -27,18 +27,22 @@ from continental.almacenamiento import (
     RENGLON_ABIERTO,
     RENGLON_DESCARTADO,
     VENCIDO,
+    CorridaDelLote,
     PedidoSugeridoDuplicado,
     PedidoSugeridoGuardado,
     PrecioDeProveedor,
     Ventana,
     armar_guardado,
+    columnas_de_la_corrida,
     columnas_de_la_lista,
     columnas_del_precio,
     columnas_del_renglon,
+    corrida_desde_columnas,
     precio_desde_columnas,
     renglon_guardado_desde_columnas,
     revisar_el_precio,
     revisar_el_renglon,
+    revisar_la_corrida,
     revisar_la_lista,
     ultimo_por_proveedor,
 )
@@ -47,6 +51,8 @@ from continental.doyle import (
     EstadoDeBusqueda,
     FilaDeProveedor,
     RespuestaDeProveedor,
+    SesionAbriendose,
+    SesionConfirmada,
     SesionDeProveedor,
 )
 from continental.precios import LecturaDePrecio
@@ -117,6 +123,18 @@ class DoyleFalso:
         default_factory=dict
     )
     sesiones_en_memoria: list[dict] = field(default_factory=list)
+    #: Los proveedores a los que se les pidió abrir el navegador y todavía
+    #: nadie confirmó. Es el `_abiertas` del Doyle real, con la misma regla: un
+    #: segundo `abrir` del mismo proveedor NO abre otra ventana.
+    sesiones_abriendose: list[str] = field(default_factory=list)
+    #: Los que se confirmaron, en orden. Sirve para afirmar "se le pidió a
+    #: Doyle que guardara la sesión de LEVIC" sin mirar dentro de la ruta.
+    sesiones_confirmadas: list[str] = field(default_factory=list)
+    #: Para los que se prepara el aviso honesto de Doyle: se confirmó y la
+    #: página seguía viéndose como un login. Es la diferencia entre "ya está" y
+    #: "vuelve a intentarlo", y sin poder prepararla no se puede probar que la
+    #: pantalla la dice.
+    sesiones_que_siguen_en_login: list[str] = field(default_factory=list)
     falla: Exception | None = None
     #: Términos que se pidieron, en orden. Sirve para comprobar el ORDEN de
     #: importancia del lote nocturno sin mirar dentro de la implementación.
@@ -177,6 +195,38 @@ class DoyleFalso:
             )
             for s in self.sesiones_en_memoria
         ]
+
+    # ------------------------------------------- abrir sesión (ticket 19)
+    #
+    # El doble **no abre ningún navegador y no puede abrirlo**: apunta quién
+    # se lo pidió y contesta. Eso no es una limitación del doble, es el punto
+    # entero de que exista — Continental no toca un navegador nunca (regla 1
+    # de `CLAUDE.md`), y una prueba que abriera Chrome estaría probando Doyle.
+
+    def abrir_sesion(self, proveedor: str) -> SesionAbriendose:
+        self._revisar()
+        ya_abierta = proveedor in self.sesiones_abriendose
+        if not ya_abierta:
+            self.sesiones_abriendose.append(proveedor)
+        return SesionAbriendose(proveedor=proveedor, ya_abierta=ya_abierta)
+
+    def confirmar_sesion(self, proveedor: str) -> SesionConfirmada:
+        self._revisar()
+        if proveedor not in self.sesiones_abriendose:
+            # El Doyle real contesta 400 con este mismo sentido: no hay
+            # ventana que confirmar. Se levanta para que el doble rechace lo
+            # mismo que rechaza el de verdad; un doble permisivo deja el suite
+            # en verde y rompe en atlas.
+            raise ValueError(
+                f"No hay una sesión de {proveedor!r} abriéndose: primero se "
+                "aprieta el botón que abre el navegador."
+            )
+        self.sesiones_abriendose.remove(proveedor)
+        self.sesiones_confirmadas.append(proveedor)
+        return SesionConfirmada(
+            proveedor=proveedor,
+            todavia_parece_login=proveedor in self.sesiones_que_siguen_en_login,
+        )
 
 
 def respuesta_lista(
@@ -308,11 +358,16 @@ class AlmacenamientoFalso:
     #: el doble sobreescribiera lo que Postgres conserva — el suite quedaría en
     #: verde sobre la decisión más importante del ticket 12.
     precios: list[dict] = field(default_factory=list)
+    #: Las filas de `pedidos.corrida_del_lote` (ticket 19), en el orden en que
+    #: se escribieron. También una LISTA: esa tabla solo crece igual que la del
+    #: precio, y `ultima_corrida` elige la más reciente al leer, no al escribir.
+    corridas: list[dict] = field(default_factory=list)
     falla: Exception | None = None
     antes_de_insertar: Callable[[], object] | None = None
     _siguiente_lista: int = 1
     _siguiente_renglon: int = 1
     _siguiente_precio: int = 1
+    _siguiente_corrida: int = 1
 
     def _revisar(self) -> None:
         if self.falla is not None:
@@ -354,6 +409,24 @@ class AlmacenamientoFalso:
         self._revisar()
         fila = self._fila(negocio, fecha_del_pedido)
         return None if fila is None else armar_guardado(fila, fila["renglones"])
+
+    def leer_por_id(
+        self, negocio: str, pedido_sugerido_id: int
+    ) -> PedidoSugeridoGuardado | None:
+        """El `WHERE` de `_LEER_LISTA_POR_ID`: el negocio y el id, nada más.
+
+        **Con el negocio y no solo con el id**, igual que allá: una lista de
+        otro negocio no se ve desde éste (regla 7), y un doble que la enseñara
+        dejaría en verde una ruta que en atlas leería lo ajeno.
+        """
+        self._revisar()
+        for fila in self.listas:
+            if (
+                fila["negocio"] == negocio
+                and fila["pedido_sugerido_id"] == pedido_sugerido_id
+            ):
+                return armar_guardado(fila, fila["renglones"])
+        return None
 
     def leer_renglon(self, negocio: str, renglon_id: int):
         """El `WHERE` de `_LEER_RENGLON_POR_ID`: el negocio y el id, nada más."""
@@ -748,6 +821,49 @@ class AlmacenamientoFalso:
             renglon_id: ultimo_por_proveedor(filas)
             for renglon_id, filas in por_renglon.items()
         }
+
+    # ------------------------------------------ la corrida del lote (19)
+
+    def guardar_la_corrida(self, negocio: str, corrida: CorridaDelLote) -> int:
+        """El `INSERT` de `_GUARDAR_CORRIDA`, con sus mismas reglas.
+
+        **Sin `WHERE` contra la lista**, igual que el de verdad: una corrida en
+        la que no hubo lista es justo la que más hace falta poder escribir.
+
+        `termino_en` lo pone aquí el doble con la hora de ahora, que es lo que
+        la tabla hace con su `DEFAULT now()`.
+        """
+        self._revisar()
+        columnas = columnas_de_la_corrida(corrida, negocio)
+        revisar_la_corrida(columnas)
+        columnas["corrida_del_lote_id"] = self._siguiente_corrida
+        columnas["termino_en"] = dt.datetime.now(dt.UTC)
+        self._siguiente_corrida += 1
+        self.corridas.append(columnas)
+        return columnas["corrida_del_lote_id"]
+
+    def ultima_corrida(
+        self, negocio: str, pedido_sugerido_id: int
+    ) -> CorridaDelLote | None:
+        """El `order by termino_en desc, corrida_del_lote_id desc limit 1`.
+
+        El desempate por id va aquí igual que allá: dos corridas escritas en el
+        mismo microsegundo —alguien lanzando el lote a mano dos veces— dejarían
+        que el orden lo decidiera el plan de Postgres.
+        """
+        self._revisar()
+        de_la_lista = [
+            f
+            for f in self.corridas
+            if f["negocio"] == negocio
+            and f["pedido_sugerido_id"] == pedido_sugerido_id
+        ]
+        if not de_la_lista:
+            return None
+        ultima = max(
+            de_la_lista, key=lambda f: (f["termino_en"], f["corrida_del_lote_id"])
+        )
+        return corrida_desde_columnas(ultima)
 
     def vencer_las_de_dias_anteriores(
         self, negocio: str, fecha_del_pedido: dt.date

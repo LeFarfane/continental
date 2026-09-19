@@ -45,6 +45,26 @@ pedido:
   # cumplir nunca. Hay una prueba que comprueba que el de la unidad sea mayor.
   tope_lote_minutos: 60
 
+  # El botón "completar lo que falta" (ticket 19). Vuelve a consultar SOLO los
+  # renglones a los que volver a preguntar puede cambiarles algo -sin lectura,
+  # o con huecos de los tres que se arreglan reintentando- y nunca los que ya
+  # tienen precio: eso serían cuatro visitas a portales ajenos para ganar como
+  # mucho una cotización más.
+  completar:
+    # Cuánto puede durar UNA vuelta del botón. Es distinto del tope del lote y
+    # a propósito: el lote corre de noche con el horario entero por delante, y
+    # esto lo aprieta una persona que está esperando, a media mañana y con la
+    # farmacia abierta.
+    #
+    # A ~36 s por renglón -cuatro portales a ~9 s- veinte minutos son unos
+    # treinta renglones. Lo que no alcance NO deja fila y no se inventa
+    # ninguna: se cuenta, se dice, y el botón sigue ahí.
+    #
+    # El tope se mira ANTES de arrancar cada renglón y nunca en medio de uno,
+    # igual que el del lote y por lo mismo: cortar una consulta a la mitad
+    # tiraría una búsqueda que ya costó ~9 s por proveedor.
+    tope_minutos: 20
+
   # Consultar el precio de UN renglón en Doyle (ticket 12). Esto no es el lote:
   # es el botón que el encargado aprieta cuando quiere el precio de algo
   # concreto, sin esperar a la noche.

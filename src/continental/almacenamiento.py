@@ -100,6 +100,42 @@ ESTADOS_DEL_RENGLON: tuple[str, ...] = (
 
 CLASIFICACIONES = (MEDICAMENTO, ABARROTE, SIN_CLASIFICAR)
 
+# ------------------------------------------- cómo acaba una corrida del lote
+#
+# Viven aquí y no en `lote.py`, aunque sea el lote quien los escribe, y la
+# razón es la misma por la que los estados de la lista viven aquí: **el DDL los
+# repite en un CHECK** (`ck_corrida_final`), y lo que tiene CHECK tiene que
+# estar donde está el resto del vocabulario de las tablas. `lote.py` los
+# reexporta para que quien lea el lote los encuentre donde los busca, y
+# `test_sql_del_pedido.py` compara esta tupla contra el archivo `.sql`.
+#
+# Importarlos al revés —que esto importara de `lote.py`— sería un ciclo: el
+# lote ya importa este módulo entero.
+
+#: Se consultaron todos los renglones de la lista y sobró tiempo.
+TERMINO = "terminó"
+
+#: Se acabaron los minutos del tope con renglones por consultar. **No es un
+#: error**: es exactamente lo que el ticket 18 pide que pase, y es el hecho del
+#: que sale la frase *"el lote se cortó por tiempo"* del ticket 19.
+SE_ACABO_EL_TIEMPO = "se acabó el tiempo"
+
+#: Algo tumbó la corrida entera: Postgres se cayó, alguien mató el proceso. Lo
+#: que ya se había guardado sigue guardado — no hay nada que deshacer.
+SE_INTERRUMPIO = "se interrumpió"
+
+#: No hubo lista que consultar. La farmacia cierra los domingos y no hay una
+#: sola venta en domingo en 33 meses: un lote que no encuentra ventas no falló.
+SIN_LISTA = "no hubo lista"
+
+#: Los cuatro, y ningún sinónimo. El DDL los repite en `ck_corrida_final`.
+FINALES_DE_LA_CORRIDA: tuple[str, ...] = (
+    TERMINO,
+    SE_ACABO_EL_TIEMPO,
+    SE_INTERRUMPIO,
+    SIN_LISTA,
+)
+
 #: Los decimales de cada columna `numeric`, tal como los declara el DDL.
 #: **Redondear aquí no es cosmético**: Postgres redondea al guardar, así que un
 #: doble que conservara el float entero devolvería `4.000000000000001` donde la
@@ -918,6 +954,219 @@ def ultimo_por_proveedor(
     return tuple(ultimas[clave] for clave in sorted(ultimas))
 
 
+# ---------------------------------------------- la corrida del lote (19)
+
+
+@dataclass(frozen=True, slots=True)
+class CorridaDelLote:
+    """Cómo le fue al lote nocturno una noche. **Una fila por corrida.**
+
+    Es el resumen del ticket 18 —`lote.ResumenDeLaCorrida`— guardado, y el ADR
+    0007 explica por qué se guarda y por qué con este grano. En una frase:
+    la pregunta que la pantalla no podía contestar era *"¿corrió el lote sobre
+    esta lista y cómo acabó?"*, y esa pregunta tiene **una** respuesta por
+    noche. Guardarla cuesta una fila; deducir de ahí el estado de un renglón es
+    una resta que se hace al leer.
+
+    **No es la bitácora.** La bitácora sigue siendo el journal
+    (`journalctl -u continental-lote`), que tiene el relato renglón por renglón
+    y que —esto es lo que la tabla no puede— **deja rastro aunque Postgres sea
+    justo lo que se cayó**. Esto es el dato que la pantalla consulta.
+
+    `pedido_sugerido_id` y `fecha_del_pedido` son nulos en una corrida que no
+    llegó a abrir lista (`no hubo lista`, o una que se cortó antes). Nulo
+    porque no hubo, no porque no se sepa.
+
+    **`termino_en` es `None` mientras la corrida no se haya guardado**, y por
+    eso va con default y después de `final`. La hora la pone la BASE con
+    `now()` —igual que `consultado_en` del precio, y por lo mismo: la pone el
+    servidor que guarda la fila, así que dos procesos con relojes distintos no
+    dejan corridas incomparables—. El lote arma este objeto para escribirlo y
+    ahí todavía no hay hora que poner: inventarle una del reloj local sería
+    escribir un instante que no es el que la fila va a llevar. `None` quiere
+    decir *"esto es lo que se va a guardar"*; con fecha, *"esto es lo que se
+    leyó"*.
+
+    Los conteos son los del resumen y **no se recalculan aquí**: se escriben
+    tal como el lote los contó, que es lo mismo que imprimió en el journal. Dos
+    versiones de la misma noche es justo lo que el ADR 0006 no quería.
+    """
+
+    corrida_del_lote_id: int
+    negocio: str
+    pedido_sugerido_id: int | None
+    fecha_del_pedido: dt.date | None
+    final: str
+    termino_en: dt.datetime | None = None
+    segundos: float = 0.0
+    tope_minutos: float = 0.0
+    en_la_lista: int = 0
+    consultados: int = 0
+    con_precio: int = 0
+    sin_alcanzar: int = 0
+    no_se_pudo: int = 0
+    sin_clave: int = 0
+    orden_cumplido: bool = False
+    detalle: str = ""
+
+    @property
+    def sin_precio(self) -> int:
+        """Renglones que acabaron sin un solo precio. **Derivado**, no guardado.
+
+        Dos columnas que tienen que sumar lo mismo dejan de sumarlo el día que
+        alguien escriba una y no la otra. Es el mismo criterio que
+        `ConteoDeLaLista.sin_comparar`.
+        """
+        return self.en_la_lista - self.con_precio
+
+    @property
+    def se_corto_por_tiempo(self) -> bool:
+        """Si se acabó el tope con renglones sin consultar. **No es un error.**"""
+        return self.final == SE_ACABO_EL_TIEMPO
+
+    @property
+    def se_interrumpio(self) -> bool:
+        return self.final == SE_INTERRUMPIO
+
+    @property
+    def llego_al_final(self) -> bool:
+        """Si recorrió la lista entera. Distinto de "le fue bien"."""
+        return self.final == TERMINO
+
+    @property
+    def hubo_fallas(self) -> bool:
+        """Si algún renglón se intentó y no dejó ni una fila guardada.
+
+        Es lo que vuelve **insegura** la atribución por renglón (ADR 0007): con
+        fallas y tope a la vez, de un renglón sin lectura no se puede afirmar
+        cuál de los dos le tocó.
+        """
+        return self.no_se_pudo > 0
+
+
+def columnas_de_la_corrida(corrida: CorridaDelLote, negocio: str) -> dict:
+    """Las columnas de `pedidos.corrida_del_lote` para un resumen.
+
+    `termino_en` **no está aquí**, por la misma razón que `consultado_en` del
+    precio: la pone la base con `now()`, que es la hora del servidor que guarda
+    la fila. Dos procesos con relojes distintos no dejan corridas
+    incomparables.
+
+    `segundos` y `tope_minutos` sí vienen de aquí y son del reloj **monótono**
+    del lote: no son instantes, son duraciones, y una duración no la puede
+    medir el que la guarda.
+    """
+    return {
+        "negocio": negocio,
+        "pedido_sugerido_id": corrida.pedido_sugerido_id,
+        "fecha_del_pedido": corrida.fecha_del_pedido,
+        "final": corrida.final,
+        "segundos": round(float(corrida.segundos), 1),
+        "tope_minutos": round(float(corrida.tope_minutos), 1),
+        "en_la_lista": int(corrida.en_la_lista),
+        "consultados": int(corrida.consultados),
+        "con_precio": int(corrida.con_precio),
+        "sin_alcanzar": int(corrida.sin_alcanzar),
+        "no_se_pudo": int(corrida.no_se_pudo),
+        "sin_clave": int(corrida.sin_clave),
+        "orden_cumplido": bool(corrida.orden_cumplido),
+        "detalle": _vacio_a_nulo(corrida.detalle),
+    }
+
+
+def revisar_la_corrida(columnas: dict) -> None:
+    """Los CHECK de `pedidos.corrida_del_lote`, escritos en Python.
+
+    Postgres los aplica por su cuenta y no necesita esto; el doble sí. Cada
+    `raise` nombra la restricción que estaría violando — un doble permisivo
+    deja el suite en verde y rompe en atlas.
+    """
+    if not columnas["negocio"]:
+        raise ValueError("negocio vacío: lo rechaza ck_corrida_negocio.")
+    if columnas["final"] not in FINALES_DE_LA_CORRIDA:
+        raise ValueError(
+            f"Final {columnas['final']!r} fuera del vocabulario. Lo rechaza "
+            f"ck_corrida_final, que solo conoce {FINALES_DE_LA_CORRIDA}. La "
+            "pantalla decide con este valor qué frase le pone a un renglón sin "
+            "lectura: un quinto valor sin migración se leería como 'el lote no "
+            "corrió'."
+        )
+    if columnas["detalle"] == "":
+        raise ValueError(
+            "detalle en cadena vacía. La columna tiene CHECK (detalle <> ''): "
+            "o hay texto o es NULL. Ver columnas_de_la_corrida."
+        )
+    for columna in (
+        "en_la_lista",
+        "consultados",
+        "con_precio",
+        "sin_alcanzar",
+        "no_se_pudo",
+        "sin_clave",
+    ):
+        if columnas[columna] < 0:
+            raise ValueError(
+                f"{columna} negativo: lo rechaza ck_corrida_conteos. Un conteo "
+                "negativo no es 'menos que ninguno', es un error de quien contó."
+            )
+    if columnas["segundos"] < 0 or columnas["tope_minutos"] < 0:
+        raise ValueError("Duración negativa: la rechaza ck_corrida_duracion.")
+    if columnas["consultados"] > columnas["en_la_lista"]:
+        raise ValueError(
+            "Se consultaron más renglones de los que había en la lista: lo "
+            "rechaza ck_corrida_consultados. Es el conteo que la pantalla usa "
+            "para decir '210 de 380', y un numerador mayor que el denominador "
+            "se lee como una pantalla rota."
+        )
+    if columnas["con_precio"] > columnas["consultados"]:
+        raise ValueError(
+            "Más renglones con precio que consultados: lo rechaza "
+            "ck_corrida_con_precio. Un precio no llega de un renglón que no se "
+            "consultó."
+        )
+    if (columnas["pedido_sugerido_id"] is None) != (
+        columnas["fecha_del_pedido"] is None
+    ):
+        raise ValueError(
+            "La lista y su fecha van juntas o no van: lo rechaza "
+            "ck_corrida_lista. Una corrida con fecha y sin lista —o al revés— "
+            "no se puede leer: la pantalla busca por id y escribiría la fecha "
+            "de otra noche."
+        )
+
+
+def corrida_desde_columnas(fila) -> CorridaDelLote:
+    """Una fila leída → el resumen guardado. Lo usan las dos implementaciones.
+
+    `NULL` vuelve a ser `""` en `detalle`, como en el resto del módulo. Los
+    `numeric` de duración sí salen como `float`: no son dinero, son segundos
+    que se pintan con un decimal, y `Decimal` ahí solo complicaría la división
+    entre sesenta.
+    """
+    return CorridaDelLote(
+        corrida_del_lote_id=int(fila["corrida_del_lote_id"]),
+        negocio=fila["negocio"],
+        pedido_sugerido_id=(
+            None
+            if fila["pedido_sugerido_id"] is None
+            else int(fila["pedido_sugerido_id"])
+        ),
+        fecha_del_pedido=fila["fecha_del_pedido"],
+        termino_en=fila["termino_en"],
+        final=fila["final"],
+        segundos=float(fila["segundos"]),
+        tope_minutos=float(fila["tope_minutos"]),
+        en_la_lista=int(fila["en_la_lista"]),
+        consultados=int(fila["consultados"]),
+        con_precio=int(fila["con_precio"]),
+        sin_alcanzar=int(fila["sin_alcanzar"]),
+        no_se_pudo=int(fila["no_se_pudo"]),
+        sin_clave=int(fila["sin_clave"]),
+        orden_cumplido=bool(fila["orden_cumplido"]),
+        detalle=fila["detalle"] or "",
+    )
+
+
 # --------------------------------------------------------------- interfaz
 
 
@@ -960,6 +1209,26 @@ class AlmacenamientoDelPedido(Protocol):
         self, negocio: str, fecha_del_pedido: dt.date
     ) -> PedidoSugeridoGuardado | None:
         """La lista de ese día con sus renglones, o `None` si no hay."""
+        ...
+
+    def leer_por_id(
+        self, negocio: str, pedido_sugerido_id: int
+    ) -> PedidoSugeridoGuardado | None:
+        """La misma lista, buscada **por su id**. `None` si no hay.
+
+        La hermana de `leer`, y no una duplicada: quien tiene una lista en la
+        pantalla tiene su id, no su fecha, y volver a anclar la fecha para
+        releerla sería resolver dos veces el mismo `max(fecha)` —con la
+        posibilidad de que la segunda vez dé otra cosa, que es exactamente lo
+        que este repo evita anclando en el dato—.
+
+        La estrena el botón de completar del ticket 19, que recibe el id y
+        necesita los renglones de esa lista para saber cuáles faltan. Era la
+        **condición de disparo escrita en el hilo abierto 2 de `HANDOVER.md`**:
+        *"cuando entre un `leer_por_id` al almacenamiento por otra razón, esto
+        se cierra en una línea"* — el "esto" es el conteo de huecos que
+        envejece al consultar un precio.
+        """
         ...
 
     def corte_del_ultimo_cerrado(
@@ -1191,6 +1460,36 @@ class AlmacenamientoDelPedido(Protocol):
         de aparecer con una tupla vacía: "no está" y "está vacío" quieren decir
         lo mismo aquí y tener dos maneras de decirlo invita a que alguien
         compruebe solo una.
+        """
+        ...
+
+    def guardar_la_corrida(self, negocio: str, corrida: CorridaDelLote) -> int:
+        """Deja escrito cómo le fue al lote esta noche. Devuelve el id.
+
+        **Solo inserta**, igual que el precio congelado y por la misma razón:
+        una corrida es un hecho del pasado, y la de anoche no se corrige porque
+        hoy haya otra. Cero significa "no se escribió" y quien llame lo dice.
+
+        Quien la llama es `lote.correr_el_lote`, en el mismo `finally` donde
+        imprime el resumen, y **envuelta en su propio `try`**: una corrida de
+        sesenta minutos no se marca como rota porque esta fila no se pudo
+        escribir (ADR 0007).
+        """
+        ...
+
+    def ultima_corrida(
+        self, negocio: str, pedido_sugerido_id: int
+    ) -> CorridaDelLote | None:
+        """La última corrida del lote **sobre esa lista**, o `None` si no hubo.
+
+        `None` es un dato y es medio ticket 19: quiere decir *"el lote no corrió
+        sobre esta lista"*, que es lo que distingue "nadie lo consultó" de "el
+        lote no llegó" (hilo abierto 10 de `HANDOVER.md`). No es un hueco que
+        haya que disimular.
+
+        Por la lista y no por la fecha: dos listas del mismo día no pueden
+        existir —`ux_pedido_sugerido_dia`— pero la pantalla ya tiene el id a la
+        mano y buscar por él no depende de volver a anclar una fecha.
         """
         ...
 
@@ -1521,6 +1820,46 @@ _VENCER = text(
     """
 )
 
+# La corrida del lote (ticket 19, ADR 0007). **Un INSERT pelado**, sin `SELECT`
+# que lo acote: al revés que el precio, esto no cuelga de un renglón que tenga
+# que existir. Una corrida en la que no hubo lista es justamente la que más
+# hace falta poder escribir —es la que contesta "el lote corrió y no encontró
+# ventas"— y un `insert ... select` contra `pedido_sugerido` no escribiría ni
+# una fila en ese caso.
+#
+# `termino_en` lo pone la base con `now()`, igual que `consultado_en`.
+_GUARDAR_CORRIDA = text(
+    """
+    insert into pedidos.corrida_del_lote
+        (negocio, pedido_sugerido_id, fecha_del_pedido, final, segundos,
+         tope_minutos, en_la_lista, consultados, con_precio, sin_alcanzar,
+         no_se_pudo, sin_clave, orden_cumplido, detalle)
+    values
+        (:negocio, :pedido_sugerido_id, :fecha_del_pedido, :final, :segundos,
+         :tope_minutos, :en_la_lista, :consultados, :con_precio, :sin_alcanzar,
+         :no_se_pudo, :sin_clave, :orden_cumplido, :detalle)
+    returning corrida_del_lote_id
+    """
+)
+
+# La última corrida sobre una lista. `limit 1` con el orden del índice
+# `ix_corrida_ultima`: `termino_en desc` y el id como desempate, por lo mismo
+# que en `_LEER_PRECIOS` —`now()` es la hora de la transacción y dos corridas
+# lo podrían compartir si alguien lanzara el lote dos veces a mano—.
+_ULTIMA_CORRIDA = text(
+    """
+    select corrida_del_lote_id, negocio, pedido_sugerido_id, fecha_del_pedido,
+           termino_en, final, segundos, tope_minutos, en_la_lista, consultados,
+           con_precio, sin_alcanzar, no_se_pudo, sin_clave, orden_cumplido,
+           detalle
+      from pedidos.corrida_del_lote
+     where negocio = :negocio
+       and pedido_sugerido_id = :pedido_sugerido_id
+     order by termino_en desc, corrida_del_lote_id desc
+     limit 1
+    """
+)
+
 
 class AlmacenamientoPostgres:
     """`AlmacenamientoDelPedido` contra el esquema `pedidos` (ADR 0003).
@@ -1557,6 +1896,29 @@ class AlmacenamientoPostgres:
     ) -> PedidoSugeridoGuardado | None:
         with self._motor().connect() as conexion:
             return self._leer(conexion, negocio, fecha_del_pedido)
+
+    def leer_por_id(
+        self, negocio: str, pedido_sugerido_id: int
+    ) -> PedidoSugeridoGuardado | None:
+        # `connect` y no `begin`: esto solo lee. Las dos consultas —la cabecera
+        # y sus renglones— van en la MISMA conexión, igual que en `leer`, para
+        # que no se pueda leer una cabecera de un momento y unos renglones de
+        # otro.
+        with self._motor().connect() as conexion:
+            cabecera = (
+                conexion.execute(
+                    _LEER_LISTA_POR_ID,
+                    {
+                        "negocio": negocio,
+                        "pedido_sugerido_id": pedido_sugerido_id,
+                    },
+                )
+                .mappings()
+                .first()
+            )
+            if cabecera is None:
+                return None
+            return self._con_renglones(conexion, cabecera)
 
     def _leer(
         self, conexion, negocio: str, fecha_del_pedido: dt.date
@@ -1791,6 +2153,35 @@ class AlmacenamientoPostgres:
                 max(conexion.execute(_GUARDAR_PRECIO, fila).rowcount, 0)
                 for fila in filas
             )
+
+    def guardar_la_corrida(self, negocio: str, corrida: CorridaDelLote) -> int:
+        columnas = columnas_de_la_corrida(corrida, negocio)
+        # Se revisa antes de escribir, igual que el precio: el `final` decide
+        # qué frase le pone la pantalla a cada renglón sin lectura, y un valor
+        # fuera del vocabulario se leería como "el lote no corrió".
+        revisar_la_corrida(columnas)
+        with self._motor().begin() as conexion:
+            fila = (
+                conexion.execute(_GUARDAR_CORRIDA, columnas).mappings().first()
+            )
+        return 0 if fila is None else int(fila["corrida_del_lote_id"])
+
+    def ultima_corrida(
+        self, negocio: str, pedido_sugerido_id: int
+    ) -> CorridaDelLote | None:
+        with self._motor().connect() as conexion:
+            fila = (
+                conexion.execute(
+                    _ULTIMA_CORRIDA,
+                    {
+                        "negocio": negocio,
+                        "pedido_sugerido_id": pedido_sugerido_id,
+                    },
+                )
+                .mappings()
+                .first()
+            )
+        return None if fila is None else corrida_desde_columnas(fila)
 
     def _mover_el_renglon(self, sentencia, parametros: dict):
         """El `UPDATE` de un renglón y la relectura de su lista, en una transacción.

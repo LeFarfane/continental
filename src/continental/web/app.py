@@ -13,6 +13,7 @@ from __future__ import annotations
 import dataclasses
 import datetime as dt
 import logging
+import time
 from pathlib import Path
 
 import httpx
@@ -24,9 +25,11 @@ from pydantic import BaseModel
 from continental import __version__
 from continental.almacen import LecturaDelAlmacen
 from continental.almacenamiento import (
+    ABIERTO,
     CANTIDAD_FINAL_MINIMA,
     RENGLON_ABIERTO,
     AlmacenamientoDelPedido,
+    CorridaDelLote,
     PedidoSugeridoGuardado,
     Ventana,
     dias_primera_vez_configurados,
@@ -43,10 +46,23 @@ from continental.config import cargar
 from continental.consultas import (
     RegistroDeConsultas,
     ajustes_de_la_consulta,
+    consultar_en_fila,
     consultar_y_congelar,
     lecturas_como_json,
+    tope_del_completado_segundos,
 )
 from continental.doyle import ClienteDeDoyle
+from continental.faltantes import (
+    NUNCA_SE_CONSULTO,
+    elegir_los_faltantes,
+    faltantes_como_json,
+    frase_de_la_corrida,
+    hueco_como_json,
+    huecos_que_se_pueden_reintentar,
+    por_que_no_hay_lectura,
+    proveedores_con_sesion_caducada,
+)
+from continental.precios import nombre_del_proveedor
 from continental.sugerido import armar_la_lista
 from continental.vistas import VISTAS
 from continental.web.dependencias import (
@@ -325,7 +341,8 @@ def pedido_sugerido(
         )
         precios = {}
 
-    return _como_json(guardado, precios)
+    return _como_json(guardado, precios, _ultima_corrida(almacenamiento, negocio,
+                                                         guardado.pedido_sugerido_id))
 
 
 @app.post("/api/pedido-sugerido/{pedido_sugerido_id}/cerrar")
@@ -759,6 +776,170 @@ def consultar_el_precio(
     )
 
 
+@app.post("/api/pedido-sugerido/{pedido_sugerido_id}/completar")
+def completar_lo_que_falta(
+    pedido_sugerido_id: int,
+    request: Request,
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+    doyle: ClienteDeDoyle = Depends(obtener_doyle),
+    consultas: RegistroDeConsultas = Depends(obtener_consultas),
+):
+    """Vuelve a consultar **solo los precios que faltan**, sin lanzar el lote.
+
+    La segunda casilla del ticket 19, y la cara: cada renglón que entre aquí
+    son cuatro visitas a portales ajenos con las credenciales del dueño, ~9 s
+    por proveedor. Por eso *faltar* es más estrecho que *estar incompleto*, y
+    la definición vive en una función pura con su tabla de casos
+    (`faltantes.por_que_falta`). En una línea: **falta lo que volver a
+    preguntar puede cambiar**.
+
+    Quién entra:
+
+    - los que **no tienen ni una lectura** —el lote no llegó, o nadie los
+      consultó—, y
+    - los que se consultaron, **no dieron ni un precio**, y tienen al menos un
+      hueco de los tres que se arreglan reintentando (`el portal no contestó`,
+      `la sesión caducó`, `no alcanzó el tiempo`).
+
+    Quién **no**, y cada ausencia es una decisión: un renglón **sin EAN** (se
+    arregla en SICAR, no apretando esto), uno con **al menos un precio** —esas
+    cuatro visitas ganarían como mucho una cotización más, y eso es justo lo
+    que el ticket prohíbe con *"sin volver a visitar portales por lo que ya
+    tiene precio"*—, y uno cuyos huecos son todos **definitivos**
+    (`sin resultados`, `no empareja`, `varios resultados`, `precio ilegible`,
+    `no se sabe leer la página`): mañana contestarían lo mismo. Meterlos
+    convertiría este botón en el lote completo con otro nombre.
+
+    **Contesta de inmediato y el trabajo sigue en un hilo**, igual que el botón
+    de un solo renglón, y por la misma razón: doce renglones son dos minutos
+    largos y la pantalla no se puede quedar colgada. La diferencia es que aquí
+    se lanza **un** hilo para todos y se consulta **uno tras otro**: un hilo
+    por faltante serían doce búsquedas simultáneas, que es exactamente lo que
+    le impide a Doyle reutilizar el navegador que tenga abierto (su ADR 0008).
+
+    **No lanza dos veces lo mismo.** Cada renglón se aparta en su turno dentro
+    del candado del registro (`consultas.apartar`), así que un segundo clic
+    —o la otra pestaña del mostrador— se salta los que ya vienen en camino en
+    vez de duplicar la visita.
+
+    Solo sobre una lista **abierta**: volver a consultar una cerrada sería
+    molestar a cuatro portales para cambiar un dato que ya no decide nada.
+    """
+    negocio = cargar().negocio
+    firma = quien(request)
+
+    try:
+        guardado = almacenamiento.leer_por_id(negocio, pedido_sugerido_id)
+    except Exception as exc:  # noqa: BLE001 — el almacenamiento caído es un hueco, no un 500
+        log.exception("No se pudo leer la lista %s para completarla", pedido_sugerido_id)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "detalle": f"no se pudo leer la lista ({type(exc).__name__})",
+            },
+        )
+
+    if guardado is None or guardado.estado != ABIERTO:
+        log.info(
+            "%s quiso completar los precios de la lista %s y no había ninguna "
+            "abierta con ese id en %s.",
+            firma,
+            pedido_sugerido_id,
+            negocio,
+        )
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "detalle": (
+                    "Esa lista ya no está abierta. Vuelve a cargar la página "
+                    "para ver cómo quedó."
+                ),
+            },
+        )
+
+    por_renglon = _precios_de_la_lista(almacenamiento, negocio, pedido_sugerido_id)
+    if por_renglon is None:
+        # Sin poder leer lo congelado no se sabe qué falta, y "no se sabe" no
+        # se atiende preguntándole a los cuatro portales por la lista entera
+        # (regla 4): se dice.
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "detalle": (
+                    "no se pudieron leer los precios guardados, así que no se "
+                    "sabe cuáles faltan"
+                ),
+            },
+        )
+
+    faltantes = elegir_los_faltantes(
+        guardado.de_trabajo,
+        {
+            r.renglon_id: comparar(
+                por_renglon.get(r.renglon_id, ()), r.cantidad_a_pedir
+            )
+            for r in guardado.de_trabajo
+        },
+    )
+
+    if not faltantes:
+        log.info(
+            "%s pidió completar los precios de la lista %s y no falta ninguno.",
+            firma,
+            pedido_sugerido_id,
+        )
+        return {
+            "ok": True,
+            "lanzados": 0,
+            "faltantes": faltantes_como_json(faltantes),
+            "detalle": "No falta ningún precio que volver a consultar.",
+        }
+
+    tope_seg, cada_seg = ajustes_de_la_consulta()
+    tope_total_seg = tope_del_completado_segundos()
+    # El tope se arma AQUÍ y entra como predicado, no se calcula dentro: la
+    # política de cuánto puede durar el completado es de esta ruta, que es
+    # quien lee el YAML, y `consultar_en_fila` se queda sin una sola constante
+    # de tiempo. El reloj es el MONÓTONO: no es un instante, es una duración.
+    arranque = time.monotonic()
+
+    log.info(
+        "%s pidió completar los precios de la lista %s: %d renglón(es) "
+        "faltantes (%d sin una sola lectura), con un tope de %.0f min.",
+        firma,
+        pedido_sugerido_id,
+        len(faltantes),
+        sum(1 for f in faltantes if f.motivo == NUNCA_SE_CONSULTO),
+        tope_total_seg / 60.0,
+    )
+
+    consultas.lanzar(
+        lambda: consultar_en_fila(
+            [(f.renglon_id, f.clave) for f in faltantes],
+            doyle=doyle,
+            almacenamiento=almacenamiento,
+            registro=consultas,
+            negocio=negocio,
+            tope_seg=tope_seg,
+            cada_seg=cada_seg,
+            se_acabo=lambda: time.monotonic() - arranque >= tope_total_seg,
+        )
+    )
+
+    return {
+        "ok": True,
+        "lanzados": len(faltantes),
+        # La cola que se lanzó, para que la pantalla marque esos renglones como
+        # "consultando" sin adivinar cuáles eran. Es la MISMA lista que se le
+        # pasó al hilo, no una segunda manera de calcularla.
+        "faltantes": faltantes_como_json(faltantes),
+        "tope_minutos": round(tope_total_seg / 60.0, 1),
+    }
+
+
 @app.get("/api/renglon/{renglon_id}/precio")
 def precio_del_renglon(
     renglon_id: int,
@@ -785,6 +966,167 @@ def precio_del_renglon(
         precios=_precios_del_renglon(almacenamiento, negocio, renglon_id),
         cantidad=_cantidad_a_pedir(almacenamiento, negocio, renglon_id),
     )
+
+
+# ------------------------------------------ la sesión caducada (ticket 19)
+#
+# **Continental no abre un navegador aquí, y no podría** (regla 1 de
+# `CLAUDE.md`, ADR 0001). Lo que hace es pedírselo a Doyle por HTTP, que es
+# literalmente lo que la regla manda: *"si una pantalla necesita un dato de un
+# portal de proveedor, se lo pide a Doyle"*. El navegador lo abre Doyle, **en
+# la máquina donde Doyle corre**, y quien teclea la contraseña es una persona.
+#
+# QUÉ PASA DEL OTRO LADO Y QUÉ NO, dicho con precisión porque es la mitad que
+# este repo no controla (ADR 0001 de Doyle):
+#
+# - `abrir` deja una ventana de Chrome **visible** esperando. Vuelve de
+#   inmediato y **la sesión todavía no sirve**.
+# - La persona teclea usuario y contraseña EN ESA VENTANA. Eso no se puede
+#   automatizar y no se quiere: son las credenciales del dueño.
+# - `confirmar` le dice a Doyle que ya entró. Doyle exporta las cookies
+#   **antes** de cerrar el navegador —Chrome tira las de sesión al cerrarse y
+#   LEVIC quedaría sin sesión aunque alguien acabara de entrar (ADR 0006 de
+#   Doyle)— y deja el marcador.
+#
+# Así que desde Continental se aprietan los dos botones sin cambiar de
+# aplicación, **y aun así hace falta estar frente a la máquina de Doyle** para
+# la parte de en medio. Hoy Doyle corre en la torre y Continental va a atlas:
+# hasta que Doyle se mude con su visor remoto sobre Xvfb (su ADR 0008, sin
+# hacer), la ventana se abriría en una máquina donde no hay nadie sentado. Eso
+# no lo arregla esta ruta y no se disimula: la pantalla lo dice.
+
+
+@app.post("/api/sesion/{proveedor}/abrir")
+def abrir_la_sesion(
+    proveedor: str,
+    request: Request,
+    doyle: ClienteDeDoyle = Depends(obtener_doyle),
+):
+    """Le pide a Doyle que abra el navegador del login de ese proveedor.
+
+    Es el botón de la tercera casilla del ticket 19 — *"si una sesión caducó,
+    la pantalla lo dice con el botón que la abre"*—, y **lo que devuelve no es
+    una sesión abierta**: es una ventana esperando a que alguien teclee. Se
+    dice con esas palabras, porque un botón que contesta "listo" sobre una
+    sesión que sigue caducada es la falla silenciosa que la regla 4 prohíbe.
+
+    A quién se le ofrece el botón no lo decide esta ruta: sale de las lecturas
+    congeladas con motivo `la sesión caducó` (`sesiones_caducadas` de la carga
+    de la lista). **No de `GET /api/sesiones` de Doyle**, y eso es deliberado:
+    el `guardada` de Doyle solo dice que alguien confirmó una alguna vez, y el
+    2026-09-19 los cuatro decían `guardada` con las cuatro caducadas. Lo que
+    demuestra que una sesión no sirve es un portal que mandó al login.
+
+    Un Doyle apagado sale como hueco con su motivo y no como 500, igual que
+    todo lo demás que depende de él. El motivo es el **tipo** de la falla y
+    nunca su texto (regla 5).
+    """
+    firma = quien(request)
+    try:
+        abriendose = doyle.abrir_sesion(proveedor)
+    except Exception as exc:  # noqa: BLE001 — Doyle caído es un hueco, no un 500
+        log.exception("Doyle no pudo abrir la sesión de %s", proveedor)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "detalle": (
+                    f"Doyle no pudo abrir la sesión de "
+                    f"{nombre_del_proveedor(proveedor)} ({type(exc).__name__}). "
+                    "Mira si está encendido."
+                ),
+            },
+        )
+
+    log.info(
+        "%s pidió abrir la sesión de %s en Doyle%s.",
+        firma,
+        proveedor,
+        " (ya había una ventana esperando)" if abriendose.ya_abierta else "",
+    )
+    return {
+        "ok": True,
+        "proveedor": proveedor,
+        "nombre": nombre_del_proveedor(proveedor),
+        "ya_abierta": abriendose.ya_abierta,
+        "detalle": (
+            "Ya había una ventana de ese portal esperando: es la misma, no se "
+            "abrió otra."
+            if abriendose.ya_abierta
+            else "Doyle abrió el navegador del portal."
+        ),
+        # LO QUE FALTA, DICHO. Sin esto el botón parecería haber terminado el
+        # trabajo, y lo que hizo fue empezarlo.
+        "siguiente": (
+            "Entra con el usuario y la contraseña EN LA VENTANA QUE SE ABRIÓ, "
+            "en la máquina donde corre Doyle, y vuelve aquí a darle a «Ya "
+            "entré». Hasta entonces la sesión sigue caducada."
+        ),
+    }
+
+
+@app.post("/api/sesion/{proveedor}/confirmar")
+def confirmar_la_sesion(
+    proveedor: str,
+    request: Request,
+    doyle: ClienteDeDoyle = Depends(obtener_doyle),
+):
+    """La otra mitad: la persona ya entró, que Doyle guarde las cookies.
+
+    Sin esto, abrir el navegador no deja nada: Chrome tira las cookies de
+    sesión al cerrarse. Doyle las exporta **antes** de cerrar y por eso hacen
+    falta las dos peticiones (su ADR 0006).
+
+    `todavia_parece_login` es el aviso honesto de Doyle —se confirmó y la
+    página seguía viéndose como un login— y **viaja hasta la pantalla**: es la
+    diferencia entre "ya está" y "vuelve a intentarlo", y esconderlo dejaría al
+    encargado creyendo que abrió una sesión que no abrió. Es exactamente la
+    trampa del hilo abierto 1 de `HANDOVER.md`, donde los cuatro proveedores
+    decían `guardada` sin servir ninguno.
+    """
+    firma = quien(request)
+    try:
+        confirmada = doyle.confirmar_sesion(proveedor)
+    except Exception as exc:  # noqa: BLE001 — Doyle caído es un hueco, no un 500
+        log.exception("Doyle no pudo confirmar la sesión de %s", proveedor)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "detalle": (
+                    f"Doyle no pudo guardar la sesión de "
+                    f"{nombre_del_proveedor(proveedor)} ({type(exc).__name__}). "
+                    "Puede que la ventana se cerrara antes de confirmar: "
+                    "vuelve a darle a «Abrir sesión»."
+                ),
+            },
+        )
+
+    log.info(
+        "%s confirmó la sesión de %s en Doyle%s.",
+        firma,
+        proveedor,
+        " — Doyle avisa que la página SEGUÍA viéndose como un login"
+        if confirmada.todavia_parece_login
+        else "",
+    )
+    return {
+        "ok": True,
+        "proveedor": proveedor,
+        "nombre": nombre_del_proveedor(proveedor),
+        "todavia_parece_login": confirmada.todavia_parece_login,
+        "detalle": (
+            "Doyle guardó la sesión, pero la página SEGUÍA viéndose como un "
+            "login. Puede ser que la redirección no hubiera terminado; si el "
+            "siguiente precio vuelve a decir «la sesión caducó», ábrela otra "
+            "vez."
+            if confirmada.todavia_parece_login
+            else (
+                "Sesión guardada. Ya se le puede volver a consultar el precio "
+                "a ese proveedor."
+            )
+        ),
+    }
 
 
 def _cantidad_a_pedir(almacenamiento, negocio: str, renglon_id: int) -> int | None:
@@ -847,6 +1189,39 @@ def _precios_de_la_lista(almacenamiento, negocio: str, pedido_sugerido_id: int):
     except Exception:  # noqa: BLE001 — leer precios caído no puede tumbar la pantalla
         log.exception(
             "No se pudieron leer los precios congelados de la lista %s",
+            pedido_sugerido_id,
+        )
+        return None
+
+
+def _ultima_corrida(
+    almacenamiento, negocio: str, pedido_sugerido_id: int
+) -> CorridaDelLote | None:
+    """Cómo le fue al lote sobre esta lista, o `None` si no hay fila (ADR 0007).
+
+    **`None` es un dato y no un hueco**, y esa es la mitad del ticket 19 que se
+    ve al cargar: quiere decir *"el lote no corrió sobre esta lista"*, que es
+    lo que hasta hoy no se distinguía de *"nadie consultó este renglón"* (hilo
+    abierto 10 de `HANDOVER.md`). La diferencia entre encontrar la fila y no
+    encontrarla es exactamente la diferencia entre los dos.
+
+    Una lectura que **falla** también devuelve `None`, y sí, eso confunde los
+    dos casos hacia el lado de "no corrió" — que dice de menos, nunca de más.
+    Es el trato que el ADR 0007 ya acepta para la corrida que muere sin poder
+    escribir su fila. La alternativa sería tumbar la lista entera porque una
+    consulta de una fila no contestó, y una lista sin precios todavía sirve
+    para pedir. La falla queda entera en la bitácora.
+
+    Es **una** consulta más por carga, de una fila, con su índice
+    `ix_corrida_ultima`.
+    """
+    try:
+        return almacenamiento.ultima_corrida(negocio, pedido_sugerido_id)
+    except Exception:  # noqa: BLE001 — la bitácora caída no tumba la lista
+        log.exception(
+            "No se pudo leer la última corrida del lote de la lista %s. La "
+            "pantalla va a decir «el lote no corrió sobre esta lista», que "
+            "dice de menos.",
             pedido_sugerido_id,
         )
         return None
@@ -1002,6 +1377,30 @@ def _mover_el_renglon(
                 )
             )
         ),
+        # LOS FALTANTES, RECALCULADOS, por la misma razón que el conteo de
+        # arriba y con la misma lectura: descartar saca un renglón de la cola
+        # del botón de completar y devolver lo mete. Un botón que siga
+        # ofreciendo "completar 12" después de descartar cuatro de esos doce
+        # mandaría a molestar a cuatro portales por mercancía que alguien ya
+        # decidió no pedir.
+        #
+        # `null` cuando no se pudieron leer los precios: la pantalla se queda
+        # con el que tenía, viejo pero verdadero.
+        "faltantes": (
+            None
+            if por_renglon is None
+            else faltantes_como_json(
+                elegir_los_faltantes(
+                    guardado.de_trabajo,
+                    {
+                        r.renglon_id: comparar(
+                            por_renglon.get(r.renglon_id, ()), r.cantidad_a_pedir
+                        )
+                        for r in guardado.de_trabajo
+                    },
+                )
+            )
+        ),
     }
 
 
@@ -1024,8 +1423,21 @@ def _armar(almacen: LecturaDelAlmacen, ventana: Ventana):
     return armar_la_lista(almacen, ventana, reglas=reglas_configuradas())
 
 
-def _como_json(guardado: PedidoSugeridoGuardado, precios: dict | None = None) -> dict:
+def _como_json(
+    guardado: PedidoSugeridoGuardado,
+    precios: dict | None = None,
+    corrida: CorridaDelLote | None = None,
+) -> dict:
     """La lista guardada, como la pantalla la lee.
+
+    `corrida` es cómo le fue al lote sobre **esta** lista, o `None` si no hay
+    fila. Viaja en la misma respuesta que la lista y por la misma razón que los
+    precios: es lo que convierte *"nadie lo consultó"* en *"al lote se le acabó
+    el tiempo antes de llegar a éste"*, y pedirla aparte serían dos lecturas en
+    dos momentos que podrían no coincidir. De ella salen tres cosas de esta
+    respuesta —la frase de arriba, el motivo de cada renglón sin lectura, y
+    nada más— y **la regla que las decide es una función pura**
+    (`faltantes.por_que_no_hay_lectura`), no un `if` del JavaScript.
 
     `precios` es lo congelado por renglón, indexado por `renglon_id`. Va por
     omisión en `None` y no en `{}` para que los dos caminos que devuelven una
@@ -1077,6 +1489,7 @@ def _como_json(guardado: PedidoSugeridoGuardado, precios: dict | None = None) ->
                 r,
                 (precios or {}).get(r.renglon_id, ()),
                 comparaciones.get(r.renglon_id),
+                corrida,
             )
             for r in guardado.renglones
         ],
@@ -1101,12 +1514,91 @@ def _como_json(guardado: PedidoSugeridoGuardado, precios: dict | None = None) ->
         "conteo_de_precios": conteo_como_json(
             contar_la_lista(comparaciones[r.renglon_id] for r in guardado.de_trabajo)
         ),
+        # CÓMO LE FUE AL LOTE DE ANOCHE SOBRE ESTA LISTA (ticket 19, ADR 0007).
+        # Se escribe **también cuando fue bien**, por lo mismo que el conteo de
+        # huecos: callar en el caso bueno dejaría el silencio con dos
+        # significados —"corrió y le fue bien" y "esta pantalla no lo cuenta"—
+        # y el encargado no puede distinguirlos.
+        #
+        # `null` quiere decir "no hay corrida de esta lista", que es un dato:
+        # o el lote no corrió, o la lista se armó desde esta pantalla antes de
+        # que pasara por ella.
+        "corrida": _corrida_como_json(corrida),
+        # LO QUE EL BOTÓN DE COMPLETAR VA A CONSULTAR, contado aquí y no en el
+        # navegador. El número va en la etiqueta del botón, y un conteo que el
+        # JavaScript llevara a mano se separa de la verdad en cuanto hay dos
+        # pestañas abiertas en el mostrador.
+        #
+        # Sobre los **de trabajo**: un renglón descartado ya se atendió, y
+        # gastar cuatro visitas a portales en mercancía que nadie va a comprar
+        # es justo lo que no se quiere. Mismo criterio que el conteo de huecos.
+        "faltantes": faltantes_como_json(
+            elegir_los_faltantes(guardado.de_trabajo, comparaciones)
+        ),
+        # A QUIÉN LE CADUCÓ LA SESIÓN, para el botón que la abre. Sale de las
+        # lecturas congeladas y NO de `GET /api/sesiones` de Doyle: el
+        # `guardada` de Doyle no quiere decir que la sesión sirva —el
+        # 2026-09-19 los cuatro decían `guardada` con las cuatro caducadas—, y
+        # lo que sí lo demuestra es un portal que mandó al login.
+        "sesiones_caducadas": [
+            {"proveedor": clave, "nombre": nombre_del_proveedor(clave)}
+            for clave in proveedores_con_sesion_caducada(
+                [comparaciones[r.renglon_id] for r in guardado.de_trabajo]
+            )
+        ],
         "vistas": _vistas(),
     }
 
 
-def _renglon_como_json(renglon, precios=(), comparacion=None) -> dict:
+def _corrida_como_json(corrida: CorridaDelLote | None) -> dict | None:
+    """La corrida del lote como la pantalla la lee, o `None` si no hubo.
+
+    La frase larga viene **hecha** (`faltantes.frase_de_la_corrida`) y no se
+    arma en el JavaScript, por lo mismo que la certeza del ganador del ticket
+    15: una frase compuesta a partir de banderas en el único archivo que
+    ninguna prueba de Python mira es una afirmación sin pruebas. Los números
+    viajan además de la frase porque la pantalla los usa para decidir el color,
+    que es lo único que sí le toca decidir a ella.
+    """
+    if corrida is None:
+        return None
+    return {
+        "final": corrida.final,
+        "frase": frase_de_la_corrida(corrida),
+        "termino_en": (
+            corrida.termino_en.isoformat() if corrida.termino_en else None
+        ),
+        "se_corto_por_tiempo": corrida.se_corto_por_tiempo,
+        "se_interrumpio": corrida.se_interrumpio,
+        "llego_al_final": corrida.llego_al_final,
+        "hubo_fallas": corrida.hubo_fallas,
+        "en_la_lista": corrida.en_la_lista,
+        "consultados": corrida.consultados,
+        "con_precio": corrida.con_precio,
+        "sin_precio": corrida.sin_precio,
+        "sin_alcanzar": corrida.sin_alcanzar,
+        "no_se_pudo": corrida.no_se_pudo,
+        "sin_clave": corrida.sin_clave,
+        "orden_cumplido": corrida.orden_cumplido,
+        "tope_minutos": corrida.tope_minutos,
+        "minutos": round(corrida.segundos / 60.0, 1),
+    }
+
+
+def _renglon_como_json(
+    renglon, precios=(), comparacion=None, corrida: CorridaDelLote | None = None
+) -> dict:
     """Un renglón guardado, como la pantalla lo lee.
+
+    `corrida` es cómo le fue al lote sobre la lista de este renglón, y de ella
+    sale `porque_no_hay_lectura` (ticket 19). Va por omisión en `None` porque
+    las rutas que devuelven **un** renglón —descartar, devolver, ajustar— no
+    tienen la corrida a la mano y no la necesitan: su respuesta sustituye una
+    fila que ya estaba pintada con su motivo, y releerla costaría una consulta
+    por clic para no cambiar nada. Lo que sí pasa es que un renglón sin lectura
+    que alguien devuelve a la lista vuelve sin su motivo hasta la siguiente
+    carga; se ve como el "nadie lo consultó" de antes, que es de menos y nunca
+    de más.
 
     `precios` son las lecturas congeladas de ese renglón, una por proveedor que
     contestó alguna vez. Viaja **dentro del renglón** por la misma razón que la
@@ -1187,7 +1679,61 @@ def _renglon_como_json(renglon, precios=(), comparacion=None) -> dict:
             if comparacion is None
             else comparacion
         ),
+        **_porque_no_hay_lectura_como_json(renglon, comparacion, precios, corrida),
     }
+
+
+def _porque_no_hay_lectura_como_json(
+    renglon, comparacion, precios, corrida: CorridaDelLote | None
+) -> dict:
+    """Los dos campos del ticket 19 que cuelgan de un renglón, o ninguno.
+
+    **`porque_no_hay_lectura`** solo aparece cuando el renglón no tiene NI UNA
+    lectura: es la pregunta que contesta, y ponerlo en un renglón con cuatro
+    precios sería una llave que la pantalla tendría que aprender a ignorar.
+    Son los tres motivos que el ticket pide, más los tres que hacen falta para
+    que no se confundan entre sí:
+
+    - `al lote se le acabó el tiempo` — **el motivo del ticket**, y el que el
+      18 dejó sin poder decir. Sale del `final` de la corrida;
+    - `el lote no corrió sobre esta lista` — no hay fila de corrida;
+    - `la corrida del lote se cortó`, `el lote lo intentó y no pudo`,
+      `el lote no lo miró`, `no tiene código de barras`.
+
+    Los otros dos motivos del ticket —*el portal no contestó* y *la sesión
+    caducó*— **no viven aquí**: son de un proveedor de un renglón y ya viajan
+    dentro de `comparacion.por_proveedor` desde el ticket 12, cada uno con su
+    explicación. Son preguntas de dos granos distintos y por eso salen de dos
+    sitios distintos (ADR 0007).
+
+    **`huecos_reintentables`** son los proveedores de este renglón a los que
+    volver a preguntar puede cambiar algo. La pantalla los usa para ofrecer el
+    botón de abrir sesión al lado del renglón que lo necesita, y para explicar
+    por qué un renglón **con** precio sigue teniendo huecos que el botón de
+    completar no va a atender.
+    """
+    comparacion = (
+        comparar(precios, renglon.cantidad_a_pedir)
+        if comparacion is None
+        else comparacion
+    )
+    salida: dict = {
+        "huecos_reintentables": [
+            {
+                "proveedor": proveedor,
+                "nombre": nombre_del_proveedor(proveedor),
+                "motivo": motivo,
+            }
+            for proveedor, motivo in huecos_que_se_pueden_reintentar(comparacion)
+        ]
+    }
+    if not comparacion.hay_lecturas:
+        salida["porque_no_hay_lectura"] = hueco_como_json(
+            por_que_no_hay_lectura(
+                tiene_clave=bool(renglon.propuesto.clave), corrida=corrida
+            )
+        )
+    return salida
 
 
 def _sin_ventas() -> dict:

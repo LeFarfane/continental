@@ -1,4 +1,4 @@
--- Veredicto sobre el rol `continental` y sus tres tablas: caso por caso, qué
+-- Veredicto sobre el rol `continental` y sus cinco tablas: caso por caso, qué
 -- se esperaba y qué se encontró.
 --
 -- ESTO NO ES UNA LISTA DE BUENOS DESEOS, ES UN GUION QUE DA UN VEREDICTO.
@@ -101,20 +101,21 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
                   WHERE nspname = 'pedidos'
                     AND pg_get_userbyid(nspowner) <> 'continental'))),
 
--- CUATRO desde el ticket 12, que estrenó `pedidos.precio_de_proveedor`. El
--- número está escrito a mano a propósito: si alguien crea una quinta tabla en
--- este esquema sin pasar por `crear_tablas.sql`, esta comprobación se pone en
--- [MAL] en vez de darla por buena. El DDL se corre a mano una vez, así que
--- agregar una tabla es un acto deliberado y debe verse como tal.
+-- CINCO desde el ticket 19, que estrenó `pedidos.corrida_del_lote` (ADR
+-- 0007); eran cuatro desde el ticket 12 y tres al principio. El número está
+-- escrito a mano A PROPÓSITO: si alguien crea una sexta tabla en este esquema
+-- sin pasar por `crear_tablas.sql`, esta comprobación se pone en [MAL] en vez
+-- de darla por buena. El DDL se corre a mano una vez, así que agregar una
+-- tabla es un acto deliberado y debe verse como tal.
 (4,
- 'Las cuatro tablas existen y NO las posee continental',
- '4 tablas, con otro propietario',
+ 'Las cinco tablas existen y NO las posee continental',
+ '5 tablas, con otro propietario',
  (SELECT format('%s tabla(s): %s', count(*),
                 coalesce(string_agg(c.relname || ' -> ' || pg_get_userbyid(c.relowner),
                                     ', ' ORDER BY c.relname), '--'))
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname = 'pedidos' AND c.relkind = 'r'),
- (SELECT count(*) = 4
+ (SELECT count(*) = 5
          AND count(*) FILTER (WHERE pg_get_userbyid(c.relowner) = 'continental') = 0
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname = 'pedidos' AND c.relkind = 'r')),
@@ -137,13 +138,14 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
  NULL),
 
 -- Dinámico a propósito: recorre TODAS las tablas de `pedidos`, así que la
--- cuarta -- y la quinta, el día que la haya-- entra sola. Es la comprobación
+-- quinta -- y la sexta, el día que la haya-- entra sola. Es la comprobación
 -- que caza el olvido más caro de este esquema: una migración que crea una
 -- tabla y a la que nadie le corrió `crear_rol.sql` después. El GRANT no se
 -- puede dar sobre una tabla que no existía, y el síntoma aparece en atlas como
--- "permission denied for table ..." en el primer INSERT.
+-- "permission denied for table ..." en el primer INSERT -- o, con la quinta, a
+-- las 22:00 y sin nadie mirando.
 (6,
- 'continental puede SELECT, INSERT y UPDATE sus cuatro tablas',
+ 'continental puede SELECT, INSERT y UPDATE sus cinco tablas',
  'no le falta ninguno',
  (SELECT coalesce(string_agg(x.tabla || ': le falta ' || x.priv, '; '
                              ORDER BY x.tabla, x.priv),
@@ -220,7 +222,7 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
      AND has_table_privilege('continental', c.oid, p)),
  NULL),
 
--- ---------------------------------------------- la forma de las tres tablas
+-- --------------------------------------------- la forma de las cinco tablas
 --
 -- `CREATE TABLE IF NOT EXISTS` calla si la tabla ya existe con otra forma, así
 -- que comprobar solo los permisos dejaría pasar un DDL editado a medias.
@@ -252,7 +254,7 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
  NULL),
 
 (14,
- 'Las tres tablas dicen a qué negocio pertenecen (regla 7)',
+ 'Todas las tablas dicen a qué negocio pertenecen (regla 7)',
  'ninguna sin negocio',
  (SELECT coalesce(string_agg(c.relname, ', ' ORDER BY c.relname), 'ninguna sin negocio')
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -287,15 +289,36 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
 -- Las llaves son de identidad y no `serial`. La diferencia es un permiso:
 -- `serial` exige además USAGE sobre la secuencia, que se olvida y se
 -- manifiesta como "permission denied for sequence" en el primer INSERT.
+--
+-- SE COMPARA CONTRA EL NÚMERO DE TABLAS DEL ESQUEMA Y NO CONTRA UN NÚMERO
+-- ESCRITO A MANO, y eso es un arreglo del ticket 19: hasta aquí esperaba `3`
+-- cuando ya eran cuatro desde el ticket 12, así que **habría salido [MAL]
+-- sobre una base correcta la primera vez que alguien lo corriera** -- y nadie
+-- lo había corrido nunca (`HANDOVER.md`). Un verificador que da un falso [MAL]
+-- es tan malo como uno que da un falso [BIEN]: los dos enseñan a no creerle.
+--
+-- Lo que de verdad se quiere afirmar es "**una** llave de identidad por tabla,
+-- ninguna `serial`", y eso se escribe con `count(*)` contra `count(*)`: la
+-- sexta tabla entra sola y esta comprobación no hay que volver a tocarla. El
+-- número esperado no es una constante de este archivo, así que se calcula en
+-- `obtenido` y se compara en `ok` -- por eso aquí `ok` no es NULL.
 (16,
- 'Las tres llaves son GENERATED AS IDENTITY (no hacen falta permisos de secuencia)',
- '3',
- (SELECT count(*)::text
-    FROM pg_attribute a
-    JOIN pg_class c ON c.oid = a.attrelid
+ 'Cada tabla tiene UNA llave GENERATED AS IDENTITY (no hacen falta permisos de secuencia)',
+ 'una por tabla',
+ (SELECT format('%s columna(s) de identidad en %s tabla(s)',
+                count(*) FILTER (WHERE a.attidentity <> ''),
+                count(DISTINCT c.oid))
+    FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
-   WHERE n.nspname = 'pedidos' AND c.relkind = 'r' AND a.attidentity <> ''),
- NULL),
+    LEFT JOIN pg_attribute a
+           ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+   WHERE n.nspname = 'pedidos' AND c.relkind = 'r'),
+ (SELECT count(*) FILTER (WHERE a.attidentity <> '') = count(DISTINCT c.oid)
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    LEFT JOIN pg_attribute a
+           ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+   WHERE n.nspname = 'pedidos' AND c.relkind = 'r')),
 
 -- ------------------------------------------- la forma del precio congelado
 --
@@ -362,6 +385,57 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
      AND con.conname IN ('ck_precio_positivo', 'ck_precio_sin_dato')),
  NULL),
 
+-- ------------------------------------------ la forma de la corrida del lote
+--
+-- El ticket 19 estrena la quinta tabla, y lo que esta tabla tiene que perder
+-- no es dinero: es la capacidad de la pantalla de decir por qué un renglón no
+-- tiene precio. Dos comprobaciones, y cada una caza una falla que no se ve.
+
+-- LOS CUATRO FINALES, LEÍDOS DE VUELTA DESDE EL CATÁLOGO, CON SUS ACENTOS. Es
+-- la misma trampa que las comprobaciones 15 y 19 cazan para 'en tránsito' y
+-- para los ocho motivos del precio, y aquí muerde más fuerte: quien escribe en
+-- esta tabla es el LOTE, a las 22:00 y sin nadie mirando. Si psql mandó el DDL
+-- como latin1, el CHECK guardó 'terminÃ³' y el primer INSERT rebota con una
+-- violación de restricción que nadie va a ver hasta la mañana -- y la pantalla
+-- entonces dirá "el lote no corrió sobre esta lista", que es exactamente lo
+-- contrario de lo que pasó.
+(21,
+ 'Los cuatro finales de la corrida sobrevivieron al CHECK, con sus acentos',
+ 'están los cuatro',
+ coalesce(
+   (SELECT CASE
+             WHEN pg_get_constraintdef(con.oid) LIKE '%terminó%'
+              AND pg_get_constraintdef(con.oid) LIKE '%se acabó el tiempo%'
+              AND pg_get_constraintdef(con.oid) LIKE '%se interrumpió%'
+              AND pg_get_constraintdef(con.oid) LIKE '%no hubo lista%'
+                  THEN 'están los cuatro'
+             ELSE pg_get_constraintdef(con.oid)
+           END
+      FROM pg_constraint con
+     WHERE con.conrelid = to_regclass('pedidos.corrida_del_lote')
+       AND con.conname = 'ck_corrida_final'),
+   'NO EXISTE ck_corrida_final'),
+ NULL),
+
+-- LAS TRES RESTRICCIONES QUE IMPIDEN QUE LA PANTALLA ESCRIBA UN ABSURDO.
+-- `ck_corrida_consultados` y `ck_corrida_con_precio` son el par de números con
+-- el que se escribe "el lote consultó 210 de 380": un numerador mayor que el
+-- denominador se lee como una pantalla rota, no como un dato. `ck_corrida_lista`
+-- obliga a que la lista y su fecha vayan juntas o no vayan -- con una sola de
+-- las dos, la pantalla busca por id y escribe la fecha de otra noche.
+(22,
+ 'La corrida no puede guardar un conteo imposible ni media lista',
+ 'están las tres',
+ (SELECT CASE count(*) WHEN 3 THEN 'están las tres'
+                       ELSE format('solo %s: %s', count(*),
+                                   coalesce(string_agg(con.conname, ', '), '--'))
+         END
+    FROM pg_constraint con
+   WHERE con.conrelid = to_regclass('pedidos.corrida_del_lote')
+     AND con.conname IN ('ck_corrida_consultados', 'ck_corrida_con_precio',
+                         'ck_corrida_lista')),
+ NULL),
+
 -- AVISO y no MAL: una tabla temporal vive en la sesión, no puede leer nada que
 -- el rol no pueda leer ya, y desaparece al desconectarse. El permiso llega por
 -- el TEMPORARY que PUBLIC tiene sobre la base por omisión, y quitarlo sería
@@ -426,7 +500,7 @@ BEGIN
     SELECT count(*) INTO total FROM resultado_verificacion;
     RAISE NOTICE '%', format(
         'VEREDICTO: BIEN. Pasaron %s de %s comprobaciones, con %s aviso(s) '
-        || 'conocido(s). El rol escribe sus tres tablas, lee las cinco de '
+        || 'conocido(s). El rol escribe sus cinco tablas, lee las cinco de '
         || 'marts y no puede crear tablas ni leer el resto del almacén.',
         total - avisos, total, avisos);
 END

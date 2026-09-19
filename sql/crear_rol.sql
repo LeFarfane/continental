@@ -6,12 +6,16 @@
 --
 -- **Y por eso también se corre después de toda migración que CREE una tabla.**
 -- Es el caso de `sql/migraciones/0003-*` (ticket 12), que estrena
--- `pedidos.precio_de_proveedor`: el GRANT que este archivo corrió en su día no
--- la alcanza, porque no existía. Las migraciones que solo agregan columnas no
--- lo exigen -- el GRANT es sobre la tabla entera-- y es justo esa diferencia
--- la que hace fácil olvidarlo. Sin este paso, el primer precio que se intente
--- guardar en atlas rebota con "permission denied for table
--- precio_de_proveedor", después de que en la torre todo se vio verde.
+-- `pedidos.precio_de_proveedor`, y el de `sql/migraciones/0004-*` (ticket 19),
+-- que estrena `pedidos.corrida_del_lote`: el GRANT que este archivo corrió en
+-- su día no las alcanza, porque no existían. Las migraciones que solo agregan
+-- columnas no lo exigen -- el GRANT es sobre la tabla entera-- y es justo esa
+-- diferencia la que hace fácil olvidarlo. Sin este paso, el primer precio que
+-- se intente guardar en atlas rebota con "permission denied for table
+-- precio_de_proveedor", después de que en la torre todo se vio verde; y el
+-- lote de las 22:00 no puede escribir su corrida, así que a la mañana la
+-- pantalla dice "el lote no corrió sobre esta lista" sobre una noche en la que
+-- sí corrió -- sin nadie mirando, que es lo que lo hace peor.
 --
 -- Desde `~/proyectos/Continental` en atlas:
 --
@@ -104,7 +108,7 @@ ALTER ROLE continental
 
 
 -- --------------------------------------------------------------------------
--- Lo suyo: las tres tablas del pedido
+-- Lo suyo: las cinco tablas del esquema `pedidos`
 -- --------------------------------------------------------------------------
 
 -- USAGE sobre el esquema y NADA MÁS. Sin esto el rol ni siquiera puede ver que
@@ -162,13 +166,32 @@ GRANT SELECT, INSERT, UPDATE ON pedidos.pedido               TO continental;
 -- hay que reescribir es la 6. No al revés.
 GRANT SELECT, INSERT, UPDATE ON pedidos.precio_de_proveedor TO continental;
 
--- Sin GRANT sobre secuencias, y no es un olvido: las tres llaves son
+-- La quinta, desde el ticket 19 (ADR 0007): una fila por corrida del lote
+-- nocturno, con cómo le fue esa noche.
+--
+-- **UPDATE por la misma razón escrita arriba y con el mismo descuento**: ésta
+-- también SOLO CRECE y ningún código la actualiza -- una corrida es un hecho
+-- del pasado--, así que en rigor le bastaría SELECT e INSERT. Se otorga igual
+-- para que la comprobación 6 de `verificar_rol.sql` pueda seguir siendo "no le
+-- falta ninguno sobre ninguna" en vez de una lista de parejas tabla-permiso
+-- que hay que mantener a mano.
+--
+-- **Sin este GRANT, el síntoma aparece a las 22:00 y nadie lo ve**: el lote
+-- rebota con "permission denied for table corrida_del_lote", la corrida NO se
+-- aborta por eso -- la escritura va en su propio `try`, ADR 0007-- así que los
+-- precios de la noche se guardan igual, y lo único que pasa es que a la mañana
+-- la pantalla dice "el lote no corrió sobre esta lista" sobre una noche en la
+-- que sí corrió. Es la AUSENCIA de la fila lo que significa eso.
+GRANT SELECT, INSERT, UPDATE ON pedidos.corrida_del_lote   TO continental;
+
+-- Sin GRANT sobre secuencias, y no es un olvido: las cinco llaves son
 -- `GENERATED ALWAYS AS IDENTITY`, y la secuencia de una columna de identidad
 -- es interna a la tabla -- el INSERT sobre la tabla basta. Con `serial` haría
 -- falta además `USAGE` sobre la secuencia, un permiso extra fácil de olvidar
 -- que se manifiesta como "permission denied for sequence" en el primer INSERT
--- de producción. La comprobación 16 de `verificar_rol.sql` confirma que las
--- tres siguen siendo de identidad.
+-- de producción. La comprobación 16 de `verificar_rol.sql` confirma que todas
+-- siguen siendo de identidad -- y lo hace contra el NÚMERO DE TABLAS del
+-- esquema, no contra un número escrito a mano, para que la sexta entre sola.
 
 
 -- --------------------------------------------------------------------------

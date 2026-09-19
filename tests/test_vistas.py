@@ -263,17 +263,27 @@ def test_la_pantalla_trae_el_interruptor_con_los_dos_nombres(cliente):
     # y nadie sabría cuál tiene razón.
     assert portada.count("fetch('/api/pedido-sugerido')") == 1
 
-    # Siete llamadas en total y ni una más. Subió de cinco a siete con el
-    # ticket 12, y las dos nuevas son las del precio: el POST que pide la
-    # consulta y el GET que la sondea. **El sondeo es a Continental y nunca a
-    # Doyle** —el navegador no le habla a un módulo, regla 2 de CLAUDE.md— y
-    # tampoco vuelve a pedir la lista: trae el renglón y sus precios.
+    # DIEZ llamadas en total y ni una más. Fueron cinco, siete con el ticket 12
+    # y diez con el 19, y el número está escrito a mano a propósito: cada
+    # llamada nueva desde esta pantalla es una decisión —qué se le pide al
+    # servidor y qué se calcula aquí— y agregarla sin querer es cómo la regla
+    # que decide algo se muda al único archivo que ninguna prueba de Python
+    # mira.
     #
-    # Las otras cinco: la lista, la salud y los módulos al cargar, y dos POST
-    # que ocurren cuando alguien los pide —el cierre del ticket 08 y el mover
-    # un renglón, que es UNA sola llamada compartida por descartar, devolver
-    # (ticket 10) y ajustar la cantidad (ticket 11)—.
-    assert portada.count("fetch('/api/") == 7
+    # Las cinco primeras: la lista, la salud y los módulos al cargar, y dos
+    # POST que ocurren cuando alguien los pide —el cierre del ticket 08 y el
+    # mover un renglón, que es UNA sola llamada compartida por descartar,
+    # devolver (ticket 10) y ajustar la cantidad (ticket 11)—.
+    #
+    # Las dos del ticket 12 son las del precio: el POST que pide la consulta y
+    # el GET que la sondea.
+    #
+    # Las tres del ticket 19: completar lo que falta, y los dos pasos de abrir
+    # una sesión caducada (abrir y confirmar). **Las tres van a Continental y
+    # ninguna a Doyle** —el navegador no le habla a un módulo, regla 2 de
+    # CLAUDE.md—: quien le pide a Doyle que abra el navegador es Continental
+    # por HTTP, no esta pantalla.
+    assert portada.count("fetch('/api/") == 10
     assert portada.count("fetch('/api/pedido-sugerido')") == 1
 
 

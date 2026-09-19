@@ -1,5 +1,12 @@
--- DDL de las tres tablas del pedido. Esquema `pedidos`, en el Postgres de
+-- DDL de las CINCO tablas del pedido. Esquema `pedidos`, en el Postgres de
 -- farmacia-data.
+--
+-- Tres son las del glosario de `CONTEXT.md` -- el pedido sugerido, sus
+-- renglones y el pedido por proveedor-; la cuarta es el precio congelado por
+-- renglón y proveedor (ticket 12) y la quinta es la corrida del lote nocturno
+-- (ticket 19, ADR 0007): una fila por noche con cómo le fue, que es de donde
+-- la pantalla saca "el lote se cortó por tiempo antes de llegar a este
+-- renglón" sin tener que leer un journal por ssh.
 --
 -- SE CORRE A MANO, UNA VEZ, CON CREDENCIALES DE DUEÑO. No lo corre el
 -- servicio, no lo corre una prueba y no lo corre el lote de la noche: crear
@@ -68,7 +75,7 @@
 -- se corren a mano con credenciales de dueño (ADR 0003) y ninguno de los dos
 -- lo toca el código de arranque.
 --
--- Hoy hay tres, y se corren en orden:
+-- Hoy hay cuatro, y se corren en orden:
 --
 --   1. `sql/migraciones/0001-renglon-quien-descarto-y-cuando.sql` (ticket 10),
 --      que agrega `descartado_por` y `descartado_en`.
@@ -77,17 +84,23 @@
 --      `ajustada_en`.
 --   3. `sql/migraciones/0003-precio-congelado-por-renglon-y-proveedor.sql`
 --      (ticket 12), que crea la CUARTA tabla, `pedidos.precio_de_proveedor`.
+--   4. `sql/migraciones/0004-la-corrida-del-lote-en-una-fila.sql` (ticket 19),
+--      que crea la QUINTA, `pedidos.corrida_del_lote`: una fila por noche con
+--      cómo le fue al lote (ADR 0007).
 --
--- Las tres son idempotentes, así que correrlas sobre una base que ya las tiene
--- -o sobre una recién creada con este archivo- no rompe nada.
+-- Las cuatro son idempotentes, así que correrlas sobre una base que ya las
+-- tiene -o sobre una recién creada con este archivo- no rompe nada.
 --
--- **La 0003 es distinta de las otras dos y hay que decirlo**: crea una tabla
--- entera, así que además exige volver a correr `sql/crear_rol.sql` -- un GRANT
--- no se puede dar sobre una tabla que no existía-. Las dos primeras no lo
--- exigían porque el GRANT es sobre la tabla completa y cubre las columnas
--- nuevas. Sin ese paso, el primer precio que se intente guardar en atlas
--- rebota con "permission denied for table precio_de_proveedor", después de que
--- aquí todo se vio verde.
+-- **La 0003 y la 0004 son distintas de las dos primeras y hay que decirlo**:
+-- cada una crea una TABLA entera, así que además exigen volver a correr
+-- `sql/crear_rol.sql` -- un GRANT no se puede dar sobre una tabla que no
+-- existía-. Las dos primeras no lo exigían porque el GRANT es sobre la tabla
+-- completa y cubre las columnas nuevas, y es justo esa diferencia la que hace
+-- fácil olvidarlo. Sin ese paso, el primer precio que se intente guardar en
+-- atlas rebota con "permission denied for table precio_de_proveedor" -- y con
+-- la 0004, el lote de las 22:00 no puede escribir su corrida, así que a la
+-- mañana la pantalla dice "el lote no corrió sobre esta lista" sobre una noche
+-- en la que sí corrió-, después de que aquí todo se vio verde.
 --
 --
 -- ## Acentos
@@ -131,8 +144,9 @@ $guardia$;
 CREATE SCHEMA IF NOT EXISTS pedidos;
 
 COMMENT ON SCHEMA pedidos IS
-    'Lo que Continental escribe: pedido sugerido, renglones y pedidos por '
-    'proveedor. Lo posee el dueño del almacén; el rol continental solo tiene '
+    'Lo que Continental escribe: pedido sugerido, renglones, pedidos por '
+    'proveedor, el precio congelado de cada proveedor y la corrida del lote '
+    'nocturno. Lo posee el dueño del almacén; el rol continental solo tiene '
     'USAGE, nunca CREATE.';
 
 
@@ -824,12 +838,190 @@ COMMENT ON COLUMN pedidos.precio_de_proveedor.descripcion_del_proveedor IS
     'Cómo describe el portal el producto de esta fila. Evidencia de que se '
     'comparó lo mismo.';
 
+
+-- --------------------------------------------------------------------------
+-- 5) La corrida del lote: cómo le fue al lote nocturno UNA noche.
+-- --------------------------------------------------------------------------
+--
+-- UNA FILA POR CORRIDA. No por renglón y no por proveedor: el ADR 0007 tiene
+-- el porqué completo, con las dos opciones descartadas. En corto: la pregunta
+-- que la pantalla no podía contestar era "¿corrió el lote sobre esta lista y
+-- cómo acabó?", y esa pregunta tiene UNA respuesta por noche. Guardarla cuesta
+-- una fila; deducir de ahí el estado de un renglón concreto es una resta que
+-- se hace al leer y no cuesta almacenamiento.
+--
+-- LO QUE SE DESCARTÓ, porque volverá a proponerse: escribir cuatro filas de
+-- `precio_de_proveedor` con motivo 'no alcanzó el tiempo' por cada renglón que
+-- el tope no alcanzó. Dos razones, y la primera es la que la hunde:
+--
+--   1. Habría que INVENTARSE a qué proveedores se le iba a preguntar. Esa
+--      lista sale del acuse de Doyle, y a un renglón que no se consultó no
+--      hubo acuse que darle. Escribir "le preguntamos a NADRO y no contestó a
+--      tiempo" cuando a NADRO no se le preguntó es escribir un hecho que no
+--      ocurrió, que es lo mismo que prohíbe el cero inventado (regla 4 de
+--      CLAUDE.md): un dato falso es peor que un hueco, porque se cuenta, se
+--      compara y se cree.
+--   2. Dispararía la condición de revisión del ADR 0004: una noche que corte
+--      al 20% dejaría ~11,000 filas de puro hueco.
+--
+-- LO QUE SE RENUNCIA, dicho con todas sus letras: aquí se guarda CUÁNTOS
+-- renglones quedaron sin alcanzar, no CUÁLES. Para un renglón sin lectura la
+-- frase se deduce del `final` de la corrida, y hay una noche en la que la
+-- deducción no es segura: aquella en la que el tope cortó Y ADEMÁS hubo
+-- renglones `no_se_pudo` -Doyle caído a media corrida-. Ahí
+-- `faltantes.por_que_no_hay_lectura` devuelve `seguro=False` y la pantalla
+-- escribe "probablemente" con el otro número al lado.
+--
+-- ESTA TABLA SOLO CRECE, igual que el precio congelado: una corrida es un
+-- hecho del pasado y la de anoche no se corrige porque hoy haya otra. El
+-- código no tiene un solo UPDATE sobre ella. Lo que cuesta: cinco filas por
+-- semana -el timer es `OnCalendar=Mon-Fri 22:00`, sin `Persistent=true`-,
+-- con una decena de columnas de enteros. La tabla del precio crece ~4xN por
+-- noche; ésta crece 1.
+--
+-- Y NO SUSTITUYE AL JOURNAL. `journalctl -u continental-lote` sigue siendo la
+-- bitácora del relato: tiene el renglón por renglón y -esto es lo que la tabla
+-- no puede- deja rastro aunque Postgres sea justo lo que se cayó. Una corrida
+-- que muere sin poder escribir aquí no deja fila, y la pantalla la ve como "el
+-- lote no corrió", que en ese caso dice de menos.
+
+CREATE TABLE IF NOT EXISTS pedidos.corrida_del_lote (
+    corrida_del_lote_id bigint        GENERATED ALWAYS AS IDENTITY,
+    negocio             text          NOT NULL,
+    pedido_sugerido_id  bigint,
+    fecha_del_pedido    date,
+    termino_en          timestamptz   NOT NULL DEFAULT now(),
+    final               text          NOT NULL,
+    segundos            numeric(10,1) NOT NULL DEFAULT 0,
+    tope_minutos        numeric(10,1) NOT NULL DEFAULT 0,
+    en_la_lista         integer       NOT NULL DEFAULT 0,
+    consultados         integer       NOT NULL DEFAULT 0,
+    con_precio          integer       NOT NULL DEFAULT 0,
+    sin_alcanzar        integer       NOT NULL DEFAULT 0,
+    no_se_pudo          integer       NOT NULL DEFAULT 0,
+    sin_clave           integer       NOT NULL DEFAULT 0,
+    orden_cumplido      boolean       NOT NULL DEFAULT false,
+    detalle             text,
+
+    CONSTRAINT pk_corrida_del_lote
+        PRIMARY KEY (corrida_del_lote_id),
+
+    CONSTRAINT ck_corrida_negocio
+        CHECK (negocio <> ''),
+
+    -- EL VOCABULARIO CERRADO DE `almacenamiento.FINALES_DE_LA_CORRIDA`, con el
+    -- mismo texto exacto. Cerrado y no texto libre por la misma razón que los
+    -- motivos del precio, y aquí pesa más: LA PANTALLA DECIDE CON ESTE VALOR
+    -- qué frase le pone a cada renglón sin lectura. Un quinto valor metido sin
+    -- migración no se vería como un error: se leería como "el lote no corrió".
+    --
+    -- LOS ACENTOS VIAJAN DENTRO DEL CHECK, igual que el de 'en tránsito' y los
+    -- ocho motivos del precio: si psql manda este archivo como latin1, el
+    -- primer INSERT del lote rebota a las 22:00 con una violación de
+    -- restricción que nadie sabría explicar -y el lote es justamente lo que
+    -- corre sin nadie mirando-. Ver el SET client_encoding de la cabecera.
+    CONSTRAINT ck_corrida_final
+        CHECK (final IN (
+            'terminó', 'se acabó el tiempo', 'se interrumpió', 'no hubo lista')),
+
+    -- UN CONTEO NEGATIVO NO ES "MENOS QUE NINGUNO", ES UN ERROR DE QUIEN
+    -- CONTÓ. Y estos números se pintan en la pantalla como "210 de 380": un
+    -- negativo ahí se lee como una pantalla rota, no como un dato.
+    CONSTRAINT ck_corrida_conteos
+        CHECK (en_la_lista  >= 0 AND consultados  >= 0
+           AND con_precio   >= 0 AND sin_alcanzar >= 0
+           AND no_se_pudo   >= 0 AND sin_clave    >= 0),
+
+    CONSTRAINT ck_corrida_duracion
+        CHECK (segundos >= 0 AND tope_minutos >= 0),
+
+    -- EL NUMERADOR NO PUEDE SER MAYOR QUE EL DENOMINADOR. Es el par de números
+    -- con el que la pantalla escribe "el lote consultó 210 de 380 renglones".
+    CONSTRAINT ck_corrida_consultados
+        CHECK (consultados <= en_la_lista),
+
+    -- Un precio no llega de un renglón que no se consultó.
+    CONSTRAINT ck_corrida_con_precio
+        CHECK (con_precio <= consultados),
+
+    -- LA LISTA Y SU FECHA VAN JUNTAS O NO VAN. Las dos son NULL en una corrida
+    -- que no llegó a abrir lista -'no hubo lista', o una que se cortó antes-,
+    -- y eso es NULO PORQUE NO HUBO, no porque no se sepa. Una corrida con
+    -- fecha y sin lista -o al revés- no se puede leer: la pantalla busca por
+    -- id y escribiría la fecha de otra noche.
+    CONSTRAINT ck_corrida_lista
+        CHECK ((pedido_sugerido_id IS NULL) = (fecha_del_pedido IS NULL)),
+
+    -- La cadena vacía no existe en ninguna columna de texto de este esquema,
+    -- por la misma razón que en `ck_renglon_clave`: se compara igual que un
+    -- dato y empareja con cualquier otra vacía. O hay texto o es NULL.
+    CONSTRAINT ck_corrida_detalle
+        CHECK (detalle <> ''),
+
+    -- Compuesta con `negocio`, igual que las otras llaves foráneas de este
+    -- esquema: una corrida de farmacia_01 no puede colgar de una lista de otro
+    -- negocio (regla 7 de CLAUDE.md).
+    --
+    -- ADMITE NULOS, y eso es lo que la distingue de la del precio: una corrida
+    -- sin lista SÍ se guarda -es justo la que contesta "el lote corrió y no
+    -- encontró ventas"-. En Postgres una llave foránea compuesta con MATCH
+    -- SIMPLE -el de omisión- no se comprueba cuando alguna de sus columnas es
+    -- nula, así que esas filas entran sin apuntar a nada.
+    CONSTRAINT fk_corrida_lista
+        FOREIGN KEY (pedido_sugerido_id, negocio)
+        REFERENCES pedidos.pedido_sugerido (pedido_sugerido_id, negocio)
+);
+
+COMMENT ON TABLE pedidos.corrida_del_lote IS
+    'Cómo le fue al lote nocturno UNA noche: una fila por corrida, no por '
+    'renglón. SOLO CRECE. Es de donde la pantalla saca "el lote se cortó por '
+    'tiempo antes de llegar a este renglón" (ADR 0007).';
+
+-- El instante lo pone la BASE, igual que `consultado_en` del precio y por lo
+-- mismo: lo pone el servidor que guarda la fila, así que dos procesos con
+-- relojes distintos no dejan corridas incomparables. `timestamptz` porque el
+-- contenedor corre en UTC y un `timestamp` sin zona guardaría un reloj de
+-- pared que alguien en México lee seis horas en el futuro.
+COMMENT ON COLUMN pedidos.corrida_del_lote.termino_en IS
+    'Cuándo acabó la corrida, instante con zona, puesto por la base.';
+
+COMMENT ON COLUMN pedidos.corrida_del_lote.final IS
+    'Cómo acabó, del vocabulario de almacenamiento.FINALES_DE_LA_CORRIDA. '
+    '"se acabó el tiempo" NO es un error: detenerse al tope es lo que se le '
+    'pide al lote. "se interrumpió" sí lo es, y lo que hay que mirar es el '
+    'journal de esa noche.';
+
+-- DURACIONES Y NO INSTANTES, y por eso éstas sí vienen de Python: las mide el
+-- reloj MONÓTONO del lote, y una duración no la puede medir el que la guarda.
+-- En `numeric` como todo número de este esquema -nada de coma flotante, que es
+-- lo que la comprobación 13 de verificar_rol.sql vigila-, con un decimal, que
+-- es lo que se pinta.
+COMMENT ON COLUMN pedidos.corrida_del_lote.segundos IS
+    'Cuánto duró la corrida, del reloj monótono del lote. También es el `ping` '
+    'del latido a Uptime Kuma: una noche que empiece a tardar el doble se ve '
+    'en esa gráfica antes de que nadie mire un journal.';
+
+COMMENT ON COLUMN pedidos.corrida_del_lote.sin_alcanzar IS
+    'Cuántos renglones quedaron FALTANTES POR TOPE. Cuántos, no cuáles: ese es '
+    'el precio que el ADR 0007 pagó a cambio de una fila en vez de ~2,750.';
+
+COMMENT ON COLUMN pedidos.corrida_del_lote.no_se_pudo IS
+    'Cuántos se intentaron y no dejaron ni una fila guardada (Doyle no '
+    'contestó al pedir la búsqueda). Mayor que cero es lo que vuelve INSEGURA '
+    'la atribución por renglón: hay dos maneras de quedarse sin lectura esa '
+    'noche y de un renglón concreto no se puede afirmar cuál le tocó.';
+
+COMMENT ON COLUMN pedidos.corrida_del_lote.orden_cumplido IS
+    'Si el recorrido fue en orden de importancia (clase ABC). Falso mientras '
+    'marts.dim_producto no tenga la columna clase_abc (ADR 0018 de '
+    'farmacia-data): el lote lo dice en vez de disimularlo.';
+
 -- --------------------------------------------------------------------------
 -- Índices
 -- --------------------------------------------------------------------------
 --
--- Solo dos, y los dos tienen un consumidor concreto. Un índice sin consulta
--- que lo use es trabajo por fila escrita a cambio de nada.
+-- Solo cuatro, y los cuatro tienen un consumidor concreto. Un índice sin
+-- consulta que lo use es trabajo por fila escrita a cambio de nada.
 
 -- "No se vuelve a proponer mientras esté en tránsito, porque eso sería pedirlo
 -- dos veces" (CONTEXT.md). Cada vez que se arma una lista hay que preguntar
@@ -864,6 +1056,21 @@ CREATE INDEX IF NOT EXISTS ix_renglon_pedido
 CREATE INDEX IF NOT EXISTS ix_precio_ultimo
     ON pedidos.precio_de_proveedor
        (negocio, renglon_id, proveedor, consultado_en DESC);
+
+-- "La última corrida del lote sobre esta lista": es EXACTAMENTE el `order by`
+-- de `almacenamiento._ULTIMA_CORRIDA`, columna por columna y con el mismo
+-- DESC. La pantalla lo consulta en CADA carga de la lista, así que es una
+-- lectura por carga contra una tabla que solo crece.
+--
+-- Hoy la tabla tiene cinco filas por semana y un recorrido completo costaría
+-- nada; el índice está por la misma razón que el del precio y no por el
+-- tamaño de hoy: es la tabla la que crece sin que nadie la pode, y el costo de
+-- pintar la lista no debe crecer con el historial de corridas.
+--
+-- `negocio` primero por la regla 7, igual que en el del precio.
+CREATE INDEX IF NOT EXISTS ix_corrida_ultima
+    ON pedidos.corrida_del_lote
+       (negocio, pedido_sugerido_id, termino_en DESC);
 
 
 -- --------------------------------------------------------------------------

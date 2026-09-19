@@ -263,6 +263,26 @@ class RegistroDeConsultas:
         por ahí — y ahí la carrera no cuesta una fila duplicada, cuesta cuatro
         visitas de más a los portales del dueño.
         """
+        consulta, nueva = self.apartar(renglon_id, clave)
+        if nueva:
+            self.lanzar(lambda: tarea(consulta))
+        return consulta, nueva
+
+    def apartar(self, renglon_id: int, clave: str) -> tuple[Consulta, bool]:
+        """Registra la consulta como en curso **sin lanzar nada**.
+
+        Es la mitad de `pedir` que toma la decisión, separada de la que lanza,
+        y existe para el botón de completar del ticket 19: ese botón consulta
+        muchos renglones **uno tras otro, en un solo hilo**, así que necesita
+        apartar cada uno en su turno y no cuatro a la vez. Con `pedir` serían
+        tantos hilos como faltantes, y eso es exactamente lo que le impide a
+        Doyle reutilizar el navegador que tenga abierto (su ADR 0008).
+
+        La decisión de no apartar se toma **dentro del candado**, junto con la
+        de registrar la nueva: comprobar fuera y registrar después tiene una
+        carrera en medio, y ahí la carrera no cuesta una fila duplicada, cuesta
+        cuatro visitas de más a los portales del dueño.
+        """
         with self._candado:
             previa = self._consultas.get(renglon_id)
             if previa is not None and previa.en_curso:
@@ -279,7 +299,6 @@ class RegistroDeConsultas:
             )
             self._consultas[renglon_id] = consulta
 
-        self.lanzar(lambda: tarea(consulta))
         return consulta, True
 
     def terminar(
@@ -406,6 +425,103 @@ def consultar_y_congelar(
     )
 
 
+# ------------------------------------- muchos renglones, uno tras otro (19)
+
+
+@dataclass(frozen=True, slots=True)
+class Completado:
+    """Cómo le fue a una vuelta del botón de completar. No es una fila.
+
+    `pedidos` cuenta los que de verdad se le preguntaron a Doyle;
+    `ya_en_curso`, los que se saltaron porque otra pestaña —o el clic anterior—
+    ya los estaba consultando. Los dos por separado porque quieren decir cosas
+    distintas: el segundo no es un fallo, es el candado haciendo su trabajo.
+    """
+
+    pedidos: int = 0
+    ya_en_curso: int = 0
+    sin_tiempo: int = 0
+
+    @property
+    def se_quedo_sin_tiempo(self) -> bool:
+        return self.sin_tiempo > 0
+
+
+def consultar_en_fila(
+    pendientes: Sequence[tuple[int, str]],
+    *,
+    doyle: ClienteDeDoyle,
+    almacenamiento,
+    registro: "RegistroDeConsultas",
+    negocio: str,
+    tope_seg: float = TOPE_POR_OMISION_SEG,
+    cada_seg: float = CADA_POR_OMISION_SEG,
+    se_acabo: Callable[[], bool] = lambda: False,
+    dormir: Callable[[float], object] = time.sleep,
+    ahora: Callable[[], float] = time.monotonic,
+) -> Completado:
+    """Consulta una lista de renglones **uno tras otro, en este mismo hilo**.
+
+    Es lo que corre detrás del botón *"completar lo que falta"* del ticket 19,
+    y es estrictamente secuencial por la misma razón que el lote nocturno: cada
+    renglón son cuatro visitas a portales ajenos con las credenciales del
+    dueño, y pedirle a Doyle varias búsquedas a la vez es justo lo que le
+    impide reutilizar el navegador que tenga abierto (su ADR 0008). Un botón
+    que lanzara doce hilos serían cuarenta y ocho navegadores.
+
+    **No lanza nada**: quien la mete en un hilo es la ruta, con un solo
+    `registro.lanzar`. Así el suite —cuyo lanzador ejecuta ahí mismo— la corre
+    entera de forma determinista y sin sincronizar nada.
+
+    `se_acabo` es el tope, **inyectado como predicado** y no calculado aquí.
+    Eso deja la política de cuánto puede durar el completado donde se decide
+    —la ruta, leyendo el YAML— y esta función sin una sola constante de tiempo.
+    Se mira **antes de arrancar cada renglón** y nunca en medio de uno, igual
+    que el tope del lote y por lo mismo: cortar una consulta a la mitad tiraría
+    una búsqueda que ya costó ~9 s por proveedor.
+
+    Lo que queda sin consultar por el tope **no deja fila y no se inventa
+    ninguna** (ADR 0006): se cuenta y se dice. El renglón se sigue viendo como
+    lo que es, un renglón sin lectura, y su botón sigue ahí.
+    """
+    hecho = Completado()
+
+    for posicion, (renglon_id, clave) in enumerate(pendientes):
+        if se_acabo():
+            faltan = len(pendientes) - posicion
+            log.warning(
+                "Completar lo que falta: se acabó el tiempo con %d renglón(es) "
+                "sin consultar. No quedan marcados de ninguna manera: se "
+                "vuelven a ver como lo que son, renglones sin lectura, y su "
+                "botón sigue ahí.",
+                faltan,
+            )
+            return replace(hecho, sin_tiempo=faltan)
+
+        consulta, nueva = registro.apartar(renglon_id, clave)
+        if not nueva:
+            # Otra pestaña —o el clic anterior— ya lo está consultando. No se
+            # vuelve a pedir: serían cuatro visitas de más por un renglón que
+            # ya viene en camino.
+            hecho = replace(hecho, ya_en_curso=hecho.ya_en_curso + 1)
+            continue
+
+        consultar_y_congelar(
+            consulta,
+            doyle=doyle,
+            almacenamiento=almacenamiento,
+            registro=registro,
+            negocio=negocio,
+            tope_seg=tope_seg,
+            cada_seg=cada_seg,
+            dormir=dormir,
+            ahora=ahora,
+        )
+        hecho = replace(hecho, pedidos=hecho.pedidos + 1)
+
+    return hecho
+
+
 # ---------------------------------------------------- lo que dice el YAML
 
 
@@ -425,8 +541,53 @@ def ajustes_de_la_consulta() -> tuple[float, float]:
 
     crudo = cargar().pedido.get("consulta_de_precio") or {}
     return (
-        _numero_positivo(crudo.get("tope_seg"), TOPE_POR_OMISION_SEG, "tope_seg"),
-        _numero_positivo(crudo.get("cada_seg"), CADA_POR_OMISION_SEG, "cada_seg"),
+        _numero_positivo(
+            crudo.get("tope_seg"),
+            TOPE_POR_OMISION_SEG,
+            "consulta_de_precio.tope_seg",
+        ),
+        _numero_positivo(
+            crudo.get("cada_seg"),
+            CADA_POR_OMISION_SEG,
+            "consulta_de_precio.cada_seg",
+        ),
+    )
+
+
+#: Cuánto puede durar **una vuelta entera** del botón de completar si el YAML
+#: no lo dice. Veinte minutos, que es un tercio del tope del lote nocturno, y
+#: ese número tiene una razón: esto lo aprieta una persona que está mirando la
+#: pantalla, a media mañana y con la farmacia abierta, no un proceso que corre
+#: solo a las 22:00 con toda la noche por delante.
+#:
+#: A ~36 s por renglón —cuatro portales a ~9 s— son unos treinta renglones, que
+#: es el orden de lo que un tope de 60 minutos suele dejar sin consultar. Lo
+#: que no alcance **no deja fila y no se inventa ninguna** (ADR 0006): se
+#: cuenta, se dice, y el botón sigue ahí.
+TOPE_DEL_COMPLETADO_POR_OMISION_MIN = 20.0
+
+
+def tope_del_completado_segundos() -> float:
+    """Cuánto puede durar una vuelta del botón de completar, del YAML.
+
+    `pedido.completar.tope_minutos`. La misma capa delgada que
+    `ajustes_de_la_consulta` y `lote.tope_del_lote_segundos`, y por la misma
+    razón: cuánto se le permite al botón molestar a los portales del dueño es
+    una decisión de operación, no una constante de Python.
+
+    **Es el tope del BOTÓN, no el del lote**, y son dos números distintos a
+    propósito: el lote corre de noche con el horario entero por delante y éste
+    lo aprieta alguien que está esperando con la farmacia abierta. Compartirlos
+    haría que subir uno subiera el otro sin que nadie lo decidiera.
+    """
+    from continental.config import cargar
+
+    crudo = (cargar().pedido.get("completar") or {}).get("tope_minutos")
+    return (
+        _numero_positivo(
+            crudo, TOPE_DEL_COMPLETADO_POR_OMISION_MIN, "completar.tope_minutos"
+        )
+        * 60.0
     )
 
 
@@ -438,9 +599,9 @@ def _numero_positivo(crudo, omision: float, nombre: str) -> float:
 
     if valor <= 0:
         log.warning(
-            "config/continental.yml no trae un `pedido.consulta_de_precio.%s` "
-            "utilizable (%r). Se usa %g. Agrégalo al YAML para que la espera "
-            "sea la que el negocio quiere.",
+            "config/continental.yml no trae un `pedido.%s` utilizable (%r). Se "
+            "usa %g. Agrégalo al YAML para que la espera sea la que el negocio "
+            "quiere.",
             nombre,
             crudo,
             omision,

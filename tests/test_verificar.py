@@ -424,6 +424,18 @@ def test_las_tablas_de_marts_salen_de_crear_rol_sql_y_son_las_cinco():
 
 
 def test_las_tablas_de_pedidos_salen_del_mismo_archivo():
+    """Y por eso la quinta entró sola: nadie tocó `verificar.py` (ticket 19).
+
+    `pedidos.corrida_del_lote` aparece en esta lista porque `crear_rol.sql` la
+    otorga, no porque alguien la escribiera aquí. Eso es exactamente lo que el
+    ADR 0007 prometió como consecuencia —*"la lista de tablas de `verificar.py`
+    sale de parsear `crear_rol.sql`, así que la quinta entra sola en cuanto el
+    GRANT está escrito"*— y esta prueba es la que lo demuestra en vez de
+    suponerlo.
+
+    El orden es el del archivo y no alfabético: es el mismo criterio que la
+    lista de `marts` de aquí arriba.
+    """
     tablas = v.tablas_de_pedidos_en(CREAR_ROL.read_text(encoding="utf-8"))
 
     assert tablas == (
@@ -431,6 +443,7 @@ def test_las_tablas_de_pedidos_salen_del_mismo_archivo():
         "renglon",
         "pedido",
         "precio_de_proveedor",
+        "corrida_del_lote",
     )
 
 

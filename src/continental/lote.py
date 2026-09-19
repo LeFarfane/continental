@@ -66,9 +66,25 @@ que ningún portal lo notara.
 
 **No borra ni corrige nada de la lista.** Lo único que escribe son filas
 nuevas en `pedidos.precio_de_proveedor` —la tabla que solo crece del ADR
-0004— más la lista del día si no existía. No hay un solo `UPDATE` de renglón
-aquí, y por eso un lote que muera a la mitad deja la lista exactamente como
-estaba más los precios que alcanzó a traer: nunca peor.
+0004—, **una fila en `pedidos.corrida_del_lote`** —la del ticket 19, ADR
+0007, también de las que solo crecen— más la lista del día si no existía. No
+hay un solo `UPDATE` de renglón aquí, y por eso un lote que muera a la mitad
+deja la lista exactamente como estaba más los precios que alcanzó a traer:
+nunca peor.
+
+## Lo que deja dicho al terminar, y por qué son tres sitios y no uno
+
+Las tres salen del **mismo** `ResumenDeLaCorrida`, en el mismo `finally`, y
+cada una contesta una pregunta que las otras no pueden:
+
+| Dónde | Quién lo lee | Lo que puede decir que las otras no |
+|---|---|---|
+| el journal de systemd | una persona, por `ssh` | el relato renglón por renglón, **y deja rastro aunque lo que se cayera fuera Postgres** |
+| `pedidos.corrida_del_lote` | la pantalla, por SQL | *"el lote consultó 210 de 380 y se detuvo al tope"*, a la mañana y sin `ssh` |
+| el *push monitor* de Uptime Kuma | el dueño, sin pedirlo | **que no hubo corrida**, que es lo único que ninguna de las dos de arriba puede decir: una noche sin lote no escribe nada en ningún sitio |
+
+Ninguna de las dos últimas puede tumbar la corrida. *"Marcar como rota una
+corrida buena es peor que perderse un latido."*
 """
 
 from __future__ import annotations
@@ -82,7 +98,13 @@ from dataclasses import dataclass, replace
 
 from continental.almacen import CLASES_ABC, SIN_CLASE_ABC, LecturaDelAlmacen, Producto
 from continental.almacenamiento import (
+    FINALES_DE_LA_CORRIDA,
+    SE_ACABO_EL_TIEMPO,
+    SE_INTERRUMPIO,
+    SIN_LISTA,
+    TERMINO,
     AlmacenamientoDelPedido,
+    CorridaDelLote,
     PedidoSugeridoGuardado,
     RenglonGuardado,
     dias_primera_vez_configurados,
@@ -96,6 +118,7 @@ from continental.consultas import (
     consultar_y_congelar,
 )
 from continental.doyle import ClienteDeDoyle
+from continental.latido import ABAJO, ARRIBA, ResultadoDelLatido, mandar_el_latido
 from continental.precios import SIN_TIEMPO, explicacion_del_motivo
 from continental.sugerido import armar_la_lista
 
@@ -112,26 +135,34 @@ log = logging.getLogger("continental")
 TOPE_POR_OMISION_MIN = 60.0
 
 # ------------------------------------------------ cómo acaba una corrida
+#
+# **Los cuatro se REEXPORTAN desde `almacenamiento.py`, no se definen aquí**, y
+# la mudanza es del ticket 19. Hasta el 18 vivían en este archivo, que es donde
+# se escriben; desde que la corrida se guarda en `pedidos.corrida_del_lote`
+# (ADR 0007), **el DDL los repite en un CHECK** (`ck_corrida_final`), y lo que
+# tiene CHECK vive donde está el resto del vocabulario de las tablas — junto a
+# `ESTADOS_DEL_RENGLON` y `ESTADOS_DE_LA_LISTA`, y donde
+# `tests/test_sql_del_pedido.py` los compara contra el archivo `.sql`.
+#
+# Se siguen citando desde aquí con su nombre corto, y eso es el punto de
+# reexportarlos en vez de obligar a cambiar cada uso: quien lee el lote los
+# encuentra donde los busca. Importarlos al revés —que `almacenamiento.py`
+# importara de aquí— sería un ciclo: este módulo ya importa aquél entero.
+#
+# - `TERMINO` — se consultaron todos los renglones y sobró tiempo.
+# - `SE_ACABO_EL_TIEMPO` — se acabaron los 60 minutos con renglones por
+#   consultar. **No es un error**: es lo que el ticket 18 pide que pase, lo que
+#   quedó fuera lleva el motivo `no alcanzó el tiempo`, y es el hecho del que
+#   sale la frase *"el lote se cortó por tiempo"* del ticket 19.
+# - `SE_INTERRUMPIO` — algo tumbó la corrida entera. Lo que ya se había
+#   guardado sigue guardado.
+# - `SIN_LISTA` — no hubo lista que consultar. La farmacia cierra los domingos
+#   y no hay una sola venta en domingo en 33 meses: un lote que no encuentra
+#   ventas no falló, y decirle `se interrumpió` haría que alguien buscara un
+#   problema que no existe.
 
-#: Se consultaron todos los renglones de la lista y sobró tiempo.
-TERMINO = "terminó"
-
-#: Se acabaron los 60 minutos con renglones por consultar. **No es un error**:
-#: es exactamente lo que el ticket pide que pase, y lo que quedó fuera se dice
-#: con el motivo `no alcanzó el tiempo`.
-SE_ACABO_EL_TIEMPO = "se acabó el tiempo"
-
-#: Algo tumbó la corrida entera: Postgres se cayó, alguien mató el proceso. Lo
-#: que ya se había guardado sigue guardado — no hay nada que deshacer.
-SE_INTERRUMPIO = "se interrumpió"
-
-#: No hubo lista que consultar. La farmacia cierra los domingos y no hay una
-#: sola venta en domingo en 33 meses: un lote que no encuentra ventas no
-#: falló, y decirle `se interrumpió` haría que alguien buscara un problema que
-#: no existe.
-SIN_LISTA = "no hubo lista"
-
-FINALES: tuple[str, ...] = (TERMINO, SE_ACABO_EL_TIEMPO, SE_INTERRUMPIO, SIN_LISTA)
+#: Los cuatro, con el nombre que este módulo usaba antes del ticket 19.
+FINALES: tuple[str, ...] = FINALES_DE_LA_CORRIDA
 
 # ------------------------------------------- cómo acaba un renglón suelto
 
@@ -558,6 +589,50 @@ class ResumenDeLaCorrida:
     def se_paso_del_tope(self) -> bool:
         return self.final == SE_ACABO_EL_TIEMPO
 
+    # ------------------------------------------------- lo que se guarda
+
+    def como_corrida(self, negocio: str) -> CorridaDelLote:
+        """Este mismo resumen, con la forma de la fila que se guarda (ADR 0007).
+
+        **Función pura y una sola traducción.** El ADR 0007 lo pide con todas
+        sus letras: *"el resumen que se guarda es literalmente el mismo objeto
+        que se imprime"*, porque dos versiones de la misma noche es justo lo
+        que el ADR 0006 no quería. Aquí no se recuenta nada — cada campo sale
+        de la propiedad que ya alimenta el journal.
+
+        Dos campos van sin valor a propósito:
+
+        - `corrida_del_lote_id=0` — todavía no hay fila, así que no hay id. El
+          de verdad lo devuelve `guardar_la_corrida`.
+        - `termino_en=None` — la hora la pone la base con `now()`. Ponerle aquí
+          el reloj del proceso sería escribir un instante que no es el que la
+          fila va a llevar.
+
+        `tope_minutos` sale de `tope_seg` porque es lo que la pantalla escribe
+        —*"se detuvo al tope de 60 minutos"*—, y quien lee una pantalla no
+        divide entre sesenta.
+        """
+        return CorridaDelLote(
+            corrida_del_lote_id=0,
+            negocio=negocio,
+            pedido_sugerido_id=self.pedido_sugerido_id,
+            fecha_del_pedido=self.fecha_del_pedido,
+            final=self.final,
+            segundos=self.segundos,
+            tope_minutos=self.tope_seg / 60.0,
+            en_la_lista=self.en_la_lista,
+            consultados=self.consultados,
+            con_precio=self.con_precio,
+            sin_alcanzar=self.sin_alcanzar,
+            no_se_pudo=self.no_se_pudo,
+            sin_clave=self.sin_clave,
+            # `None` cuando no hubo orden que calcular —una corrida sin lista—
+            # se guarda como falso, que es lo honesto: no se cumplió el orden
+            # que el ticket 18 pide, porque no hubo nada que ordenar.
+            orden_cumplido=bool(self.orden and self.orden.cumple_el_orden),
+            detalle=self.detalle,
+        )
+
     # ------------------------------------------------------ la bitácora
 
     def como_texto(self) -> str:
@@ -626,8 +701,105 @@ class ResumenDeLaCorrida:
 
 
 # =========================================================================
+# PURO — EL LATIDO QUE LE TOCA A ESTA CORRIDA
+# =========================================================================
+#
+# Qué se le dice a Uptime Kuma, decidido con una tabla de casos y sin tocar la
+# red. Lo que toca la red es `latido.mandar_el_latido`, que entra por argumento.
+#
+# **El monitor es PROPIO, distinto del de la cadena de farmacia-data y del de
+# Marlowe**, y ésa es la casilla entera del ticket 19: *"si compartieran
+# monitor, una noche sin lote no avisaría nada"*. Medido en atlas el
+# 2026-09-19: los tres nombres de variable son distintos —`KUMA_PUSH_URL` en
+# farmacia-data, `KUMA_PUSH_URL_MARLOWE` en Marlowe y
+# `KUMA_PUSH_URL_CONTINENTAL` aquí—, así que son tres URLs con tres tokens y
+# tres monitores. Crear el de aquí es un paso de dueño en la interfaz de Kuma:
+# `docs/despliegue-en-atlas.md`, parte D.
+
+
+def estado_del_latido(resumen: ResumenDeLaCorrida) -> str:
+    """`up` o `down` para esta corrida. **Función pura, con su tabla.**
+
+    | Final | Qué se manda | Por qué |
+    |---|---|---|
+    | `terminó` | `up` | recorrió la lista entera |
+    | `se acabó el tiempo` | `up` | **no es un error**: detenerse es lo que se le pide (ticket 18). Un monitor rojo todas las noches por el tope es un monitor que nadie vuelve a mirar |
+    | `no hubo lista` | `up` | el lote corrió y el almacén no tenía ventas. La farmacia cierra los domingos |
+    | `se interrumpió` | `down` | eso sí es una falla, y `down` pinta el monitor en rojo **ahora**, sin esperar a que venza el intervalo de gracia |
+
+    Lo que Kuma caza **no está en esta tabla**: es la noche en la que no llega
+    ningún latido —atlas apagado a las 22:00, el timer sin habilitar—. Para eso
+    hace falta que las noches buenas sí latan, y por eso `se acabó el tiempo`
+    late en verde: un monitor que se pone rojo por algo que no es una falla
+    deja de distinguirse del silencio, que es lo único que de verdad muerde.
+    """
+    return ABAJO if resumen.final == SE_INTERRUMPIO else ARRIBA
+
+
+def mensaje_del_latido(resumen: ResumenDeLaCorrida) -> str:
+    """Una línea para el historial de Kuma. **Función pura.**
+
+    Una línea porque viaja en una URL y se pinta en una celda; el relato entero
+    es el journal (`como_texto`), que es donde vive la bitácora (ADR 0006).
+    `latido.recortar` la acota.
+
+    **Nunca lleva el texto de una excepción** (regla 5 de `CLAUDE.md`): un
+    `str(exc)` de SQLAlchemy lleva la cadena de conexión con contraseña, y esto
+    acaba en la base de un Kuma que también sirve a Marlowe. Lo que sí lleva es
+    el `detalle` del resumen, que este módulo redacta con el **tipo** de la
+    falla y nada más.
+    """
+    cabeza = (
+        f"{resumen.final}: {resumen.consultados}/{resumen.en_la_lista} "
+        f"consultados, {resumen.con_precio} con precio, "
+        f"{resumen.segundos / 60.0:.0f} min"
+    )
+    cola = []
+    if resumen.sin_alcanzar:
+        cola.append(f"{resumen.sin_alcanzar} sin alcanzar")
+    if resumen.no_se_pudo:
+        cola.append(f"{resumen.no_se_pudo} no se pudo")
+    if resumen.sin_clave:
+        cola.append(f"{resumen.sin_clave} sin clave")
+    if resumen.detalle:
+        cola.append(resumen.detalle)
+    return cabeza + (" · " + "; ".join(cola) if cola else "")
+
+
+# =========================================================================
 # ORQUESTACIÓN — LA CORRIDA
 # =========================================================================
+
+
+def _guardar_la_corrida(
+    almacenamiento: AlmacenamientoDelPedido,
+    negocio: str,
+    resumen: ResumenDeLaCorrida,
+) -> int:
+    """Escribe la fila de `pedidos.corrida_del_lote`. **No levanta nunca.**
+
+    Es la segunda escritura del `finally` y lleva la misma garantía que el
+    latido, por la misma razón escrita en el ADR 0007: *"una corrida entera de
+    sesenta minutos no se marca como rota porque la fila de la bitácora no se
+    pudo escribir"*. Devuelve el id, o `0` si no se pudo.
+
+    Lo que sí hace es decirlo, y ruidosamente (regla 4): sin esa fila, a la
+    mañana la pantalla va a decir *"el lote no corrió sobre esta lista"* sobre
+    una noche en la que sí corrió — que es de menos, y hay que poder saber por
+    qué. El motivo que se escribe es el **tipo** y nunca el texto (regla 5).
+    """
+    try:
+        return almacenamiento.guardar_la_corrida(negocio, resumen.como_corrida(negocio))
+    except BaseException as exc:  # noqa: BLE001 — la bitácora no rompe la corrida
+        log.error(
+            "NO se pudo guardar la corrida del lote en pedidos.corrida_del_lote "
+            "(%s). LA CORRIDA NO SE ABORTA: lo de arriba ya está guardado. Lo "
+            "que cuesta es que la pantalla va a decir «el lote no corrió sobre "
+            "esta lista» sobre una noche en la que sí corrió, porque es la "
+            "ausencia de esa fila lo que significa eso (ADR 0007).",
+            type(exc).__name__,
+        )
+        return 0
 
 
 def _renglon_sin_alcanzar(
@@ -748,6 +920,7 @@ def correr_el_lote(
     reglas=None,
     dormir: Callable[[float], object] = time.sleep,
     ahora: Callable[[], float] = time.monotonic,
+    latir: Callable[..., ResultadoDelLatido] = mandar_el_latido,
 ) -> ResumenDeLaCorrida:
     """La corrida entera. Arma la lista del día, consulta en orden, y se detiene.
 
@@ -781,6 +954,18 @@ def correr_el_lote(
     pase**, incluso si algo tumba la corrida a la mitad: está en un `finally`.
     Una noche en la que el lote murió sin decir cuánto alcanzó a hacer es
     justo el hilo abierto 3 de `HANDOVER.md`.
+
+    **Lo que el ticket 19 agregó a ese `finally` son dos cosas más, y ninguna
+    puede tumbar la corrida:**
+
+    - la fila de `pedidos.corrida_del_lote` —una por noche, ADR 0007—, que es
+      de donde la pantalla saca *"el lote se cortó por tiempo antes de llegar
+      a este renglón"*. Sin ella, a la mañana la pantalla dice *"el lote no
+      corrió sobre esta lista"*, que es de menos;
+    - el latido a Uptime Kuma, con **monitor propio** (`latir`, que entra por
+      argumento igual que `ahora` y `dormir`, para que ninguna prueba mande un
+      latido de verdad). *"Marcar como rota una corrida buena es peor que
+      perderse un latido."*
     """
     if registro is None:
         # Sin hilos: el lote es secuencial a propósito (ver el encabezado), así
@@ -963,7 +1148,60 @@ def correr_el_lote(
         )
         raise
     finally:
+        # LAS TRES COSAS DEL FINAL, EN ESTE ORDEN Y NINGUNA PUEDE TUMBAR A LAS
+        # OTRAS. Están aquí y no después del `return` porque tienen que pasar
+        # **también** cuando el tope cortó y cuando algo mató la corrida a la
+        # mitad: las dos noches raras son justo las que hay que poder contar.
+        #
+        #   1. el journal, que es la bitácora del relato (ADR 0006) y lo único
+        #      que deja rastro aunque Postgres sea lo que se cayó;
+        #   2. la fila de `pedidos.corrida_del_lote`, que es lo que la pantalla
+        #      lee a la mañana (ADR 0007);
+        #   3. el latido a Uptime Kuma, que es lo único que se queja cuando NO
+        #      pasa nada.
+        #
+        # Las dos últimas atrapan `BaseException` cada una por su cuenta, y eso
+        # es la casilla del ticket puesta donde no se puede cumplir a medias:
+        # **marcar como rota una corrida buena es peor que perderse un latido**
+        # — y lo mismo vale para la fila de la bitácora.
         log.info("%s", caja[0].como_texto())
+
+        _guardar_la_corrida(almacenamiento, negocio, caja[0])
+
+        # El latido va DESPUÉS de guardar, y el orden no es al azar: si algo va
+        # a fallar, que falle antes de decirle a Kuma que todo salió bien.
+        #
+        # `mandar_el_latido` ya no levanta nunca por su cuenta —su `except` es
+        # de `BaseException` y no tiene un solo `raise` hacia afuera—, y aun
+        # así aquí hay otro `try`. No es cinturón sobre tirante por gusto: el
+        # que se llama es `latir`, que ENTRA POR ARGUMENTO, y una excepción
+        # levantada dentro de un `finally` mientras otra va subiendo **la
+        # sustituye** — o sea que un doble mal escrito no solo rompería una
+        # corrida buena, sino que además se llevaría el motivo por el que la
+        # corrida se había muerto. La garantía se pone donde se ejerce.
+        try:
+            resultado = latir(
+                estado=estado_del_latido(caja[0]),
+                mensaje=mensaje_del_latido(caja[0]),
+                segundos=caja[0].segundos,
+            )
+        except BaseException as exc:  # noqa: BLE001 — un latido perdido no rompe la corrida
+            # El TIPO y nunca el texto (regla 5): el texto de un error de httpx
+            # trae la URL completa, y la URL completa ES el token del monitor.
+            log.warning(
+                "El latido a Uptime Kuma levantó (%s), que es algo que "
+                "mandar_el_latido promete no hacer. LA CORRIDA NO SE ABORTA.",
+                type(exc).__name__,
+            )
+        else:
+            if not resultado.se_mando and not resultado.se_omitio:
+                log.warning(
+                    "El lote terminó (%s) y el latido NO salió: %s. La corrida "
+                    "vale lo que valía; lo que pasa es que el monitor va a "
+                    "avisar de una falla que no existe hasta el próximo latido.",
+                    caja[0].final,
+                    resultado.motivo,
+                )
 
 
 # =========================================================================

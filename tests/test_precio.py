@@ -1636,17 +1636,27 @@ def test_el_rol_puede_escribir_la_cuarta_tabla():
     )
 
 
-def test_el_verificador_espera_las_cuatro_tablas():
+def test_el_verificador_espera_todas_las_tablas():
     """La comprobación 4 cuenta tablas, y el número está escrito a mano.
 
-    Si se queda en tres, el verificador da luz verde sobre un esquema al que le
+    Si se queda corto, el verificador da luz verde sobre un esquema al que le
     falta una tabla — la peor de las fallas posibles en un archivo cuyo único
-    trabajo es decir la verdad.
+    trabajo es decir la verdad. Eran cuatro con el ticket 12 y son **cinco**
+    desde el ticket 19, que estrenó `pedidos.corrida_del_lote`.
+
+    El número se cuenta **sobre el propio `crear_tablas.sql`** y no se escribe
+    aquí: lo que esta prueba afirma es que el DDL y el verificador dicen lo
+    mismo, y con un literal de este archivo habría tres listas que mantener en
+    vez de dos. Quien agregue una tabla al DDL sin tocar el verificador ve
+    fallar esto, que es el sitio barato.
     """
     verificador = _texto(VERIFICAR_ROL)
+    cuantas = len(
+        re.findall(r"CREATE TABLE IF NOT EXISTS pedidos\.", _texto(CREAR_TABLAS))
+    )
 
-    assert "count(*) = 4" in verificador
-    assert "'4 tablas, con otro propietario'" in verificador
+    assert f"count(*) = {cuantas}" in verificador
+    assert f"'{cuantas} tablas, con otro propietario'" in verificador
 
 
 def test_el_verificador_revisa_la_forma_del_precio_congelado():

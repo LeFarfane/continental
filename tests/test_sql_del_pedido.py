@@ -40,19 +40,22 @@ CREAR_TABLAS = SQL / "crear_tablas.sql"
 CREAR_ROL = SQL / "crear_rol.sql"
 VERIFICAR_ROL = SQL / "verificar_rol.sql"
 
-#: Las tres del glosario de `CONTEXT.md`, en su orden, más la cuarta que el
-#: ticket 12 agregó: el precio congelado de un renglón en un proveedor.
+#: Las tres del glosario de `CONTEXT.md`, en su orden, más las dos que no están
+#: ahí: el precio congelado de un renglón en un proveedor (ticket 12) y la
+#: corrida del lote nocturno (ticket 19, ADR 0007).
 #:
-#: La cuarta no está en el glosario y eso no es un descuido: "precio de
+#: Que las dos últimas no estén en el glosario no es un descuido. "Precio de
 #: proveedor" no es un concepto que el negocio nombre —el dueño dice "el precio
 #: de NADRO"—, es el grano con el que ese precio se puede guardar sin inventar
-#: treinta y seis columnas. El glosario manda sobre el nombre de lo que el
-#: negocio nombra.
+#: treinta y seis columnas; y "corrida del lote" es cómo le fue a un proceso
+#: nuestro una noche, que tampoco es vocabulario de farmacia. El glosario manda
+#: sobre el nombre de lo que el negocio nombra.
 TABLAS = (
     "pedidos.pedido_sugerido",
     "pedidos.pedido",
     "pedidos.renglon",
     "pedidos.precio_de_proveedor",
+    "pedidos.corrida_del_lote",
 )
 
 #: Lo único que Continental lee del almacén. Cinco y ninguna más: `fct_merma`,
@@ -106,13 +109,14 @@ def test_los_tres_archivos_existen_y_son_utf8():
         _texto(ruta)
 
 
-def test_estan_las_tres_tablas_y_ninguna_mas():
-    """Las cuatro y ninguna más: las tres del glosario y el precio congelado.
+def test_estan_las_cinco_tablas_y_ninguna_mas():
+    """Las cinco y ninguna más: las tres del glosario, el precio y la corrida.
 
-    Una quinta que aparezca sin pasar por aquí es una decisión de esquema que
+    Una sexta que aparezca sin pasar por aquí es una decisión de esquema que
     nadie razonó: el DDL se corre a mano una vez, así que agregar una tabla es
     un acto deliberado y debe verse como tal. La cuarta entró con el ticket 12
-    y llegó acompañada de su migración, de su GRANT y de tres comprobaciones
+    y **la quinta con el 19** (`pedidos.corrida_del_lote`, ADR 0007), y las dos
+    llegaron acompañadas de su migración, de su GRANT y de comprobaciones
     nuevas en el verificador — que es el precio completo de una tabla aquí.
     """
     declaradas = set(re.findall(r"CREATE TABLE IF NOT EXISTS (\S+)", _texto(CREAR_TABLAS)))

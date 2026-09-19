@@ -112,12 +112,67 @@ precio, el ahorro daba un cero legítimo y la pantalla escribía *"NADRO ya es e
 más barato"* tres renglones debajo de la marca que decía *"el único que
 contestó"*.
 
+**Y desde el ticket 19 la pantalla dice POR QUÉ falta cada precio, y el
+encargado arregla solo lo que falló.** Hasta el 18, un renglón sin lecturas se
+veía como *"nadie lo consultó"* — verdad, y **menos de lo que se sabe**. Ahora
+son **seis motivos distintos** y cada uno lleva a un sitio distinto: *al lote se
+le acabó el tiempo* (el botón de completar, o mañana), *el lote no corrió sobre
+esta lista* (el timer, atlas apagado), *la corrida del lote se cortó* (el
+journal de esa noche), *el lote lo intentó y no pudo* (levantar Doyle), *el lote
+no lo miró* (estaba descartado esa noche) y *no tiene código de barras* (SICAR).
+Los otros dos motivos que el ticket nombra —*el portal no contestó* y *la sesión
+caducó*— son de un **proveedor** de un renglón y ya vivían en
+`pedidos.precio_de_proveedor` desde el ticket 12: son preguntas de dos granos
+distintos y por eso salen de dos tablas distintas (ADR 0007).
+
+**Eso costó la quinta tabla, `pedidos.corrida_del_lote`**: una fila por noche
+con el resumen de la corrida —el mismo objeto que el lote ya imprimía y tiraba—,
+que el lote escribe en su `finally` y la pantalla lee con la lista. El ADR 0007
+tiene el porqué completo y las dos opciones descartadas; en corto: escribir
+cuatro filas de hueco por renglón no alcanzado obligaría a **inventarse a qué
+proveedores se iba a preguntar** y dispararía la condición de revisión del ADR
+0004 (~11,000 filas de puro hueco en una noche que corte al 20%). Lo que se
+renuncia está dicho: se guarda **cuántos** quedaron sin alcanzar, no **cuáles**,
+así que la noche que el tope cortó *y además* hubo renglones `no se pudo`, la
+pantalla escribe *"probablemente"* con el otro número al lado en vez de elegir
+uno a cara o cruz.
+
+**Un botón vuelve a consultar solo los precios que faltan**, y *faltar* es más
+estrecho que *estar incompleto* a propósito: cada renglón que entre son cuatro
+visitas a portales ajenos con las credenciales del dueño, ~9 s por proveedor.
+Entran los que **no tienen ni una lectura** y los que se consultaron, **no
+dieron ni un precio**, y tienen al menos un hueco de los tres que se arreglan
+reintentando. **No entran** los que ya tienen un precio —esas cuatro visitas
+ganarían como mucho una cotización más—, los que no tienen EAN, ni los huecos
+definitivos, que mañana contestarían lo mismo. Consulta **uno tras otro en un
+solo hilo**, con su propio tope (`pedido.completar.tope_minutos`, 20 min) que es
+distinto del del lote.
+
+**Y el lote late a Uptime Kuma al terminar, con monitor propio.** *"Si
+compartieran monitor, una noche sin lote no avisaría nada."* Se detiene al tope
+→ `up`, porque detenerse es lo que se le pide; la corrida se corta → `down`. **Y
+si el latido falla, la corrida NO se aborta**: `mandar_el_latido` no levanta
+nunca —su `except` es de `BaseException` y no tiene un solo `raise` hacia
+afuera—, lo dice en el journal con el **tipo** de la falla y nunca el texto (el
+texto de un error de `httpx` lleva la URL completa, y la URL completa **es** el
+token). Lo mismo vale para la fila de `corrida_del_lote`: va en su propio `try`.
+
 ```bash
 python iniciar.py     # http://127.0.0.1:8585
 python -m continental.verificar   # los datos de producción, no el código (ticket 17)
 python -m continental.lote        # el lote nocturno, a mano (ticket 18)
 python -m continental.lote --tope-minutos 5   # ...con tope corto, para mirarlo
-pytest                # 628 pruebas, 0 saltadas, 2.51-2.72 s (2026-09-19, ticket 18)
+pytest                # 749 pruebas, 0 saltadas, 3.55-4.46 s (2026-09-19, ticket 19)
+                      # 628 en el 18. Las 121 nuevas son 83 de `test_motivos.py`,
+                      # 34 de `test_latido.py`, 2 que `test_sql_del_pedido.py`
+                      # gana solo —sus parametrizadas recorren TABLAS, que pasó
+                      # de cuatro a cinco— y 3 del resto. Con los dos archivos
+                      # nuevos fuera el árbol del 18 costó 3.66-4.06 s ese
+                      # mismo rato; solas cuestan 0.45-0.50 s.
+                      # NINGUNA MANDA UN LATIDO DE VERDAD, ni a la Kuma real ni
+                      # a otra: `pedir` entra por argumento.
+                      #
+                      # 628 pruebas, 0 saltadas, 2.51-2.72 s (ticket 18)
                       # 565 en el ticket 17. Las 63 nuevas son 54 de
                       # `test_lote.py`, 5 de `test_verificar.py` (el invariante
                       # 4, el de la clase ABC), 3 de `test_compila.py` que gana
@@ -150,7 +205,8 @@ pytest                # 628 pruebas, 0 saltadas, 2.51-2.72 s (2026-09-19, ticket
 | `docs/decisiones/0004` | el precio congelado: tabla que solo crece, `numeric`, y quién espera a Doyle |
 | `docs/decisiones/0005` | dónde escucha Continental: el gateway de la red `borde`, no loopback |
 | `docs/decisiones/0006` | el lote nocturno: la hora, el tope, qué pasa con lo que no alcanzó, y por qué la bitácora es el journal y no una tabla nueva |
-| `sql/` | el DDL de las cuatro tablas, el rol acotado y `verificar_rol.sql`, que mira la **forma** de la base. **Se corren a mano, en ese orden, con credenciales de dueño** — no confundirlo con `continental.verificar`, que mira los **datos** en cada despliegue (la cabecera de ese módulo tiene la tabla que los separa) |
+| `docs/decisiones/0007` | la corrida del lote en **una fila por noche**, y por qué la pantalla deduce de ahí "el lote no llegó a este renglón" en vez de escribir cuatro huecos por renglón. Reabre la opción β del 0006 por su condición de disparo |
+| `sql/` | el DDL de las **cinco** tablas, el rol acotado y `verificar_rol.sql`, que mira la **forma** de la base. **Se corren a mano, en ese orden, con credenciales de dueño** — no confundirlo con `continental.verificar`, que mira los **datos** en cada despliegue (la cabecera de ese módulo tiene la tabla que los separa) |
 | `sql/migraciones/` | lo que le falta a una base donde las tablas YA existen: `crear_tablas.sql` usa `CREATE TABLE IF NOT EXISTS` y calla si la tabla ya está con otra forma. También a mano y con credenciales de dueño |
 | `config/continental.yml` | puertos de los módulos y los parámetros del pedido |
 | `src/continental/web/app.py` | `/api/salud`, `/api/modulos`, el pedido sugerido y su cierre, la portada |
@@ -160,6 +216,8 @@ pytest                # 628 pruebas, 0 saltadas, 2.51-2.72 s (2026-09-19, ticket
 | `src/continental/lote.py` | el lote nocturno. Tres mitades: lo **puro** —el orden por clase ABC, el cronómetro del tope, el resumen de la corrida—, la **orquestación** (`correr_el_lote`, con los tres bordes por argumento) y el **arranque** (`main`, lo único que construye bordes de verdad). El reloj entra por argumento: una prueba de sesenta minutos cuesta microsegundos |
 | `src/continental/verificar.py` | los invariantes sobre los **datos** de producción, no sobre el código. Mitad pura (recibe listas, devuelve un `Informe`, se prueba) y mitad de recolección (lee de Postgres, no se prueba). Acumula todas las fallas, cada una con su comando de reparación, y sale distinto de cero. Es el paso 6 de `desplegar.sh` |
 | `src/continental/comparacion.py` | funciones puras: las cuatro lecturas congeladas + las piezas -> quién gana, con qué certeza, cuánto se ahorra contra NADRO y, para la lista entera, cuántos renglones quedaron sin comparar (`contar_la_lista`). No toca la red, la base ni el reloj |
+| `src/continental/faltantes.py` | funciones puras: la corrida del lote + las comparaciones -> **por qué** le falta el precio a cada renglón, y **cuáles** va a consultar el botón de completar. Ahí vive la decisión cara del ticket 19: qué cuenta como "faltante", que son ~36 s de navegador por renglón de más si se estira |
+| `src/continental/latido.py` | el latido a Uptime Kuma, con monitor propio. `mandar_el_latido` **no levanta nunca** y el borde HTTP entra por argumento, así que ninguna prueba manda uno de verdad. El token vive en `KUMA_PUSH_URL_CONTINENTAL` del `.env`, jamás en el YAML |
 
 ## Lo que falta, en orden
 
@@ -229,14 +287,33 @@ más barato y se le pidió a otro.**
       -v ON_ERROR_STOP=1 < sql/verificar_rol.sql ; echo "salida: $?"
   ```
 
-  El tercero es el que **da el veredicto**: 20 comprobaciones con lo que se
+  **Y desde el ticket 19 hay una migración más**, que también crea una tabla y
+  por lo tanto también exige volver a correr `crear_rol.sql` después:
+
+  ```bash
+  docker exec -i farmacia_warehouse psql -U farmacia -d farmacia \
+      -v ON_ERROR_STOP=1 < sql/migraciones/0004-la-corrida-del-lote-en-una-fila.sql
+  # y otra vez crear_rol.sql y verificar_rol.sql, en ese orden
+  ```
+
+  El tercero es el que **da el veredicto**: 22 comprobaciones con lo que se
   esperaba y lo que se encontró, y salida distinta de cero si algo quedó mal.
   Es lo que cierra la última casilla del ticket 07, y solo lo puede correr una
-  persona con credenciales de dueño en atlas. Las tres últimas (18, 19 y 20)
-  son del ticket 12 y miran la forma de la tabla del precio: que no le hayan
-  puesto un `UNIQUE` que obligue a pisar el historial, que los ocho motivos
-  sobrevivieran con sus acentos, y que sigan puestas las dos restricciones que
-  impiden que un hueco se vea como el más barato.
+  persona con credenciales de dueño en atlas. Las 18, 19 y 20 son del ticket 12
+  y miran la forma de la tabla del precio: que no le hayan puesto un `UNIQUE`
+  que obligue a pisar el historial, que los ocho motivos sobrevivieran con sus
+  acentos, y que sigan puestas las dos restricciones que impiden que un hueco
+  se vea como el más barato. La **21 y la 22** son del ticket 19 y miran la
+  corrida del lote: que los cuatro finales sobrevivieran con sus acentos, y que
+  no pueda guardarse un conteo imposible ni media lista.
+
+  **Ojo con la comprobación 16: estaba mal y se arregló en el ticket 19.**
+  Esperaba `3` llaves `GENERATED AS IDENTITY` cuando ya eran cuatro desde el
+  ticket 12, así que **habría salido `[MAL]` sobre una base correcta la primera
+  vez que alguien la corriera** — y nadie la ha corrido nunca. Ahora compara
+  contra el número de tablas del esquema, que es lo que de verdad se quiere
+  afirmar, y la sexta tabla entra sola. Un verificador que da un falso `[MAL]`
+  es tan malo como uno que da un falso `[BIEN]`: los dos enseñan a no creerle.
 
 - **Las migraciones de los tickets 10, 11 y 12, si las tablas ya se crearon
   antes del 2026-09-19.** Las dos primeras le agregaron a `pedidos.renglon`
@@ -252,9 +329,9 @@ más barato y se le pidió a otro.**
   rebotaría en atlas con "column descartado_por does not exist".
 
   Si `crear_tablas.sql` **todavía no se ha corrido** (que es el caso al
-  2026-09-19), no hay nada que migrar: correrlo ahora ya crea las cuatro tablas
-  con todas sus columnas. Si ya se corrió antes de esa fecha, además de los
-  tres pasos de arriba, y **en este orden**:
+  2026-09-19), no hay nada que migrar: correrlo ahora ya crea las **cinco**
+  tablas con todas sus columnas. Si ya se corrió antes de esa fecha, además de
+  los tres pasos de arriba, y **en este orden**:
 
   ```bash
   docker exec -i farmacia_warehouse psql -U farmacia -d farmacia \
@@ -266,22 +343,35 @@ más barato y se le pidió a otro.**
   docker exec -i farmacia_warehouse psql -U farmacia -d farmacia \
       -v ON_ERROR_STOP=1 \
       < sql/migraciones/0003-precio-congelado-por-renglon-y-proveedor.sql
+  docker exec -i farmacia_warehouse psql -U farmacia -d farmacia \
+      -v ON_ERROR_STOP=1 \
+      < sql/migraciones/0004-la-corrida-del-lote-en-una-fila.sql
   ```
 
-  Las tres son idempotentes: correrlas dos veces no rompe nada.
+  Las cuatro son idempotentes: correrlas dos veces no rompe nada.
 
-  **OJO CON LA 0003: después de ella HAY que volver a correr
-  `sql/crear_rol.sql`**, y ahí se aparta de las otras dos. Las 0001 y 0002
+  **OJO CON LA 0003 Y CON LA 0004: después de cada una HAY que volver a correr
+  `sql/crear_rol.sql`**, y ahí se apartan de las dos primeras. Las 0001 y 0002
   agregaban columnas, y el `GRANT SELECT, INSERT, UPDATE` es sobre la tabla
-  entera: las cubría solas (no se usan permisos por columna, a propósito). La
-  0003 crea una TABLA, y **un permiso no se puede dar sobre una tabla que
-  todavía no existe**: el GRANT que se corrió en su día no la alcanza. Sin ese
-  paso, el primer clic en "Consultar precio" rebota en atlas con "permission
-  denied for table precio_de_proveedor" — y lo hace dentro del hilo que
-  consulta, así que la pantalla solo dice "no se pudo guardar el precio"
-  mientras el detalle vive en la bitácora. `crear_rol.sql` es idempotente y no
-  le toca la contraseña a un rol que ya existe. Las comprobaciones 4 y 6 de
-  `verificar_rol.sql` cazan el olvido.
+  entera: las cubría solas (no se usan permisos por columna, a propósito). Cada
+  una de las otras dos crea una TABLA, y **un permiso no se puede dar sobre una
+  tabla que todavía no existe**: el GRANT que se corrió en su día no la
+  alcanza.
+
+  Sin ese paso, con la 0003 el primer clic en "Consultar precio" rebota en
+  atlas con "permission denied for table precio_de_proveedor" — y lo hace
+  dentro del hilo que consulta, así que la pantalla solo dice "no se pudo
+  guardar el precio" mientras el detalle vive en la bitácora.
+
+  **Con la 0004 es peor, porque nadie lo ve**: el lote de las 22:00 rebota con
+  "permission denied for table corrida_del_lote", la corrida **no** se aborta
+  —esa escritura va en su propio `try`, ADR 0007— así que los precios de la
+  noche se guardan igual, y lo único que pasa es que a la mañana la pantalla
+  dice *"el lote no corrió sobre esta lista"* sobre una noche en la que sí
+  corrió. Es la AUSENCIA de esa fila lo que significa eso.
+
+  `crear_rol.sql` es idempotente y no le toca la contraseña a un rol que ya
+  existe. Las comprobaciones 4 y 6 de `verificar_rol.sql` cazan el olvido.
 
   Ninguna la corre el código de arranque: el rol no tiene DDL y eso es el ADR
   0003.
@@ -378,6 +468,16 @@ más barato y se le pidió a otro.**
    mañana la lista ya llega con sus precios, así que el encargado aprieta el
    botón muchas menos veces, que es justo cuando el conteo envejece.
 
+   **Y la OTRA condición sí se cumplió entera con el ticket 19: ya existe
+   `leer_por_id`** en `AlmacenamientoDelPedido` —lo estrenó el botón de
+   completar, que recibe el id de la lista y necesita sus renglones—. Así que
+   esto **se cierra en una línea** y el que venga después no tiene que
+   construir nada: `/api/renglon/{id}/precio` puede releer la lista por su id,
+   recalcular `conteo_de_precios` y `faltantes`, y devolverlos junto al renglón,
+   exactamente como ya hacen descartar, devolver y ajustar. Cuesta **dos**
+   consultas más por sondeo (la lista y sus precios), así que conviene hacerlo
+   en la respuesta del POST y no en cada vuelta del GET.
+
 3. **Un fallo de Doyle al PEDIR la búsqueda no deja rastro guardado.** Si
    `pedir_busqueda` truena —Doyle apagado, el puerto ocupado por otra cosa— no
    se escribe ninguna fila: no se sabe siquiera a qué proveedores se iba a
@@ -395,9 +495,20 @@ más barato y se le pidió a otro.**
    journal **pase lo que pase** —está en un `finally`, así que sale hasta
    cuando alguien mata el proceso— y ahí se lee cuántos renglones quedaron
    `no se pudo` y con qué tipo de falla. O sea que sí hay forma de saber que
-   corrió y cómo le fue. Lo que sigue sin poderse contestar es lo mismo **desde
-   la pantalla, con SQL**: para eso haría falta la tabla de bitácora que el ADR
-   0006 describe y deja sin construir, con su propia condición de disparo.
+   corrió y cómo le fue.
+
+   **Y el ticket 19 cerró la otra mitad:** *"¿corrió el lote anoche?"* ya se
+   contesta con SQL —`select ... from pedidos.corrida_del_lote`—, y la pantalla
+   lo escribe arriba de la tabla en cada carga. **Lo que queda abierto de este
+   hilo es solo lo de origen**: un fallo al PEDIR la búsqueda sigue sin dejar
+   fila de precio, así que de un renglón concreto no se sabe **a qué
+   proveedores** se le iba a preguntar. La corrida sí lo cuenta —`no_se_pudo`
+   es exactamente ese número— y por eso `por_que_no_hay_lectura` devuelve
+   `seguro=False` esa noche. **Condición de disparo, nueva:** si el `seguro=False`
+   aparece dos noches seguidas, o si el encargado pregunta por un renglón
+   concreto y la respuesta tiene que ser exacta, lo que hace falta es una tabla
+   de detalle colgada de `corrida_del_lote_id`, y la función pura ya tiene el
+   sitio donde dejar de adivinar (ADR 0007).
 
 4. **El tercer invariante del ticket 17 está DECLARADO, no revisado.** "Ningún
    pedido enviado sin quién lo envió" necesita dos columnas que `pedidos.pedido`
@@ -468,21 +579,29 @@ más barato y se le pidió a otro.**
    ofuscadas pero recuperables. Está aceptado con mitigación (permisos `700`,
    fuera de respaldos) en el ADR 0008 de Doyle. Si alguien saca una copia del
    disco, se cambian las cuatro contraseñas.
-10. **La pantalla no distingue "el lote no llegó" de "el lote no corrió".**
-   Un renglón que el tope dejó fuera **no deja fila** en
-   `pedidos.precio_de_proveedor`, y eso es una decisión razonada del ADR 0006:
-   escribir cuatro huecos por renglón no alcanzado obligaría a inventarse a qué
-   proveedores se le iba a preguntar —esa lista sale del acuse de Doyle, y no
-   hubo acuse— y dispararía la condición de revisión del ADR 0004 sobre cuánto
-   crece la tabla (~11,000 filas de puro hueco en una noche que corte al 20%).
+10. ~~**La pantalla no distingue "el lote no llegó" de "el lote no corrió".**~~
+   **CERRADO por el ticket 19** (2026-09-19). Se cumplió su condición de
+   disparo por el lado del ticket y no por el del encargado, y la salida **no**
+   fue escribir las cuatro filas de hueco por renglón: fue guardar **una fila
+   por corrida** en `pedidos.corrida_del_lote` y que la pantalla deduzca de ahí
+   el estado de cada renglón sin lectura (ADR 0007). Los dos argumentos que
+   hundían la otra opción siguen valiendo íntegros —habría que inventarse a qué
+   proveedores se iba a preguntar, y ~11,000 filas de puro hueco en una noche
+   que corte al 20%—.
 
-   Lo que cuesta, dicho: la pantalla muestra esos renglones como *"nadie los
-   consultó"* (ticket 15), que es verdad pero es menos de lo que se sabe. La
-   diferencia —faltante por tope, con su motivo `no alcanzó el tiempo`— hoy
-   solo se ve en el journal del lote. **Condición de disparo:** si el encargado
-   pregunta dos mañanas seguidas por qué media lista no tiene precio, esto deja
-   de ser un detalle y lo que hace falta es la tabla de bitácora que el ADR
-   0006 describe.
+   Hoy son seis motivos y cada uno lleva a un sitio distinto: *al lote se le
+   acabó el tiempo*, *el lote no corrió sobre esta lista*, *la corrida del lote
+   se cortó*, *el lote lo intentó y no pudo*, *el lote no lo miró* y *no tiene
+   código de barras*. La regla que decide cuál le toca a cada renglón es una
+   función pura con su tabla de casos (`faltantes.por_que_no_hay_lectura`), no
+   un `if` del JavaScript.
+
+   **Lo que quedó sin resolver, y por eso el hilo 3 sigue medio abierto:** se
+   guarda *cuántos* renglones quedaron sin alcanzar, no *cuáles*. La noche en
+   que el tope cortó **y además** hubo renglones `no se pudo`, de un renglón
+   concreto no se puede afirmar cuál de los dos le tocó, y la pantalla escribe
+   *"probablemente"* con el otro número al lado. Su condición de disparo está
+   escrita en el ADR 0007 y repetida en el hilo 3.
 
 11. **El lote vuelve a consultar los renglones que ya tienen precio.** No se
    saltan, a propósito: decidir "qué tan viejo es viejo" es una regla que nadie

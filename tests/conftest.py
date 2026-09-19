@@ -245,11 +245,95 @@ leen dos archivos `.service`/`.timer` y comparan cadenas. Las que sí orquestan
 pasan por los **tres dobles** y no por `TestClient`: el lote es otro proceso y
 no toca FastAPI.
 
+**Con el ticket 19 dentro el suite sube ~0.5 s y casi nada es de él.** Medido
+el 2026-09-19, en corridas seguidas, 749 recolectadas —**749 pasan, 0
+saltadas**— en **3.55-4.46 s**, con la recolección en 0.19 s. Con los dos
+archivos nuevos fuera y en la misma sesión
+(`pytest --ignore=tests/test_motivos.py --ignore=tests/test_latido.py`), el
+árbol del ticket 18 costó **3.66-4.06 s** contra los 2.51-2.72 s de esa mañana:
+otra vez la torre en otro momento del día. **Las 117 pruebas nuevas corriendo
+solas cuestan 0.45-0.50 s**, y ninguna aparece entre las ocho más lentas — la
+más lenta del suite sigue siendo `test_la_pantalla_dice_el_rango_de_ventas...`,
+con 0.12 s.
+
+El salto de 632 a 749 son las 117 nuevas —83 en `test_motivos.py`, 34 en
+`test_latido.py`— más dos casos
+que `test_sql_del_pedido.py` gana solo: sus pruebas parametrizadas recorren
+`TABLAS`, que pasó de cuatro a **cinco** con `pedidos.corrida_del_lote`.
+
+Que cuesten tan poco es por lo de siempre: **la mayoría no levanta nada**.
+`por_que_no_hay_lectura` recibe dos argumentos y devuelve un objeto congelado;
+`armar_la_url` recibe cadenas y devuelve una cadena; una docena lee `sql/` o
+`index.html` y compara texto. Las que sí pasan por `TestClient` son las que
+demuestran que el motivo llega hasta el JSON y que el botón consulta lo que
+dice consultar.
+
+**Y este ticket agrega dos reglas más, las dos aprendidas a la mala:**
+
+1. **Ninguna prueba manda un latido de verdad, ni a la Kuma real ni a ninguna
+   otra.** El borde HTTP entra por argumento (`pedir`), igual que `dormir` y
+   `ahora`. Esa Kuma la comparten Marlowe y la cadena de farmacia-data: un
+   latido de prueba escribiría en el historial de un monitor que alguien mira.
+2. **Lo que no se le prepara al `DoyleFalso` NO se consulta.** Un término sin
+   resultado preparado sale `pendiente` —que es justo lo que hace un portal
+   mientras carga— y la consulta espera el tope entero: **120 segundos reales**
+   por renglón. Pasó al escribir `test_motivos.py` y el archivo tardó 120 s en
+   vez de 0.4 s. Si una prueba de precios empieza a tardar, lo primero que hay
+   que mirar es qué clave se está consultando sin tener respuesta preparada.
+
 **La medición en la torre tiene ruido de ±0.4 s**, así que una sola corrida no
 dice nada: corre tres. Y si el número se sale de lo anterior, mide antes de
 culpar a las pruebas nuevas: `pytest --durations=8` para el tiempo de las
 pruebas y `pytest --collect-only` para el de la recolección, que son dos
 problemas distintos.
+
+## UNA CORRIDA QUE SE CUELGA SIN AVANZAR — era un proceso huérfano, no el suite
+
+Pasaó en la torre el 2026-09-19 y quedó resuelto el mismo día. Se veía así: el
+suite se paraba en mitad de los puntos, sin consumir CPU, y no volvía. Llegó a
+colgarse en **6 de 6 corridas seguidas**.
+
+**La causa no estaba en el suite: era un `uvicorn` huérfano.** Un servidor
+sembrado que se levantó para mirar la pantalla se quedó colgado —su primera
+versión abría un `TestClient` dentro del `on_event("startup")` de la propia
+aplicación, o sea un cliente de prueba dentro del ciclo de vida del servidor que
+lo atiende— y **nunca murió**: dos procesos de Python vivos tres horas, el hijo
+con 62 s de CPU consumidos y 1.6 GB residentes.
+
+**La medición, con el proceso como única variable** (2026-09-19):
+
+| | antes de matarlo | después de matarlo |
+|---|---|---|
+| árbol con el ticket 19 | 4 de 5 colgadas | **8 de 8 verdes**, 2.78-3.41 s |
+| árbol del ticket 18 (sin tocar) | 6 de 6 colgadas | **4 de 4 verdes**, 2.62-3.39 s |
+
+El árbol nunca fue la variable: el mismo código que colgaba 6 de 6 pasó 4 de 4
+una hora después, sin cambiarle una línea.
+
+**LA LECCIÓN, QUE ES LO QUE VALE LA PENA GUARDAR: comprobar que un puerto esté
+libre NO es comprobar que el proceso murió.** `netstat -ano | findstr :8585`
+salió vacío —tres veces, a tres personas distintas— y los dos procesos seguían
+ahí: el socket se había soltado y el proceso no. Después de levantar un servidor
+a mano, la comprobación que sirve es por **proceso**:
+
+    powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name LIKE 'python%'\" | Where-Object { $_.CommandLine -like '*Continental*' }"
+
+**El mecanismo, que sigue siendo cierto y conviene conocer.** `TestClient`
+levanta un bucle de eventos nuevo por petición, y en Windows ese bucle se
+despierta a sí mismo con un par de sockets de loopback (`_fallback_socketpair`,
+porque Windows no tiene `socketpair`). El volcado del proceso colgado, con
+`pytest -o faulthandler_timeout=8`, terminaba en el `accept()` de ese par. En
+atlas (Linux) ese camino **no existe**: `epoll` no usa el par de respaldo.
+
+**Lo que NO se sabe, y por eso no se tocó nada.** Si el suite por sí solo puede
+colgarse por ese camino, sin un huérfano compitiendo, no está demostrado ni
+descartado: después de la limpieza son **12 corridas seguidas sin un solo
+cuelgue**, y eso es lo único que se puede afirmar hoy. Si vuelve a pasar **con
+la máquina limpia**, entonces sí hay algo que arreglar, y el arreglo va por
+reusar un `TestClient` de sesión —hoy se levantan ~doscientos bucles por
+corrida— separando el cliente (de sesión) de los dobles (por prueba). Lo que
+**no** es el arreglo: `WindowsSelectorEventLoopPolicy`, que en Windows usa el
+mismo par de sockets de respaldo y mueve el problema sin quitarlo.
 """
 
 from __future__ import annotations
