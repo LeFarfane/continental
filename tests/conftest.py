@@ -31,6 +31,12 @@ anterior. Ese `mimetypes.init()` leyendo el registro de Windows cuesta distinto
 según lo que el sistema tenga en caché, y es justo por eso que aquí se anotan
 rangos de varias corridas y no un número solo.
 
+**Con el ticket 05 dentro sigue igual.** Medido el 2026-09-19, en tres
+corridas seguidas, 66 recolectadas —64 pasan, 2 saltadas— en **0.44-0.52 s**.
+Las 14 pruebas nuevas de `test_clasificacion.py` casi no cuestan: la mitad
+llama a una función pura sin almacén ni archivo, y las que leen
+`config/continental.yml` lo hacen sobre un `cargar()` cacheado.
+
 **La medición en la torre tiene ruido de ±0.4 s**, así que una sola corrida no
 dice nada: corre tres. Y si el número se sale de lo anterior, mide antes de
 culpar a las pruebas nuevas: `pytest --durations=8` para el tiempo de las

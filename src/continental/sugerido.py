@@ -9,9 +9,12 @@ puerta a resolverla con el reloj. Aquí no hay reloj que mirar.
 **Nada se filtra.** Un producto que no está en el catálogo sale igual, marcado;
 uno que se vendió con el anaquel lleno también, solo que hasta abajo. Filtrar
 sería meter la lógica de la tarjeta O2 de Metabase por la puerta de atrás, y el
-dueño pidió explícitamente no usarla como fuente del pedido (ADR 0002). La
-clasificación por anaquel es el ticket 05. Hoy la ventana de reposición es **el
-último día con datos** y la acumulación desde el corte es el ticket 09.
+dueño pidió explícitamente no usarla como fuente del pedido (ADR 0002). Cada
+renglón **dice** si es medicamento, abarrote o algo sin clasificar, y eso es
+justo lo contrario de filtrar: quien lea la lista decide, la lista no decide
+por él. El interruptor entre vistas es el ticket 06. Hoy la ventana de
+reposición es **el último día con datos** y la acumulación desde el corte es el
+ticket 09.
 
 Reposición 1 a 1: "se vendieron tres, se piden tres". Es aritmética que el
 encargado verifica de un vistazo, y eso importa más que ser óptima —una lista
@@ -26,6 +29,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from continental.almacen import LineaDeVenta, Producto
+from continental.clasificacion import (
+    SIN_CLASIFICAR,
+    ReglasDeClasificacion,
+    clasificar,
+)
 
 #: Decimales a los que se redondea la suma de piezas antes de subirla al entero
 #: siguiente. `1.1 + 2.2 + 0.7` da `4.000000000000001` en coma flotante, y sin
@@ -81,6 +89,13 @@ class Renglon:
     esconder los 688 artículos sin anaquel: mercancía que va a faltar sin que
     nadie se entere (regla 4 de CLAUDE.md).
 
+    `clasificacion` es `medicamento`, `abarrote` o `sin clasificar`, y viaja
+    **dentro del renglón** por la misma razón que la existencia: se decidió con
+    el anaquel que el catálogo tenía cuando se propuso, y quien pinte la lista
+    no tiene que volver a deducirla. Un producto fuera del catálogo no tiene
+    anaquel que mirar, así que queda `sin clasificar` — que es una respuesta y
+    nunca un descarte: se muestra igual, marcado.
+
     **`existencia` y `dias_de_cobertura` son las del momento en que se propuso
     el renglón, y viajan aquí dentro a propósito.** El renglón se lleva el
     número copiado: no guarda una referencia al catálogo ni forma de volver a
@@ -109,6 +124,7 @@ class Renglon:
     esta_en_el_catalogo: bool
     existencia: float | None
     dias_de_cobertura: float | None
+    clasificacion: str
 
     @property
     def esta_agotado(self) -> bool:
@@ -155,6 +171,7 @@ def calcular_pedido_sugerido(
     ventas: Sequence[LineaDeVenta],
     catalogo: Sequence[Producto],
     ventas_del_ritmo: Sequence[LineaDeVenta] | None = None,
+    reglas: ReglasDeClasificacion | None = None,
 ) -> PedidoSugerido:
     """Ventas + catálogo → el pedido sugerido, en reposición 1 a 1 y por urgencia.
 
@@ -185,6 +202,12 @@ def calcular_pedido_sugerido(
     por los datos: "sin desempate" acaba siendo "el orden en que Python
     recorrió un diccionario", y eso cambia bajo los pies de quien lea la
     pantalla dos días seguidos.
+
+    `reglas` son las listas de anaqueles y categorías con las que se clasifica
+    cada renglón, y entran por argumento igual que las ventas: esta función no
+    lee `config/continental.yml` ni ningún otro archivo. Sin ellas todo sale
+    `sin clasificar`, que se muestra siempre y marcado — el default que menos
+    daño hace si alguien despliega con el YAML a medias.
     """
     if not ventas:
         return PedidoSugerido(fecha_de_ventas=None, renglones=())
@@ -195,7 +218,11 @@ def calcular_pedido_sugerido(
 
     renglones = [
         _renglon(
-            producto_id, piezas, productos.get(producto_id), ritmo.get(producto_id, 0.0)
+            producto_id,
+            piezas,
+            productos.get(producto_id),
+            ritmo.get(producto_id, 0.0),
+            reglas if reglas is not None else ReglasDeClasificacion(),
         )
         for producto_id, piezas in por_producto.items()
     ]
@@ -248,7 +275,11 @@ def _ritmo_diario(ventas: Sequence[LineaDeVenta]) -> dict[int, float]:
 
 
 def _renglon(
-    producto_id: int, piezas: float, producto: Producto | None, ritmo: float
+    producto_id: int,
+    piezas: float,
+    producto: Producto | None,
+    ritmo: float,
+    reglas: ReglasDeClasificacion,
 ) -> Renglon:
     """Un renglón, esté o no el producto en el catálogo.
 
@@ -257,6 +288,10 @@ def _renglon(
     esconderlo sería reponer de menos sin que nadie lo note. Así el renglón se
     ve, dice cuál es por su `producto_id` —que es con lo que se busca en
     SICAR— y se cuenta aparte.
+
+    La clasificación de un huérfano es `sin clasificar` por lo mismo: sin
+    catálogo no hay anaquel ni categoría que leer, y adivinar "será
+    medicamento" lo metería a la vista de farmacia sin una sola evidencia.
 
     La clave se queda **vacía a propósito**. Es el EAN, lo único que empareja
     con el catálogo de un proveedor; inventar una haría que la comparación de
@@ -278,6 +313,11 @@ def _renglon(
         esta_en_el_catalogo=producto is not None,
         existencia=existencia,
         dias_de_cobertura=_dias_de_cobertura(existencia, ritmo),
+        clasificacion=(
+            clasificar(producto.anaquel, producto.categoria, reglas)
+            if producto
+            else SIN_CLASIFICAR
+        ),
     )
 
 

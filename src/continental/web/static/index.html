@@ -70,6 +70,10 @@
   td.numero.sindato { color: var(--tenue); font-size: .85em; }
   td.numero.urgente { color: var(--mal); font-weight: 600; }
   .marca { color: var(--aviso); font-size: .8rem; display: block; }
+  /* La marca de abarrote va en gris y no en ámbar: no es un aviso —el anaquel
+     está bien capturado y el dato es correcto—, solo dice qué es. El ámbar se
+     queda para lo que alguien tiene que ir a arreglar en SICAR. */
+  .marca.tenue { color: var(--tenue); }
   .vendido { color: var(--tenue); font-size: .8rem; display: block; }
   @media (max-width: 34rem) {
     /* A ancho de teléfono las cinco columnas NO caben, medido a 375 px: la
@@ -227,6 +231,25 @@ const renglon = (r) => {
     const marca = document.createElement('span');
     marca.className = 'marca';
     marca.textContent = 'No está en el catálogo: revísalo en SICAR.';
+    producto.append(marca);
+  }
+
+  // La clasificación sale del RENGLÓN y no se vuelve a deducir aquí: la regla
+  // —el anaquel le gana a la categoría— vive en un solo lugar probado, en
+  // Python, y no repetida en este archivo.
+  //
+  // Se marca solo lo que NO es medicamento. Etiquetar como "medicamento" nueve
+  // de cada diez renglones de una farmacia es ruido que se deja de leer a la
+  // tercera pantalla; lo que cambia una decisión es lo que se sale de lo
+  // esperado. El interruptor entre vistas y el conteo de los sin clasificar
+  // son el ticket 06: aquí el dato solo se ve.
+  if (r.clasificacion && r.clasificacion !== 'medicamento') {
+    const sinAnaquel = r.clasificacion === 'sin clasificar';
+    const marca = document.createElement('span');
+    marca.className = 'marca' + (sinAnaquel ? '' : ' tenue');
+    marca.textContent = sinAnaquel
+      ? 'Sin clasificar: no tiene anaquel conocido.'
+      : 'Abarrote: no se le compra a un proveedor.';
     producto.append(marca);
   }
 

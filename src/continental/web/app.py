@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 from continental import __version__
 from continental.almacen import LecturaDelAlmacen
+from continental.clasificacion import reglas_configuradas
 from continental.config import cargar
 from continental.doyle import ClienteDeDoyle
 from continental.sugerido import DIAS_DE_RITMO, calcular_pedido_sugerido
@@ -168,6 +169,11 @@ def pedido_sugerido(almacen: LecturaDelAlmacen = Depends(obtener_almacen)):
     decide, porque lo del sábado llega hasta el lunes en la noche— necesita que
     el sugerido se guarde, y eso es el ticket 09.
 
+    **Cada renglón dice su clasificación** —medicamento, abarrote o sin
+    clasificar—, y eso no filtra nada: la lista sigue trayendo todo lo que se
+    vendió. Las listas de anaqueles salen de `config/continental.yml` y se le
+    pasan al cálculo, que no lee archivos.
+
     **La cobertura se mide sobre otra ventana**, más larga (`DIAS_DE_RITMO`), y
     las dos salen de **una sola lectura**: la de reposición es un subconjunto
     de la del ritmo, así que se recorta aquí en memoria —del orden de 600
@@ -211,8 +217,15 @@ def pedido_sugerido(almacen: LecturaDelAlmacen = Depends(obtener_almacen)):
     # Lo que se repone es solo el último día: se recorta de lo ya leído en vez
     # de hacer una segunda consulta por un subconjunto de las mismas filas.
     ventas = [v for v in ventas_del_ritmo if v.fecha == ultima]
+    # Las listas de anaqueles se leen aquí y se pasan hacia adentro: el
+    # cálculo es una función pura y no abre archivos, igual que no mira el
+    # reloj. `cargar()` está cacheado, así que esto no relee el YAML por
+    # petición.
     pedido = calcular_pedido_sugerido(
-        ventas=ventas, catalogo=catalogo, ventas_del_ritmo=ventas_del_ritmo
+        ventas=ventas,
+        catalogo=catalogo,
+        ventas_del_ritmo=ventas_del_ritmo,
+        reglas=reglas_configuradas(),
     )
 
     if pedido.sin_catalogo:
