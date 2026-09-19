@@ -191,10 +191,11 @@ class AlmacenamientoFalso:
       una lista a medias quedaría ocupando el `UNIQUE` del día y ninguna carga
       posterior podría arreglarla — el rol no tiene `DELETE`.
     - **Las transiciones de estado**, que en la base viven en el `WHERE` de
-      cada `UPDATE` y no en un CHECK: solo se descarta lo `abierto` y solo se
-      devuelve a `abierto` lo `descartado`. Aquí son las mismas condiciones, en
-      el mismo orden, y devuelven `None` donde el `UPDATE` real devolvería cero
-      filas.
+      cada `UPDATE` y no en un CHECK: solo se descarta lo `abierto`, solo se
+      devuelve a `abierto` lo `descartado`, y solo se corrige la cantidad de un
+      renglón `abierto` **cuya lista siga `abierta`**. Aquí son las mismas
+      condiciones, en el mismo orden, y devuelven `None` donde el `UPDATE` real
+      devolvería cero filas.
 
     `falla` es el almacenamiento caído, que tiene que verse como un hueco con
     su motivo y no como una lista vacía (regla 4).
@@ -473,6 +474,72 @@ class AlmacenamientoFalso:
             RENGLON_DESCARTADO,
             descartado_por=quien,
             descartado_en=dt.datetime.now(dt.UTC),
+        )
+
+    def poner_la_cantidad(
+        self,
+        renglon_id: int,
+        cantidad_final: int | None,
+        ajustada_por: str | None = None,
+        ajustada_en: dt.datetime | None = None,
+    ) -> PedidoSugeridoGuardado | None:
+        """El `UPDATE` pelado de la cantidad, revisado contra los CHECK.
+
+        Aparte de `ajustar_la_cantidad` por la misma razón que
+        `poner_estado_del_renglon` lo está de `descartar`: es donde se ve que el
+        doble **se niega** igual que Postgres —una cantidad de cero, una
+        cantidad sin firma, una firma sin cantidad—. Si el rechazo estuviera
+        escondido dentro del camino que lo evita, nadie podría verlo.
+
+        **No escribe `cantidad_propuesta` por ninguna parte**, igual que el
+        `UPDATE` real: la propuesta del sistema se escribe una sola vez, al
+        armar la lista.
+        """
+        self._revisar()
+        encontrado = self._renglon_por_id(renglon_id)
+        if encontrado is None:
+            return None
+        fila, lista = encontrado
+
+        propuesta = {
+            **fila,
+            "cantidad_final": cantidad_final,
+            "ajustada_por": ajustada_por,
+            "ajustada_en": ajustada_en,
+        }
+        revisar_el_renglon(propuesta)
+
+        fila.update(
+            cantidad_final=cantidad_final,
+            ajustada_por=ajustada_por,
+            ajustada_en=ajustada_en,
+        )
+        return armar_guardado(lista, lista["renglones"])
+
+    def ajustar_la_cantidad(
+        self, negocio: str, renglon_id: int, cantidad: int, quien: str
+    ) -> PedidoSugeridoGuardado | None:
+        self._revisar()
+        encontrado = self._renglon_por_id(renglon_id)
+        if encontrado is None:
+            return None
+        fila, lista = encontrado
+        # Las CUATRO condiciones son el `WHERE` de `_AJUSTAR_LA_CANTIDAD`, en el
+        # mismo orden: el negocio, el renglón abierto, y **la lista abierta**,
+        # que es lo que el ticket 11 pide con todas sus letras. Sin la última,
+        # una cantidad nueva entraría en una lista que ya se pidió.
+        if fila["negocio"] != negocio or fila["estado"] != RENGLON_ABIERTO:
+            return None
+        if lista["estado"] != ABIERTO:
+            return None
+        # El instante real con zona que en la tabla pone `now()`. Es un INSTANTE
+        # y no una fecha: lo que se ancla en `max(fecha)` son las fechas de
+        # venta.
+        return self.poner_la_cantidad(
+            renglon_id,
+            cantidad,
+            ajustada_por=quien,
+            ajustada_en=dt.datetime.now(dt.UTC),
         )
 
     def devolver_a_abierto(

@@ -113,8 +113,37 @@
   th { font-size: .72rem; text-transform: uppercase; letter-spacing: .07em; color: var(--tenue); font-weight: 600; }
   tbody tr:nth-child(even) { background: var(--realce); }
   td.clave, th.clave { width: 9.5rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; color: var(--tenue); }
-  td.cantidad, th.cantidad { width: 7.5rem; text-align: right; }
+  /* 9.5rem y no las 7.5rem del ticket 04: debajo de la cifra caben ahora dos
+     renglones más —lo que propuso el sistema y quién la cambió— y a 7.5rem
+     "ajustada por sin-identificar" se partía en cuatro líneas. Medido en el
+     recorrido del 2026-09-19. */
+  td.cantidad, th.cantidad { width: 9.5rem; text-align: right; }
   td.cantidad b { font-size: 1.05rem; font-weight: 600; }
+  /* El campo para corregir la cantidad. Se ve como una cifra y no como un
+     formulario: es la columna que el encargado lee de un vistazo y no puede
+     convertirse en la que más pesa en la pantalla. El borde tenue dice que se
+     puede escribir ahí; al enfocarlo se pone firme.
+     4.5rem cabe "9999" — más de lo que nadie pide de una pieza — y 2.2rem de
+     alto es el mismo objetivo táctil del botón de descartar: a 375 px esto se
+     toca con el dedo. */
+  .cantidad-campo {
+    font: inherit; font-size: 1.05rem; font-weight: 600; font-variant-numeric: tabular-nums;
+    width: 4.5rem; min-height: 2.2rem; text-align: right;
+    padding: .2rem .4rem; color: var(--tinta); background: var(--fondo);
+    border: 1px solid var(--linea); border-radius: .4rem;
+  }
+  .cantidad-campo:hover { border-color: var(--tinta); }
+  .cantidad-campo:focus { outline: 2px solid var(--tinta); outline-offset: 1px; }
+  .cantidad-campo:disabled { cursor: default; opacity: .6; }
+  /* Lo que el sistema propuso, cuando ya no es lo que se va a pedir. En tono
+     tenue y debajo: lo que se copia al pedido es la cifra de arriba, y ésta es
+     la que explica de dónde salía. Las dos juntas son el punto del ticket 11
+     —se guardan por separado— y por eso se ven las dos, no una. */
+  .propuesta { color: var(--tenue); font-size: .8rem; display: block; }
+  /* Quién la corrigió. Solo aparece en los renglones que alguien tocó, que son
+     los menos: es una firma (regla 3 de CLAUDE.md) y sirve para poder
+     preguntar por qué se pidieron diez de algo de lo que se vendieron tres. */
+  .ajustada { color: var(--tenue); font-size: .78rem; display: block; }
   /* La columna de acciones. Angosta a propósito: descartar es una acción
      frecuente pero secundaria —lo que se lee es la cantidad a pedir—, así que
      el botón no compite con ella por atención. */
@@ -188,6 +217,9 @@
        quedaría DEBAJO del "se vendieron 2.5" del granel, y se leería
        "3 · se vendieron 2.5 · a pedir". */
     td.cantidad b::after { content: " a pedir"; color: var(--tenue); font-size: .78rem; font-weight: 400; }
+    /* Y la misma etiqueta para el campo editable, que va ANTES porque después
+       del recuadro quedaría colgando del borde derecho de la pantalla. */
+    td.cantidad.editable::before { content: "a pedir "; color: var(--tenue); font-size: .78rem; }
     .detalle { display: block; }
   }
 </style>
@@ -370,7 +402,95 @@ const botonDeAccion = (texto, alHacerClic) => {
   return boton;
 };
 
-const renglon = (r, alDescartar) => {
+// La celda de la cantidad, que desde el ticket 11 es dos cosas según el estado
+// de la LISTA:
+//
+// - lista `abierta` → un campo que se puede corregir. Se edita en su lugar y no
+//   detrás de un botón "editar": la corrección es parte de revisar la lista, no
+//   una excepción, y un clic extra por renglón en una lista tan larga como
+//   productos distintos se vendieron es justo lo que hace que no se use.
+// - lista `cerrada` o `vencida` → la cifra, a secas. El servidor lo vuelve a
+//   comprobar en el `WHERE` de su UPDATE —ahí está la garantía—, pero dejar
+//   teclear algo que va a rebotar enseña a ignorar los avisos.
+//
+// `type="number"` con `min="1"`: el navegador ya sabe teclado numérico en el
+// teléfono y flechas en la computadora. El `min` NO es la defensa contra el
+// cero —se salta pegando texto, y el `step` no impide escribir a mano—: la
+// defensa está en el CHECK de la tabla, en el validador compartido y en la
+// ruta. Aquí es comodidad, y el aviso de abajo es el que explica.
+const celdaDeCantidad = (r, editable, alAjustar) => {
+  const td = document.createElement('td');
+  // La clase extra es para el teléfono: ahí el `<thead>` se esconde y cada
+  // cifra lleva su etiqueta pegada. El `<b>` la cuelga con un `::after`, pero
+  // un `input` es un elemento reemplazado y no tiene dónde colgar nada, así que
+  // la etiqueta va en la celda. Se marca con una clase y no con `:has(input)`:
+  // `:has` es de 2022 y el navegador del mostrador puede no tenerlo, y entonces
+  // el campo se quedaría sin nombre a la vista.
+  td.className = 'cantidad' + (editable ? ' editable' : '');
+
+  if (editable) {
+    const campo = document.createElement('input');
+    campo.type = 'number';
+    campo.className = 'cantidad-campo';
+    campo.min = '1';
+    campo.step = '1';
+    campo.inputMode = 'numeric';
+    // Lo que se pide HOY: la corrección si la hubo, y si no la propuesta. Quién
+    // decide eso es el servidor (`cantidad_a_pedir`), no este archivo.
+    campo.value = r.cantidad_a_pedir;
+    // Con veinte campos iguales, "3" a secas no dice de qué producto es.
+    campo.setAttribute('aria-label', 'Cantidad a pedir de ' + r.descripcion);
+    // `change` y no `input`: se manda al salir del campo o al dar Enter, no en
+    // cada tecla. Con `input`, teclear "12" mandaría primero un 1 y después un
+    // 12 — dos filas de bitácora y dos escrituras por una sola decisión.
+    campo.onchange = () => alAjustar(r, campo);
+    // Enter guarda. El navegador dispara `change` al salir del campo, y Enter
+    // fuera de un formulario no siempre cuenta como salir: se vio el
+    // 2026-09-19 en el recorrido, con el 12 tecleado quedándose en la pantalla
+    // sin llegar al servidor -- lo peor que puede pasar aquí, porque la cifra
+    // se ve guardada y no lo está. `blur()` lo vuelve explícito y de paso
+    // funciona igual en los dos navegadores.
+    campo.onkeydown = (evento) => { if (evento.key === 'Enter') campo.blur(); };
+    td.append(campo);
+  } else {
+    const numero = document.createElement('b');
+    numero.textContent = r.cantidad_a_pedir;
+    td.append(numero);
+  }
+
+  // Las dos cifras a la vista cuando no son la misma. Es lo que el ticket pide
+  // ver, y lo que hace evidente que la propuesta del sistema NO se sobreescribió.
+  if (r.difiere_de_la_propuesta) {
+    const propuesta = document.createElement('span');
+    propuesta.className = 'propuesta';
+    propuesta.textContent = 'el sistema propuso ' + r.cantidad_propuesta;
+    td.append(propuesta);
+  }
+
+  // Solo para granel: si se vendieron 2.5 y se proponen 3, la diferencia se
+  // dice. Callarla haría que la propuesta no cuadre con el ticket.
+  if (r.piezas_vendidas !== r.cantidad_propuesta) {
+    const vendido = document.createElement('span');
+    vendido.className = 'vendido';
+    vendido.textContent = 'se vendieron ' + r.piezas_vendidas;
+    td.append(vendido);
+  }
+
+  // Quién la cambió, a la vista. Aparece aunque la cantidad haya quedado igual
+  // que la propuesta: confirmar el número del sistema también es una decisión, y
+  // es la que dice que la reposición 1 a 1 acertó ese día.
+  if (r.fue_ajustada) {
+    const firma = document.createElement('span');
+    firma.className = 'ajustada';
+    firma.textContent = 'ajustada por ' + (r.ajustada_por || 'sin-identificar');
+    if (r.ajustada_en) firma.title = instanteEnPalabras(r.ajustada_en);
+    td.append(firma);
+  }
+
+  return td;
+};
+
+const renglon = (r, acciones) => {
   const tr = document.createElement('tr');
 
   const clave = document.createElement('td');
@@ -421,19 +541,7 @@ const renglon = (r, alDescartar) => {
       r.dias_de_cobertura === 1 ? ' día' : ' días');
   }
 
-  const cantidad = document.createElement('td');
-  cantidad.className = 'cantidad';
-  const numero = document.createElement('b');
-  numero.textContent = r.cantidad_propuesta;
-  cantidad.append(numero);
-  // Solo para granel: si se vendieron 2.5 y se proponen 3, la diferencia se
-  // dice. Callarla haría que la propuesta no cuadre con el ticket.
-  if (r.piezas_vendidas !== r.cantidad_propuesta) {
-    const d = document.createElement('span');
-    d.className = 'vendido';
-    d.textContent = 'se vendieron ' + r.piezas_vendidas;
-    cantidad.append(d);
-  }
+  const cantidad = celdaDeCantidad(r, acciones.editable, acciones.ajustar);
 
   // Descartar: UN CLIC y sin diálogo de confirmación. Lo que hace segura la
   // operación es que se puede deshacer —el renglón baja al bloque de
@@ -441,16 +549,16 @@ const renglon = (r, alDescartar) => {
   // tercera pantalla se cierra sin leer. La lista trae tantos renglones como
   // productos distintos se vendieron: un diálogo por renglón sería el doble de
   // clics en la única acción que mantiene legible la lista (ADR 0002).
-  const acciones = document.createElement('td');
-  acciones.className = 'acciones';
-  const quitar = botonDeAccion('Descartar', (boton) => alDescartar(r, boton));
+  const celdaAcciones = document.createElement('td');
+  celdaAcciones.className = 'acciones';
+  const quitar = botonDeAccion('Descartar', (boton) => acciones.descartar(r, boton));
   quitar.title = 'No se pide. Se puede devolver a la lista.';
   // El nombre del producto va en el nombre accesible: con veinte botones
   // iguales, "Descartar" a secas no dice cuál se está tocando.
   quitar.setAttribute('aria-label', 'Descartar ' + r.descripcion);
-  acciones.append(quitar);
+  celdaAcciones.append(quitar);
 
-  tr.append(clave, producto, existencia, cobertura, cantidad, acciones);
+  tr.append(clave, producto, existencia, cobertura, cantidad, celdaAcciones);
   return tr;
 };
 
@@ -623,7 +731,7 @@ const pintarCierre = (datos, alCerrar) => {
   caja.hidden = false;
 };
 
-const cerrarLista = async (id, boton, detalle) => {
+const cerrarLista = async (id, boton, detalle, alCerrarse) => {
   // Se desarma el botón antes de salir: cerrar dos veces no rompe nada —el
   // servidor contesta 409 y no mueve la hora— pero un botón que sigue vivo
   // mientras la petición viaja invita a un segundo clic que no hace falta.
@@ -649,6 +757,12 @@ const cerrarLista = async (id, boton, detalle) => {
 
   pintarCabecera(datos);
   pintarCierre(datos, null);
+  // La tabla se vuelve a pintar porque el estado de la lista cambió, y con él
+  // cambia lo que se puede hacer: una lista cerrada ya no deja corregir
+  // cantidades. Sin esto, los campos se quedarían editables hasta que alguien
+  // recargara, y cada corrección rebotaría con un 409 — la pantalla diciendo
+  // que se puede algo que el servidor no permite.
+  alCerrarse(datos);
 };
 
 async function cargarPedido() {
@@ -697,11 +811,18 @@ async function cargarPedido() {
     corte.append(' ', cuantos);
   }
 
+  // Qué hacer cuando la lista se cierre. Se declara aquí, vacío, porque
+  // `pintarCierre` va ANTES de que exista `repintar` —una lista sin renglones
+  // también se puede cerrar y sale por la puerta de abajo— y llamar a `repintar`
+  // desde una lista vacía tronaría con un `vistas` que nunca se inicializó. Se
+  // rellena más abajo, cuando ya hay tabla que repintar.
+  let alCerrarse = () => {};
+
   // Antes de cualquier salida temprana: una lista sin renglones también se
   // guardó, también tiene hora de armado y también se puede cerrar.
   pintarCabecera(datos);
   pintarCierre(datos, (boton, detalle) =>
-    cerrarLista(datos.pedido_sugerido_id, boton, detalle));
+    cerrarLista(datos.pedido_sugerido_id, boton, detalle, (cerrada) => alCerrarse(cerrada)));
 
   if (!datos.renglones.length) {
     nota('pedido-nota', 'Ese día no se vendió nada que reponer.', 'aviso');
@@ -742,6 +863,15 @@ async function cargarPedido() {
   // solo dónde se pinta.
   const repintar = () => {
     const trabajables = datos.renglones.filter(r => r.estado !== DESCARTADO);
+    // Lo que se puede hacer sale del ESTADO DE LA LISTA, no de cada renglón:
+    // "la cantidad se puede cambiar mientras la lista esté abierta" es literal
+    // (ticket 11). Se calcula en cada repintado y no una sola vez al cargar,
+    // porque cerrar la lista lo cambia sin recargar la página.
+    const acciones = {
+      editable: datos.estado === 'abierto',
+      descartar: descartar,
+      ajustar: ajustar,
+    };
     if (vistas) {
       // Los conteos del interruptor son de la lista DE TRABAJO: decir "18" en
       // una vista donde se ven 12 porque seis están descartados haría buscar
@@ -753,9 +883,9 @@ async function cargarPedido() {
         trabajables.length,
         vistas.find(v => v.clave !== vistaActiva.clave) || vistaActiva,
         datos.descartados,
-        descartar);
+        acciones);
     } else {
-      pintarRenglones(trabajables, trabajables.length, null, datos.descartados, descartar);
+      pintarRenglones(trabajables, trabajables.length, null, datos.descartados, acciones);
     }
     // El bloque de descartados NO se filtra por vista, y es a propósito: la
     // vista de medicamentos esconde abarrotes de lo que falta por pedir, pero
@@ -793,12 +923,50 @@ async function cargarPedido() {
     moverRenglon(r.renglon_id, '/devolver', boton, aplicar);
   }
 
+  // Corregir la cantidad. Lo que se teclea se revisa aquí ANTES de mandarlo, y
+  // no porque el servidor no lo revise —lo revisa, y la tabla también—, sino
+  // porque éste es el único de los tres lugares que puede decirlo mientras el
+  // dedo sigue en el campo.
+  //
+  // **Un cero no es una forma de descartar.** Es el camino más común de todos:
+  // "no quiero pedir esto" se teclea como un 0 antes que como un clic en
+  // Descartar. Así que el 0 no se manda, se deshace lo tecleado y se dice cuál
+  // es el botón que sí lo hace — y que además guarda quién lo decidió.
+  function ajustar(r, campo) {
+    const cantidad = Number(campo.value);
+    if (!Number.isInteger(cantidad) || cantidad < 1) {
+      campo.value = r.cantidad_a_pedir;
+      nota('pedido-accion',
+        'Un cero —o un campo vacío, o media pieza— no se puede pedir, y un cero ' +
+        'tampoco es una forma de descartar: para no pedir «' + r.descripcion +
+        '» usa Descartar, así queda guardado quién lo decidió.', 'aviso');
+      return;
+    }
+    // Volver a escribir el mismo número en un renglón que ya se corrigió no se
+    // manda. `change` no se dispara al salir de un campo intacto, pero sí al
+    // teclear "03" sobre un "3" o al deshacer un tecleo a medias, y eso no es
+    // una decisión nueva: movería la hora y la firma de una corrección que ya
+    // estaba. En un renglón que nadie ha tocado sí se manda, porque confirmar
+    // la propuesta del sistema SÍ es una decisión — es la que dice que la
+    // reposición 1 a 1 acertó.
+    if (r.fue_ajustada && cantidad === r.cantidad_a_pedir) return;
+    moverRenglon(r.renglon_id, '/cantidad', campo, aplicar, { cantidad },
+      () => { campo.value = r.cantidad_a_pedir; });
+  }
+
   // Un servidor viejo que no mande el conteo no puede dejar la pantalla
   // diciendo "undefined renglones descartados". Se cae a contarlos aquí, que
   // es lo mismo mientras haya una sola pestaña abierta.
   if (typeof datos.descartados !== 'number') {
     datos.descartados = datos.renglones.filter(r => r.estado === DESCARTADO).length;
   }
+
+  // Ya hay tabla: cerrar la lista tiene que volver a pintarla con el estado
+  // nuevo, que es lo que apaga los campos de cantidad.
+  alCerrarse = (cerrada) => {
+    datos.estado = cerrada.estado;
+    repintar();
+  };
 
   if (vistas) mostrar(vistaActiva); else repintar();
 }
@@ -809,7 +977,7 @@ async function cargarPedido() {
 // "el interruptor los escondió" de "no se vendieron": son dos cosas que en
 // pantalla se ven idénticas —el renglón no está— y solo una se arregla
 // moviendo el interruptor.
-const pintarRenglones = (visibles, total, otra, descartados, alDescartar) => {
+const pintarRenglones = (visibles, total, otra, descartados, acciones) => {
   const escondidos = total - visibles.length;
   document.getElementById('pedido-resumen').textContent =
     plural(visibles.length, 'renglón por atender', 'renglones por atender') +
@@ -833,7 +1001,7 @@ const pintarRenglones = (visibles, total, otra, descartados, alDescartar) => {
           'renglones descartados no aparecen aquí y se pueden devolver desde abajo.')
       : '');
   document.getElementById('pedido-renglones').replaceChildren(
-    ...visibles.map(r => renglon(r, alDescartar)));
+    ...visibles.map(r => renglon(r, acciones)));
 };
 
 // Los descartados, aparte. El bloque se esconde entero cuando no hay ninguno:
@@ -854,35 +1022,54 @@ const pintarDescartados = (renglones, cuantos, alDevolver) => {
   caja.hidden = !cuantos;
 };
 
-// Descartar y devolver son la misma petición con otro final de ruta. El botón
-// se desarma mientras viaja: descartar dos veces no rompe nada —el servidor
-// contesta 409 y no mueve la firma— pero un botón vivo invita a un segundo
-// clic que no hace falta.
+// Descartar, devolver y corregir la cantidad son la misma petición con otro
+// final de ruta. El control —el botón, o el campo de la cantidad— se desarma
+// mientras viaja: repetir la operación no rompe nada —el servidor contesta 409
+// y no mueve la firma— pero un control vivo invita a un segundo clic que no
+// hace falta.
+//
+// `cuerpo` es lo que solo el ajuste manda (la cantidad); sin él va un POST
+// pelado, que es lo que descartar y devolver necesitan: no llevan parámetros.
+//
+// `alFallar` deshace lo que el control mostraba cuando la petición no llegó.
+// Un botón vuelve a habilitarse y ya; un campo se quedaría enseñando el número
+// que el encargado tecleó como si se hubiera guardado, que es mentir en la
+// única cifra que se copia al pedido.
 //
 // **No se vuelve a pedir la lista entera.** El servidor devuelve el renglón
 // movido y los conteos; releer todo sería una segunda lectura en otro momento,
 // y la lista podría dejar de coincidir consigo misma mientras alguien la
 // trabaja. Es la misma razón por la que las dos vistas salen de una sola
 // lectura.
-const moverRenglon = async (id, ruta, boton, alTerminar) => {
-  boton.disabled = true;
+const moverRenglon = async (id, ruta, control, alTerminar, cuerpo, alFallar) => {
+  control.disabled = true;
   nota('pedido-accion', '');
+
+  const peticion = { method: 'POST' };
+  if (cuerpo) {
+    peticion.headers = { 'Content-Type': 'application/json' };
+    peticion.body = JSON.stringify(cuerpo);
+  }
+
+  const fallo = (texto, clase) => {
+    control.disabled = false;
+    if (alFallar) alFallar();
+    nota('pedido-accion', texto, clase);
+  };
 
   let respuesta;
   try {
-    respuesta = await fetch('/api/renglon/' + id + ruta, { method: 'POST' });
+    respuesta = await fetch('/api/renglon/' + id + ruta, peticion);
   } catch (e) {
-    boton.disabled = false;
-    nota('pedido-accion', 'Continental no contestó. El renglón se quedó como estaba; inténtalo otra vez.', 'mal');
+    fallo('Continental no contestó. El renglón se quedó como estaba; inténtalo otra vez.', 'mal');
     return;
   }
 
   const datos = await respuesta.json();
   if (!datos.ok) {
-    boton.disabled = false;
     // El motivo viene del servidor y es genérico a propósito (regla 5): el
     // detalle está en la bitácora.
-    nota('pedido-accion', datos.detalle || 'No se pudo mover el renglón.', 'aviso');
+    fallo(datos.detalle || 'No se pudo mover el renglón.', 'aviso');
     return;
   }
   alTerminar(datos);

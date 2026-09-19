@@ -24,7 +24,10 @@ contestan. Nada más.
 
 ```bash
 python iniciar.py     # http://127.0.0.1:8585
-pytest                # 187 pruebas y 1 saltada, ~0.9 s (2026-09-19, ticket 10)
+pytest                # 231 pruebas y 1 saltada, ~1.8 s (2026-09-19, ticket 11)
+                      # el número subió con la torre, no con las pruebas: ese
+                      # mismo día el suite del ticket 10 costaba 1.4-1.9 s.
+                      # Ver la nota de `tests/conftest.py`.
 ```
 
 | Archivo | Qué es |
@@ -94,31 +97,37 @@ más barato y se le pidió a otro.**
   Es lo que cierra la última casilla del ticket 07, y solo lo puede correr una
   persona con credenciales de dueño en atlas.
 
-- **La migración del ticket 10, si las tablas ya se crearon antes del
-  2026-09-19.** El ticket 10 le agregó a `pedidos.renglon` dos columnas —
-  `descartado_por` y `descartado_en`, la firma del descarte— y están escritas
-  en los **dos** archivos: en `sql/crear_tablas.sql`, para una base desde cero,
-  y en `sql/migraciones/0001-renglon-quien-descarto-y-cuando.sql`, para una
-  base donde la tabla ya existe. Hacen falta los dos porque `CREATE TABLE IF
-  NOT EXISTS` **calla si la tabla ya existe con otra forma**: volver a correr
-  el DDL sobre una tabla vieja no agrega la columna y no avisa, y el primer
-  descarte rebotaría en atlas con "column descartado_por does not exist".
+- **Las migraciones de los tickets 10 y 11, si las tablas ya se crearon antes
+  del 2026-09-19.** Entre los dos le agregaron a `pedidos.renglon` cinco
+  columnas: `descartado_por` y `descartado_en` (la firma del descarte, ticket
+  10) y `cantidad_final`, `ajustada_por` y `ajustada_en` (la cantidad que una
+  persona decidió pedir y quién la decidió, ticket 11). Están escritas en los
+  **dos** lados: en `sql/crear_tablas.sql`, para una base desde cero, y en
+  `sql/migraciones/`, para una base donde la tabla ya existe. Hacen falta los
+  dos porque `CREATE TABLE IF NOT EXISTS` **calla si la tabla ya existe con
+  otra forma**: volver a correr el DDL sobre una tabla vieja no agrega la
+  columna y no avisa, y el primer descarte rebotaría en atlas con "column
+  descartado_por does not exist".
 
   Si `crear_tablas.sql` **todavía no se ha corrido** (que es el caso al
-  2026-09-19), no hay nada que migrar: correrlo ahora ya crea las columnas. Si
-  ya se corrió antes de esa fecha, además de los tres pasos de arriba:
+  2026-09-19), no hay nada que migrar: correrlo ahora ya crea las cinco
+  columnas. Si ya se corrió antes de esa fecha, además de los tres pasos de
+  arriba, y **en este orden**:
 
   ```bash
   docker exec -i farmacia_warehouse psql -U farmacia -d farmacia \
       -v ON_ERROR_STOP=1 \
       < sql/migraciones/0001-renglon-quien-descarto-y-cuando.sql
+  docker exec -i farmacia_warehouse psql -U farmacia -d farmacia \
+      -v ON_ERROR_STOP=1 \
+      < sql/migraciones/0002-renglon-cantidad-final-y-quien-la-ajusto.sql
   ```
 
-  Es idempotente: correrlo dos veces no rompe nada. **`sql/crear_rol.sql` no
-  hace falta volver a correrlo**: el `GRANT SELECT, INSERT, UPDATE` es sobre la
-  tabla entera y cubre las columnas nuevas (no se usan permisos por columna, a
-  propósito). Ninguno de los dos lo corre el código de arranque: el rol no
-  tiene DDL y eso es el ADR 0003.
+  Las dos son idempotentes: correrlas dos veces no rompe nada.
+  **`sql/crear_rol.sql` no hace falta volver a correrlo**: el `GRANT SELECT,
+  INSERT, UPDATE` es sobre la tabla entera y cubre las columnas nuevas (no se
+  usan permisos por columna, a propósito). Ninguna la corre el código de
+  arranque: el rol no tiene DDL y eso es el ADR 0003.
 
 - **Del lado de farmacia-data, y sin esto lo anterior se borra solo:** agregar
   `'continental'` al `grants` de `dim_fecha.sql`, `dim_producto.sql`,

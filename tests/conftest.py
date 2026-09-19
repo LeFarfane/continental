@@ -90,6 +90,24 @@ carpeta nueva por la que `test_compila.py` camina buscando `.sql`, y el
 archivo que hay dentro estrena un caso más de
 `test_el_archivo_de_atlas_no_trae_retorno_de_carro`.
 
+**Con el ticket 11 dentro el suite cuesta ~0.2 s más, y la torre ese día iba
+lenta.** Medido el 2026-09-19, en tres corridas seguidas, 232 recolectadas
+—231 pasan, 1 saltada— en **1.73-1.85 s**, con la recolección en 0.11 s. El
+número se sale de los 0.87-1.07 s de arriba y **no son las 43 pruebas nuevas
+de `test_ajuste.py`**: medido en la misma sesión y con el archivo nuevo fuera
+(`pytest --ignore=tests/test_ajuste.py`), el suite tal como lo dejó el ticket
+10 costó **1.39-1.88 s** contra los 0.87-1.07 s que había medido el día
+anterior, con las mismas pruebas. La diferencia atribuible a este ticket
+es la resta —~0.2 s para 43 pruebas, ~0.01-0.02 s cada una de las que pasan por
+`TestClient`— y dos de ellas aparecen entre las ocho más lentas, las dos con
+0.02 s, que son las que hacen **dos** peticiones y una carga en medio. Es el
+mismo ruido de ±0.4 s de siempre, medido en vez de supuesto: la lección es la
+de abajo —una sola corrida no dice nada, y antes de culpar a las pruebas nuevas
+hay que correr el suite sin ellas—.
+
+Ajustar una cantidad no agrega una sola lectura del almacén: la lista ya está
+guardada y lo que cambia es una columna de una fila que ya se leyó.
+
 La saltada bajó de 2 a 1 con el ticket 07: `sql/crear_tablas.sql` estrenó los
 casos de `.sql` de `test_compila.py` y solo queda saltado el del shebang, que
 espera a que exista un `.sh`.

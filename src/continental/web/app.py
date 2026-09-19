@@ -16,10 +16,12 @@ import httpx
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from continental import __version__
 from continental.almacen import LecturaDelAlmacen
 from continental.almacenamiento import (
+    CANTIDAD_FINAL_MINIMA,
     AlmacenamientoDelPedido,
     PedidoSugeridoGuardado,
     Ventana,
@@ -418,7 +420,7 @@ def descartar_renglon(
         renglon_id,
         request,
         lambda negocio, firma: almacenamiento.descartar(negocio, renglon_id, firma),
-        verbo="descartar",
+        verbo="descartar el renglón",
         choque=(
             "Ese renglón ya no estaba abierto. Vuelve a cargar la página para "
             "ver cómo quedó."
@@ -455,7 +457,7 @@ def devolver_renglon(
         renglon_id,
         request,
         lambda negocio, firma: almacenamiento.devolver_a_abierto(negocio, renglon_id),
-        verbo="devolver a abierto",
+        verbo="devolver a abierto el renglón",
         choque=(
             "Ese renglón ya no estaba descartado. Vuelve a cargar la página "
             "para ver cómo quedó."
@@ -463,14 +465,137 @@ def devolver_renglon(
     )
 
 
-def _mover_el_renglon(renglon_id: int, request: Request, mover, verbo: str, choque: str):
-    """Lo que las dos rutas del ticket 10 comparten entero.
+class CantidadNueva(BaseModel):
+    """Lo único que el navegador manda al corregir un renglón: cuántas piezas.
+
+    Un cuerpo y no un parámetro en la ruta porque es un **dato** y no la
+    identidad de nada: `/api/renglon/3/cantidad/0` se vería como un recurso que
+    existe, y quedaría escrito en la bitácora de accesos del túnel junto a todo
+    lo demás.
+
+    `int` pelado, sin `ge=1` de pydantic, y esa es una decisión: con el `ge`
+    puesto, FastAPI contestaría solo "Input should be greater than or equal to
+    1" —en inglés, sin decir qué hacer en su lugar—. La mitad del valor de la
+    casilla 3 del ticket es que **hay otro camino** y que la pantalla lo diga:
+    para no pedir un renglón está `descartado`, con su firma y su hora. Así que
+    el cero se rechaza aquí abajo, a mano, con el texto que explica.
+    """
+
+    cantidad: int
+
+
+@app.post("/api/renglon/{renglon_id}/cantidad")
+def ajustar_la_cantidad_del_renglon(
+    renglon_id: int,
+    cuerpo: CantidadNueva,
+    request: Request,
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+):
+    """Corregir cuánto se va a pedir de un renglón, **sin tocar lo que se propuso**.
+
+    El encargado sabe cosas que el sistema no: que mañana es puente, que un
+    cliente viene por una caja entera, que el proveedor surte de a seis. La
+    reposición 1 a 1 es aritmética verificable —"se vendieron tres, se piden
+    tres"— y por eso es defendible, pero no es adivina.
+
+    **Las dos cantidades se guardan por separado y `cantidad_propuesta` es
+    inmutable.** Ésa es la mitad del ticket que no se ve en la pantalla: la
+    diferencia entre lo que el sistema propuso y lo que la persona pidió es lo
+    único que después va a decir si la reposición 1 a 1 está bien calibrada. Una
+    sola columna sobreescribible se vería igual y borraría el dato en silencio,
+    que es la falla que la regla 4 de `CLAUDE.md` prohíbe.
+
+    **Un cero no es una forma de descartar**, y aquí es donde se explica. La
+    regla está en tres lugares a propósito, y cada uno hace algo distinto:
+
+    1. `ck_renglon_cantidad_final` en la tabla es la **garantía**: no depende de
+       qué código escriba la fila, y sigue puesta el día que alguien toque la
+       base desde un `psql` o desde un módulo que todavía no existe.
+    2. `revisar_el_renglon` en `almacenamiento.py` es lo que impide que **el
+       doble sea más permisivo que Postgres**: sin él, el suite se quedaría en
+       verde y el `UPDATE` rebotaría en atlas contra una violación de
+       restricción que nadie sabría explicar.
+    3. Este `if` es el que **explica**. Los otros dos rechazan; ninguno de los
+       dos puede decirle al encargado que lo que quiere hacer se llama
+       descartar y está a un clic. Un 500 genérico —que es en lo que se
+       convertiría una violación de restricción, por la regla 5— habría sido
+       "algo falló" para el camino más común de todos: teclear un cero.
+
+    Un 409 y no un 500 cuando no hay nada que corregir: el renglón no existe, es
+    de otro negocio, ya no está `abierto`, **o su lista ya no está abierta**.
+    Los cuatro casos se ven igual desde fuera a propósito, igual que en el
+    descarte.
+
+    **Quién la cambió se guarda en la fila**, no solo en la bitácora, por la
+    misma razón que el descarte: una bitácora rota por `logrotate` no se
+    consulta con un `GROUP BY`, y la pregunta "¿por qué pediste diez de algo de
+    lo que se vendieron tres?" necesita a quién hacérsela. Es una **firma y no
+    un permiso** (regla 3 de `CLAUDE.md`).
+
+    Es `def` y no `async def` a propósito: el borde es síncrono —psycopg2 no es
+    asíncrono— y así FastAPI lo corre en su pool de hilos.
+    """
+    if cuerpo.cantidad < CANTIDAD_FINAL_MINIMA:
+        log.info(
+            "%s intentó dejar el renglón %s en %d piezas. Se rechazó: un cero no "
+            "es una forma de descartar.",
+            quien(request),
+            renglon_id,
+            cuerpo.cantidad,
+        )
+        return JSONResponse(
+            status_code=422,
+            content={
+                "ok": False,
+                "detalle": (
+                    f"La cantidad tiene que ser de al menos {CANTIDAD_FINAL_MINIMA} "
+                    "pieza. Un cero no es una forma de descartar: para no pedir "
+                    "este renglón, usa Descartar — así queda guardado quién "
+                    "decidió no pedirlo."
+                ),
+            },
+        )
+
+    return _mover_el_renglon(
+        renglon_id,
+        request,
+        lambda negocio, firma: almacenamiento.ajustar_la_cantidad(
+            negocio, renglon_id, cuerpo.cantidad, firma
+        ),
+        verbo="ajustar la cantidad del renglón",
+        choque=(
+            "Ese renglón ya no se puede cambiar: o la lista dejó de estar "
+            "abierta, o el renglón ya no está abierto. Vuelve a cargar la "
+            "página para ver cómo quedó."
+        ),
+        nota=f"La cantidad a pedir queda en {cuerpo.cantidad}.",
+    )
+
+
+def _mover_el_renglon(
+    renglon_id: int,
+    request: Request,
+    mover,
+    verbo: str,
+    choque: str,
+    nota: str = "",
+):
+    """Lo que las tres rutas que mueven un renglón comparten entero.
 
     Cambia la operación y cambia el texto; el resto —la firma, el `try` que
     convierte una base caída en un hueco con su motivo, el 409 de "no había
     nada que mover" y la respuesta con los conteos— es el mismo, y escribirlo
-    dos veces sería dos oportunidades de que una de las dos deje de cumplir la
-    regla 5.
+    tres veces sería tres oportunidades de que una deje de cumplir la regla 5.
+
+    `verbo` trae su propio sustantivo —"descartar el renglón", "ajustar la
+    cantidad del renglón"— en vez de dejarlo en la plantilla: pegarle "el
+    renglón" a "ajustar la cantidad de" daba "de el renglón", y una bitácora
+    que se lee mal se deja de leer.
+
+    `nota` es lo que solo esa operación sabe y la bitácora necesita. Hoy la usa
+    el ajuste, para dejar escrita **cada** cantidad que alguien tecleó: la
+    columna guarda la última, y sin esto no habría forma de ver que se puso 100
+    y se corrigió a 10 un minuto después.
     """
     negocio = cargar().negocio
     firma = quien(request)
@@ -478,19 +603,18 @@ def _mover_el_renglon(renglon_id: int, request: Request, mover, verbo: str, choq
     try:
         guardado = mover(negocio, firma)
     except Exception as exc:  # noqa: BLE001 — el almacenamiento caído es un hueco, no un 500
-        log.exception("No se pudo %s el renglón %s", verbo, renglon_id)
+        log.exception("No se pudo %s %s", verbo, renglon_id)
         return JSONResponse(
             status_code=200,
             content={
                 "ok": False,
-                "detalle": f"no se pudo {verbo} el renglón ({type(exc).__name__})",
+                "detalle": f"no se pudo {verbo} ({type(exc).__name__})",
             },
         )
 
     if guardado is None:
         log.info(
-            "%s quiso %s el renglón %s y no había ninguno en el estado que lo "
-            "permite en %s.",
+            "%s quiso %s %s y no había ninguno en el estado que lo permite en %s.",
             firma,
             verbo,
             renglon_id,
@@ -500,13 +624,14 @@ def _mover_el_renglon(renglon_id: int, request: Request, mover, verbo: str, choq
 
     movido = next(r for r in guardado.renglones if r.renglon_id == renglon_id)
     log.info(
-        "%s acaba de %s el renglón %s (%s) de la lista %s. Van %d descartado(s) "
-        "de %d renglones.",
+        "%s acaba de %s %s (%s) de la lista %s.%s Van %d descartado(s) de %d "
+        "renglones.",
         firma,
         verbo,
         renglon_id,
         movido.propuesto.descripcion,
         guardado.pedido_sugerido_id,
+        f" {nota}" if nota else "",
         guardado.descartados,
         len(guardado.renglones),
     )
@@ -640,6 +765,29 @@ def _renglon_como_json(renglon) -> dict:
         "descartado_por": renglon.descartado_por,
         "descartado_en": (
             renglon.descartado_en.isoformat() if renglon.descartado_en else None
+        ),
+        # Las DOS cantidades viajan, y `cantidad_propuesta` ya viene de
+        # `asdict(propuesto)`: son dos datos distintos y la pantalla los pinta
+        # juntos cuando difieren. `cantidad_final` es `null` mientras nadie la
+        # haya tocado — nunca la propuesta copiada, que borraría la diferencia.
+        "cantidad_final": renglon.cantidad_final,
+        # Lo que de verdad se le va a pedir al proveedor. Se manda calculado en
+        # vez de dejar que el JavaScript elija entre las dos columnas: esa regla
+        # vive en un solo lugar probado (`RenglonGuardado.cantidad_a_pedir`), y
+        # el día que el pedido por proveedor (ticket 20) tome la cifra, va a
+        # tomar exactamente la que se vio en la pantalla.
+        "cantidad_a_pedir": renglon.cantidad_a_pedir,
+        # Dos preguntas distintas y por eso dos campos: `fue_ajustada` dice si
+        # alguien la decidió —aunque haya decidido la misma cifra— y es lo que
+        # justifica mostrar la firma; `difiere_de_la_propuesta` dice si hay dos
+        # números que enseñar. Enseñar "el sistema propuso 3" al lado de un 3
+        # es ruido, y el ruido se deja de leer justo antes del renglón donde la
+        # diferencia importaba.
+        "fue_ajustada": renglon.fue_ajustada,
+        "difiere_de_la_propuesta": renglon.difiere_de_la_propuesta,
+        "ajustada_por": renglon.ajustada_por,
+        "ajustada_en": (
+            renglon.ajustada_en.isoformat() if renglon.ajustada_en else None
         ),
     }
 

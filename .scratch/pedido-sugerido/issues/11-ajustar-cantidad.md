@@ -6,7 +6,7 @@
 
 **Status:** ready-for-agent
 
-- [ ] La cantidad de un renglón se puede cambiar mientras la lista esté `abierta`.
-- [ ] Se guarda la cantidad propuesta por el sistema **y** la cantidad final, por separado: la diferencia entre las dos es lo que después dice si la reposición 1 a 1 está bien calibrada.
-- [ ] Una cantidad de cero no es una forma de descartar: para eso está `descartado`.
-- [ ] Queda registrado quién la cambió.
+- [x] La cantidad de un renglón se puede cambiar mientras la lista esté `abierta`.
+- [x] Se guarda la cantidad propuesta por el sistema **y** la cantidad final, por separado: la diferencia entre las dos es lo que después dice si la reposición 1 a 1 está bien calibrada.
+- [x] Una cantidad de cero no es una forma de descartar: para eso está `descartado`.
+- [x] Queda registrado quién la cambió.

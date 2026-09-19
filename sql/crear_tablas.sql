@@ -68,9 +68,16 @@
 -- se corren a mano con credenciales de dueño (ADR 0003) y ninguno de los dos
 -- lo toca el código de arranque.
 --
--- Hoy hay una: `sql/migraciones/0001-renglon-quien-descarto-y-cuando.sql`
--- (ticket 10), que agrega `descartado_por` y `descartado_en` a
--- `pedidos.renglon`.
+-- Hoy hay dos, y se corren en orden:
+--
+--   1. `sql/migraciones/0001-renglon-quien-descarto-y-cuando.sql` (ticket 10),
+--      que agrega `descartado_por` y `descartado_en`.
+--   2. `sql/migraciones/0002-renglon-cantidad-final-y-quien-la-ajusto.sql`
+--      (ticket 11), que agrega `cantidad_final`, `ajustada_por` y
+--      `ajustada_en`.
+--
+-- Las dos son idempotentes, así que correrlas sobre una base que ya las tiene
+-- -o sobre una recién creada con este archivo- no rompe nada.
 --
 --
 -- ## Acentos
@@ -308,6 +315,17 @@ CREATE TABLE IF NOT EXISTS pedidos.renglon (
     descartado_por       text,
     descartado_en        timestamptz,
 
+    -- LAS COLUMNAS NUEVAS VAN AL FINAL, no junto a la que se les parece.
+    -- `cantidad_final` se leería mejor pegada a `cantidad_propuesta`, y aun así
+    -- va aquí: una base migrada las recibe por `ALTER TABLE ... ADD COLUMN`,
+    -- que las pone al final, y si este archivo las declarara en otro lugar la
+    -- base desde cero y la migrada tendrían distinto orden de columnas. Un
+    -- `\d pedidos.renglon` en atlas dejaría de parecerse a este archivo, que es
+    -- lo único para lo que sirve.
+    cantidad_final       integer,
+    ajustada_por         text,
+    ajustada_en          timestamptz,
+
     CONSTRAINT pk_renglon
         PRIMARY KEY (renglon_id),
 
@@ -379,6 +397,50 @@ CREATE TABLE IF NOT EXISTS pedidos.renglon (
     CONSTRAINT ck_renglon_descarte
         CHECK ((estado = 'descartado')
                = (descartado_por IS NOT NULL AND descartado_en IS NOT NULL)),
+
+    -- AL MENOS UNA PIEZA, y aquí está la mitad silenciosa del ticket 11: UN
+    -- CERO NO ES UNA FORMA DE DESCARTAR.
+    --
+    -- Un renglón en cero no se pidió, no se descartó, no tiene firma de
+    -- descarte y sigue contando como trabajo por atender: dice tres cosas a la
+    -- vez y ninguna es verdad. El glosario ya tiene el estado para eso
+    -- -'descartado', "una persona decidió no pedirlo"- y viene con su quién y
+    -- su cuándo, que es justo lo que el conteo del ADR 0002 va a mirar después
+    -- de un mes. Un cero encubriría ese descarte y lo dejaría fuera del conteo.
+    --
+    -- Nótese la asimetría con `ck_renglon_cantidad`, que sí admite el cero en
+    -- `cantidad_propuesta`: ahí el cero lo escribe el sistema y significa "de
+    -- esto no se vendió nada", un hecho aritmético sin nadie detrás. Aquí lo
+    -- escribiría una persona, y una persona que no quiere pedir algo tiene un
+    -- botón para decirlo.
+    --
+    -- Esta restricción es la GARANTÍA; las otras dos comprobaciones del mismo
+    -- cero -`revisar_el_renglon` en Python y el `if` de la ruta- explican y
+    -- protegen al doble, pero solo ésta sigue puesta el día que alguien escriba
+    -- en la tabla desde un psql o desde un módulo que todavía no existe.
+    CONSTRAINT ck_renglon_cantidad_final
+        CHECK (cantidad_final >= 1),
+
+    -- La firma vacía no existe, igual que en el descarte y por lo mismo.
+    CONSTRAINT ck_renglon_ajustada_por
+        CHECK (ajustada_por <> ''),
+
+    -- Cantidad corregida si y solo si hay firma Y hora, el mismo par que
+    -- `ck_renglon_descarte` y `ck_pedido_sugerido_cierre`.
+    --
+    -- Sin la mitad de ida, una cantidad podría quedar cambiada sin decir quién
+    -- ni cuándo, y la pregunta "¿por qué pediste diez de algo de lo que se
+    -- vendieron tres?" no tendría a quién hacérsele. Sin la de vuelta, una
+    -- firma podría quedar colgada en un renglón que nadie tocó y diría que
+    -- alguien corrigió lo que no.
+    --
+    -- Y el NULL de `cantidad_final` no es un descuido: es "nadie la tocó".
+    -- Copiar ahí la propuesta al nacer haría indistinguible un renglón que
+    -- nadie revisó de uno que alguien confirmó igual -y el segundo es la
+    -- evidencia de que la reposición 1 a 1 acertó-.
+    CONSTRAINT ck_renglon_ajuste
+        CHECK ((cantidad_final IS NOT NULL)
+               = (ajustada_por IS NOT NULL AND ajustada_en IS NOT NULL)),
 
     CONSTRAINT fk_renglon_sugerido
         FOREIGN KEY (pedido_sugerido_id, negocio)
@@ -462,6 +524,42 @@ COMMENT ON COLUMN pedidos.renglon.descartado_por IS
 COMMENT ON COLUMN pedidos.renglon.descartado_en IS
     'Cuándo se descartó, instante con zona. NULL en todo renglón que no esté '
     'descartado. Es lo que hace medible la condición de revisión del ADR 0002.';
+
+-- DOS CANTIDADES Y NO UNA, y ésa es la decisión del ticket 11.
+-- `cantidad_propuesta` es lo que el sistema propuso por reposición 1 a 1 y
+-- **es inmutable**: se escribe en el INSERT que arma la lista y ninguna
+-- sentencia la vuelve a nombrar en un SET. `cantidad_final` es lo que una
+-- persona decidió pedir.
+--
+-- La diferencia entre las dos es lo único que después va a decir si la
+-- reposición 1 a 1 está bien calibrada -"se vendieron tres y pidieron diez" es
+-- la señal de que la regla se queda corta, y la condición de revisión del ADR
+-- 0002 vive de datos así-. Una sola columna sobreescribible se vería idéntica
+-- en la pantalla y dejaría esa diferencia en cero para siempre, sin un solo
+-- error que ver: exactamente la falla silenciosa que la regla 4 prohíbe.
+--
+-- NULL = nadie la tocó, y no es lo mismo que "alguien la confirmó igual". Por
+-- eso no hay DEFAULT que copie la propuesta: con las dos iguales desde el
+-- nacimiento, el renglón que alguien revisó y el que nadie miró se verían
+-- idénticos, y el primero es evidencia de que la propuesta acertó.
+COMMENT ON COLUMN pedidos.renglon.cantidad_final IS
+    'Lo que una persona decidió pedir, cuando corrigió la propuesta. NULL = '
+    'nadie la tocó, nunca la propuesta copiada. Al menos 1: un cero no es una '
+    'forma de descartar.';
+
+-- FIRMA, NO PERMISO (regla 3 de CLAUDE.md), igual que `descartado_por`. Sirve
+-- para saber a quién preguntarle por qué se pidieron diez de algo de lo que se
+-- vendieron tres. Hoy, sin el túnel delante, vale 'sin-identificar', que es un
+-- dato honesto: dice que no se supo.
+COMMENT ON COLUMN pedidos.renglon.ajustada_por IS
+    'Quién cambió la cantidad, según Cf-Access-Authenticated-User-Email. Es '
+    'una FIRMA, no un permiso. NULL si nadie la cambió.';
+
+-- `timestamptz` por la misma razón que `descartado_en`: es un INSTANTE que
+-- ocurrió aquí, no una fecha de venta. Sin él, dos correcciones seguidas no se
+-- podrían ordenar y no habría forma de saber cuál quedó.
+COMMENT ON COLUMN pedidos.renglon.ajustada_en IS
+    'Cuándo se cambió la cantidad, instante con zona. NULL si nadie la cambió.';
 
 
 -- --------------------------------------------------------------------------

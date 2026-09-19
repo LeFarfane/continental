@@ -109,6 +109,24 @@ DECIMALES_DE_PIEZAS = 3
 DECIMALES_DE_EXISTENCIA = 3
 DECIMALES_DE_COBERTURA = 1
 
+#: Lo menos que se le puede pedir a un proveedor cuando alguien corrige la
+#: cantidad: **una pieza**. Es el `CHECK (cantidad_final >= 1)` del DDL escrito
+#: en Python, y el número que la ruta cita al rechazar un cero.
+#:
+#: Un cero NO es una forma de descartar y por eso no se acepta aquí (ticket 11).
+#: Guardado valdría "pídeme cero piezas": ni pedido ni descartado, sin firma de
+#: descarte, invisible para el conteo del ADR 0002 y visible en la lista de
+#: trabajo como si quedara algo por atender. El glosario ya tiene el estado para
+#: eso —`descartado`, "una persona decidió no pedirlo"— y viene con su quién y
+#: su cuándo.
+#:
+#: Ojo con la asimetría contra `ck_renglon_cantidad`, que sí admite el cero en
+#: `cantidad_propuesta`: ahí el cero lo escribe el sistema y significa "de esto
+#: no se vendió nada", que es un hecho aritmético sin nadie detrás. Aquí lo
+#: escribiría una persona, y una persona que no quiere pedir algo tiene un botón
+#: para decirlo.
+CANTIDAD_FINAL_MINIMA = 1
+
 
 class PedidoSugeridoDuplicado(Exception):
     """Ya había una lista de ese día y negocio.
@@ -303,6 +321,23 @@ class RenglonGuardado:
     descartados superan a los pedidos, la reposición 1 a 1 no es la regla
     correcta"— es una consulta con un rango de fechas. Sin este instante, esa
     condición se puede cumplir sin que nadie pueda demostrarlo.
+
+    `cantidad_final` es lo que una persona decidió pedir (ticket 11), y vive
+    **aparte** de `propuesto.cantidad_propuesta`, que es lo que el sistema
+    propuso y **no se sobreescribe nunca**. La diferencia entre las dos es el
+    dato: es lo único que después va a decir si la reposición 1 a 1 está bien
+    calibrada. Si al corregir se pisara la propuesta, esa diferencia valdría
+    cero siempre y nadie se enteraría de que el dato se perdió.
+
+    **`None` es "nadie la tocó", y no se copia la propuesta al nacer.** Nacer
+    con las dos iguales haría indistinguibles dos hechos que no son el mismo:
+    un renglón que nadie revisó y uno que alguien miró y confirmó igual. El
+    segundo es evidencia de que la propuesta acertó; el primero no dice nada.
+
+    `ajustada_por` y `ajustada_en` son la firma de esa corrección, con el mismo
+    criterio que `descartado_por` / `descartado_en` y su mismo CHECK pareado
+    (`ck_renglon_ajuste`): o están las dos con la cantidad, o no está ninguna.
+    Firma y no permiso (regla 3 de `CLAUDE.md`).
     """
 
     renglon_id: int
@@ -310,6 +345,47 @@ class RenglonGuardado:
     propuesto: Renglon
     descartado_por: str | None = None
     descartado_en: dt.datetime | None = None
+    cantidad_final: int | None = None
+    ajustada_por: str | None = None
+    ajustada_en: dt.datetime | None = None
+
+    @property
+    def cantidad_a_pedir(self) -> int:
+        """Lo que de verdad se le va a pedir al proveedor.
+
+        La corrección de la persona si la hubo, y si no la propuesta del
+        sistema. Vive aquí —en Python, probado— y no repetida en el JavaScript
+        de la pantalla ni en un `coalesce` de cada consulta futura: es la regla
+        que decide qué cantidad se copia al pedido, y una regla escrita dos
+        veces se cambia una sola.
+        """
+        return (
+            self.propuesto.cantidad_propuesta
+            if self.cantidad_final is None
+            else self.cantidad_final
+        )
+
+    @property
+    def fue_ajustada(self) -> bool:
+        """Si alguien decidió la cantidad, aunque haya decidido la misma.
+
+        Es lo que distingue "nadie lo revisó" de "alguien lo revisó", y por eso
+        no se deduce comparando las dos cifras: confirmar el 3 que el sistema
+        propuso es una decisión, y borrarla del dato sería tirar la única
+        evidencia de que la reposición 1 a 1 acertó ese día.
+        """
+        return self.cantidad_final is not None
+
+    @property
+    def difiere_de_la_propuesta(self) -> bool:
+        """Si lo que se va a pedir no es lo que el sistema propuso.
+
+        Lo que la pantalla usa para mostrar las dos cifras juntas. Separado de
+        `fue_ajustada` a propósito: enseñar "el sistema propuso 3" al lado de un
+        3 es ruido, y el ruido se deja de leer justo antes de que aparezca el
+        renglón donde la diferencia importaba.
+        """
+        return self.fue_ajustada and self.cantidad_final != self.propuesto.cantidad_propuesta
 
     @property
     def esta_descartado(self) -> bool:
@@ -465,6 +541,14 @@ def columnas_del_renglon(
     explícitos en `columnas_de_la_lista`: `ck_renglon_descarte` relaciona los
     tres, y escribirlos juntos deja ver que se respeta. Un renglón nace
     `abierto` y nadie lo ha descartado.
+
+    `cantidad_final`, `ajustada_por` y `ajustada_en` van igual, y las tres en
+    `None`: **un renglón nace sin que nadie haya corregido su cantidad**. Poner
+    aquí `cantidad_final = renglon.cantidad_propuesta` sería cómodo —la pantalla
+    no tendría que elegir entre dos columnas— y borraría el dato del ticket 11:
+    con las dos iguales desde el nacimiento no hay forma de saber si alguien la
+    revisó. `ck_renglon_ajuste` relaciona a las tres igual que
+    `ck_renglon_descarte` a las suyas.
     """
     return {
         "negocio": negocio,
@@ -483,6 +567,9 @@ def columnas_del_renglon(
         "estado": RENGLON_ABIERTO,
         "descartado_por": None,
         "descartado_en": None,
+        "cantidad_final": None,
+        "ajustada_por": None,
+        "ajustada_en": None,
     }
 
 
@@ -587,6 +674,34 @@ def revisar_el_renglon(columnas: dict) -> None:
             "un renglón devuelto a 'abierto', ese mismo conteo mentiría al "
             "revés."
         )
+    if (
+        columnas["cantidad_final"] is not None
+        and columnas["cantidad_final"] < CANTIDAD_FINAL_MINIMA
+    ):
+        raise ValueError(
+            f"Cantidad final de {columnas['cantidad_final']}: lo rechaza "
+            "ck_renglon_cantidad_final, que exige al menos "
+            f"{CANTIDAD_FINAL_MINIMA}. **Un cero no es una forma de "
+            "descartar**: para eso está el estado 'descartado', que además "
+            "guarda quién y cuándo. Un cero guardado sería un renglón que no "
+            "se pidió, no se descartó y sigue contando como trabajo por "
+            "atender."
+        )
+    if columnas["ajustada_por"] == "":
+        raise ValueError(
+            "Firma vacía. La columna tiene CHECK (ajustada_por <> ''): o hay "
+            "correo o es NULL, igual que en el descarte."
+        )
+    if (columnas["cantidad_final"] is not None) != (
+        columnas["ajustada_por"] is not None and columnas["ajustada_en"] is not None
+    ):
+        raise ValueError(
+            "Cantidad corregida sin decir quién ni cuándo, o firma de ajuste "
+            "sin cantidad. Lo rechaza ck_renglon_ajuste. Sin la firma, la "
+            "diferencia entre lo propuesto y lo pedido no se le puede "
+            "preguntar a nadie; con la firma suelta, diría que alguien corrigió "
+            "un renglón que nadie tocó."
+        )
 
 
 # --------------------------------------------------------------- interfaz
@@ -594,7 +709,7 @@ def revisar_el_renglon(columnas: dict) -> None:
 
 @runtime_checkable
 class AlmacenamientoDelPedido(Protocol):
-    """El borde de escritura. Siete operaciones y ninguna de ellas borra.
+    """El borde de escritura. Ocho operaciones y ninguna de ellas borra.
 
     Es aparte de `LecturaDelAlmacen` a propósito, igual que Doyle lo es del
     almacén: una prueba tiene que poder sustituir una sola, y un borde caído no
@@ -735,6 +850,44 @@ class AlmacenamientoDelPedido(Protocol):
         """
         ...
 
+    def ajustar_la_cantidad(
+        self, negocio: str, renglon_id: int, cantidad: int, quien: str
+    ) -> PedidoSugeridoGuardado | None:
+        """Guarda la cantidad que una persona decidió pedir, firmada (ticket 11).
+
+        **No toca `cantidad_propuesta`.** Escribe `cantidad_final` al lado, y
+        esa separación es el ticket entero: la diferencia entre las dos es lo
+        único que después dice si la reposición 1 a 1 está bien calibrada. Una
+        sola columna que se sobreescriba se ve igual en la pantalla y borra el
+        dato sin un solo error que ver.
+
+        `None` es "no había ningún renglón al que se le pudiera cambiar la
+        cantidad", y quien llame lo dice en vez de fingir. Son **dos**
+        condiciones y las dos viven en el `WHERE`:
+
+        - el renglón sigue `abierto` — uno `en tránsito` ya se le pidió a un
+          proveedor con una cifra, y cambiarla aquí haría que el renglón dijera
+          una cosa y el proveedor otra;
+        - **y su lista sigue `abierta`**, que es lo que el ticket pide con todas
+          sus letras. Una lista `cerrada` quiere decir "ya se pidió lo que se
+          iba a pedir" (`CONTEXT.md`).
+
+        Comprobar el estado de la lista en Python y actualizar después tiene una
+        carrera en medio: una pestaña cierra mientras otra corrige, y la
+        corrección entra en una lista que ya se pidió.
+
+        `cantidad` tiene que ser de al menos `CANTIDAD_FINAL_MINIMA`: un cero no
+        es una forma de descartar. Quien llame con un cero recibe un `ValueError`
+        de `revisar_el_renglon` contra el doble y una violación de
+        `ck_renglon_cantidad_final` contra Postgres — las dos son la misma regla
+        y la ruta la atrapa antes, para poder explicarla.
+
+        Devuelve la **lista entera** por la misma razón que `descartar`: los
+        conteos que la pantalla pinta salen de lo guardado y no de una cuenta
+        que el navegador lleve a mano.
+        """
+        ...
+
 
 # ------------------------------------------------- la implementación real
 #
@@ -767,7 +920,8 @@ _LEER_RENGLONES = text(
     select renglon_id, producto_id, clave, descripcion, piezas_vendidas,
            cantidad_propuesta, esta_en_el_catalogo, existencia,
            dias_de_cobertura, clasificacion, estado,
-           descartado_por, descartado_en
+           descartado_por, descartado_en,
+           cantidad_final, ajustada_por, ajustada_en
     from pedidos.renglon
     where negocio = :negocio and pedido_sugerido_id = :pedido_sugerido_id
     order by renglon_id
@@ -885,6 +1039,45 @@ _DEVOLVER_A_ABIERTO = text(
        and renglon_id = :renglon_id
        and estado = 'descartado'
     returning renglon_id, pedido_sugerido_id
+    """
+)
+
+# Ajustar la cantidad de un renglón (ticket 11).
+#
+# `set cantidad_final = ...` y NUNCA `cantidad_propuesta`: la propuesta del
+# sistema es inmutable y se escribe una sola vez, en el INSERT que arma la
+# lista. La diferencia entre las dos es lo que después dice si la reposición 1 a
+# 1 está bien calibrada, y una sentencia que pisara la propuesta dejaría esa
+# diferencia en cero para siempre sin un solo error que ver.
+#
+# **DOS condiciones de transición, y las dos en el WHERE.** La primera es la
+# misma del descarte —solo se corrige lo `abierto`—. La segunda es lo que este
+# ticket agrega: `p.estado = 'abierto'`, la LISTA. Un `UPDATE ... FROM` y no un
+# `SELECT` previo porque comprobar el estado de la lista en Python y actualizar
+# después tiene una carrera en medio: dos pestañas en el mostrador, una cierra y
+# la otra corrige, y la corrección entra en una lista que ya se pidió.
+#
+# La unión lleva `p.negocio = r.negocio` además del id: es la misma pareja de
+# columnas de `fk_renglon_sugerido`, y con ella el `negocio` del parámetro acota
+# a las dos tablas (regla 7).
+#
+# Las tres columnas se escriben juntas porque `ck_renglon_ajuste` las exige
+# juntas: cantidad final si y solo si hay firma Y hora. `now()` y no una hora de
+# Python, por la misma razón que el descarte y el cierre.
+_AJUSTAR_LA_CANTIDAD = text(
+    """
+    update pedidos.renglon as r
+       set cantidad_final = :cantidad,
+           ajustada_por = :quien,
+           ajustada_en = now()
+      from pedidos.pedido_sugerido as p
+     where r.negocio = :negocio
+       and r.renglon_id = :renglon_id
+       and r.estado = 'abierto'
+       and p.pedido_sugerido_id = r.pedido_sugerido_id
+       and p.negocio = r.negocio
+       and p.estado = 'abierto'
+    returning r.renglon_id, r.pedido_sugerido_id
     """
 )
 
@@ -1088,13 +1281,27 @@ class AlmacenamientoPostgres:
             _DEVOLVER_A_ABIERTO, {"negocio": negocio, "renglon_id": renglon_id}
         )
 
+    def ajustar_la_cantidad(
+        self, negocio: str, renglon_id: int, cantidad: int, quien: str
+    ) -> PedidoSugeridoGuardado | None:
+        return self._mover_el_renglon(
+            _AJUSTAR_LA_CANTIDAD,
+            {
+                "negocio": negocio,
+                "renglon_id": renglon_id,
+                "cantidad": cantidad,
+                "quien": quien,
+            },
+        )
+
     def _mover_el_renglon(self, sentencia, parametros: dict):
         """El `UPDATE` de un renglón y la relectura de su lista, en una transacción.
 
-        Las dos operaciones del ticket 10 comparten esto entero y solo cambian
-        de sentencia: la transición está en el `WHERE` de cada una, así que
-        aquí no hay un solo `if` sobre el estado — cero filas es "no había nada
-        que mover" y sale como `None`.
+        Las tres operaciones sobre un renglón —descartar, devolver y corregir la
+        cantidad— comparten esto entero y solo cambian de sentencia: la
+        transición está en el `WHERE` de cada una, así que aquí no hay un solo
+        `if` sobre el estado — cero filas es "no había nada que mover" y sale
+        como `None`.
 
         **Se relee dentro de la misma transacción** para que el conteo de
         descartados que vuelve sea el de después del cambio y no el de una foto
@@ -1153,6 +1360,14 @@ def armar_guardado(cabecera, filas) -> PedidoSugeridoGuardado:
                 propuesto=renglon_desde_columnas(f),
                 descartado_por=f["descartado_por"],
                 descartado_en=f["descartado_en"],
+                # `int(...)` en el borde, igual que el resto: Postgres devuelve
+                # `integer` como `int`, pero el día que la columna cambie de
+                # tipo esto no se entera a medias.
+                cantidad_final=(
+                    None if f["cantidad_final"] is None else int(f["cantidad_final"])
+                ),
+                ajustada_por=f["ajustada_por"],
+                ajustada_en=f["ajustada_en"],
             )
             for f in filas
         ),
