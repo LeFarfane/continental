@@ -113,6 +113,29 @@ python iniciar.py --servicio  # sin abrir navegador, sin buscar otro puerto
 pytest                        # pruebas
 ```
 
+## Agent skills
+
+Los encabezados de esta sección están en inglés a propósito: son lo que las
+skills buscan. El contenido del repo sigue en español.
+
+### Issue tracker
+
+Markdown local bajo `.scratch/<slug>/`, versionado. Continental todavía no tiene
+remoto ni `gh` instalado; cuando lo tenga, esto pasa a GitHub cambiando un solo
+archivo. Ver `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Las cinco por omisión, sin traducir: `needs-triage`, `needs-info`,
+`ready-for-agent`, `ready-for-human`, `wontfix`. Ver
+`docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Contexto único: `CONTEXT.md` en la raíz y los ADRs en **`docs/decisiones/`**
+—no en `docs/adr/`, que es lo que dice la plantilla—. También mandan aquí los
+ADRs de `Doyle` y de `farmacia-data`. Ver `docs/agents/domain.md`.
+
 ## Convenciones
 
 - Nombres de código, commits, comentarios y documentación **en español**.
