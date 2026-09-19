@@ -8,12 +8,24 @@ un `Depends`, así que sustituirla cabe en cuatro renglones.
 
 Ninguna prueba toca Postgres ni la red.
 
-**El suite tarda ~0.95 s en la torre y el culpable no es una prueba.** Medido el
-2026-09-18: `test_la_portada_carga` cuesta 0.57 s, de los cuales 0.46 s son
-`mimetypes.init()` leyendo el registro de Windows la primera vez que alguien
-sirve un archivo. En atlas (Linux) ese costo no existe. Si el numero se sale de
-un segundo en la torre, mide antes de culpar a las pruebas nuevas:
-`pytest --durations=6`.
+**El suite tarda ~1.0-1.3 s en la torre y el grueso no es una prueba.** Medido
+el 2026-09-18, con el ticket 03 dentro: la primera prueba que sirve un archivo
+estático paga 0.37-0.49 s de `mimetypes.init()` leyendo el registro de Windows.
+En atlas (Linux) ese costo no existe, así que allá el mismo suite va por ~0.7 s.
+
+El número subió con el ticket 03, y está medido, no adivinado: en corridas
+seguidas, 30 pruebas en 0.73-0.95 s contra 43 en 0.95-1.37 s. Las 13 nuevas
+cuestan ~0.2 s en total —~20 ms cada una de las que pasan por `TestClient`,
+exactamente lo que ya costaba cada prueba de `test_bordes.py`— y ninguna
+aparece entre las cinco más lentas. La recolección no se movió: 0.13-0.17 s, y
+ahí es donde `--durations` no mira (ver la nota de `CARPETAS_QUE_NO_SE_MIRAN`
+en `test_compila.py`).
+
+**La medición en la torre tiene ruido de ±0.4 s**, así que una sola corrida no
+dice nada: corre tres. Y si el número se sale de lo anterior, mide antes de
+culpar a las pruebas nuevas: `pytest --durations=8` para el tiempo de las
+pruebas y `pytest --collect-only` para el de la recolección, que son dos
+problemas distintos.
 """
 
 from __future__ import annotations

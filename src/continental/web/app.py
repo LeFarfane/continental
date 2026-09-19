@@ -1,11 +1,13 @@
 """El backend de Continental.
 
-Esqueleto: hoy solo sabe decir si está vivo, quién está entrando y si los
-módulos contestan. El módulo de Pedido se construye encima de esto.
+Dice si está vivo, quién está entrando, si los módulos contestan, y arma el
+pedido sugerido del día. Todavía no guarda nada y no trae precios: eso son los
+tickets 08 y 12 en adelante.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from pathlib import Path
 
@@ -18,6 +20,7 @@ from continental import __version__
 from continental.almacen import LecturaDelAlmacen
 from continental.config import cargar
 from continental.doyle import ClienteDeDoyle
+from continental.sugerido import calcular_pedido_sugerido
 from continental.web.dependencias import obtener_almacen, obtener_doyle
 
 ESTATICOS = Path(__file__).parent / "static"
@@ -146,6 +149,71 @@ def bordes(
     resultado.append(entrada)
 
     return {"bordes": resultado}
+
+
+@app.get("/api/pedido-sugerido")
+def pedido_sugerido(almacen: LecturaDelAlmacen = Depends(obtener_almacen)):
+    """El pedido sugerido del día: un renglón por producto vendido.
+
+    **La ventana se ancla en `max(fecha)` del almacén y nunca en el reloj.**
+    Esa es la única decisión que se toma aquí, y por eso se toma aquí: el
+    cálculo es una función pura que recibe las ventas ya elegidas, así que no
+    tiene reloj que mirar aunque alguien quisiera. El Postgres del contenedor
+    corre en UTC y su `current_date` puede ir dos días adelante del último
+    dato; a farmacia-data le costó 11.7 puntos de crecimiento inventados.
+
+    Hoy la ventana es **el último día con datos**. Acumular desde el cierre del
+    pedido sugerido anterior —que es lo que ADR 0002 decide, porque lo del
+    sábado llega hasta el lunes en la noche— necesita que el sugerido se
+    guarde, y eso es el ticket 09.
+
+    Un almacén caído sale como `ok: false` con su motivo y no como una lista
+    vacía (regla 4): "hoy no se vendió nada" y "no pude leer" se ven idénticos
+    si el único dato es una lista sin renglones, y el precio de confundirlos es
+    que el pedido del día no se hace. El motivo es el **tipo** de la falla,
+    nunca su texto: un `str(exc)` de SQLAlchemy lleva la cadena de conexión con
+    contraseña y esto corre detrás de un túnel (regla 5).
+
+    Es `def` y no `async def` a propósito: el almacén es síncrono —psycopg2 no
+    es asíncrono— y así FastAPI lo corre en su pool de hilos sin bloquear el
+    bucle de eventos.
+    """
+    try:
+        ultima = almacen.ultima_fecha_con_ventas()
+        # Sin ventas no hay nada que reponer, y leer el catálogo entero (3,429
+        # filas) para descubrirlo sería trabajo tirado.
+        ventas = almacen.ventas(ultima, ultima) if ultima else []
+        catalogo = almacen.catalogo() if ultima else []
+    except Exception as exc:  # noqa: BLE001 — el almacén caído es un hueco, no un 500
+        log.exception("El almacén no contestó al armar el pedido sugerido")
+        return {
+            "ok": False,
+            "detalle": f"el almacén no contestó ({type(exc).__name__})",
+            "fecha_de_ventas": None,
+            "renglones": [],
+            "sin_catalogo": 0,
+        }
+
+    pedido = calcular_pedido_sugerido(ventas=ventas, catalogo=catalogo)
+
+    if pedido.sin_catalogo:
+        # A la bitácora con nombre y apellido: el hueco se ve en la pantalla,
+        # pero quien vaya a arreglarlo en SICAR necesita los ids.
+        log.warning(
+            "%d producto(s) vendido(s) del %s no están en marts.dim_producto: %s",
+            pedido.sin_catalogo,
+            pedido.fecha_de_ventas,
+            [r.producto_id for r in pedido.renglones if not r.esta_en_el_catalogo],
+        )
+
+    return {
+        "ok": True,
+        "fecha_de_ventas": (
+            pedido.fecha_de_ventas.isoformat() if pedido.fecha_de_ventas else None
+        ),
+        "renglones": [dataclasses.asdict(r) for r in pedido.renglones],
+        "sin_catalogo": pedido.sin_catalogo,
+    }
 
 
 @app.get("/")

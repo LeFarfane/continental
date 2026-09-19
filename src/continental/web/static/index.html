@@ -10,8 +10,10 @@
     --tinta: #1c1a17;
     --tenue: #6b6560;
     --linea: #e2ddd6;
+    --realce: #f3efe8;
     --ok: #2f7d4f;
     --mal: #a83232;
+    --aviso: #8a6a1f;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -19,8 +21,10 @@
       --tinta: #f0ece4;
       --tenue: #9b948b;
       --linea: #33302a;
+      --realce: #1f1d16;
       --ok: #6fbd8b;
       --mal: #e08a8a;
+      --aviso: #d9b45e;
     }
   }
   * { box-sizing: border-box; }
@@ -28,7 +32,7 @@
     margin: 0; padding: 2rem 1rem; background: var(--fondo); color: var(--tinta);
     font: 16px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   }
-  main { max-width: 46rem; margin: 0 auto; }
+  main { max-width: 52rem; margin: 0 auto; }
   h1 { font-size: 1.6rem; margin: 0 0 .25rem; letter-spacing: -.01em; }
   p.sub { margin: 0 0 2rem; color: var(--tenue); }
   section { border-top: 1px solid var(--linea); padding-top: 1.25rem; margin-top: 1.5rem; }
@@ -41,12 +45,51 @@
   .punto.mal { background: var(--mal); }
   .detalle { color: var(--tenue); font-size: .88rem; }
   code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
+
+  /* El pedido sugerido. Tabla y no lista: son tres datos por renglón y la
+     cantidad se lee en columna, que es como se verifica de un vistazo. */
+  .corte { margin: 0 0 1rem; font-size: 1.05rem; }
+  .corte strong { font-weight: 600; }
+  .nota { margin: 0 0 1rem; color: var(--tenue); font-size: .9rem; }
+  .nota.mal { color: var(--mal); }
+  .nota.aviso { color: var(--aviso); }
+  table { width: 100%; border-collapse: collapse; }
+  caption { text-align: left; color: var(--tenue); font-size: .88rem; padding-bottom: .5rem; }
+  th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid var(--linea); vertical-align: baseline; }
+  th { font-size: .72rem; text-transform: uppercase; letter-spacing: .07em; color: var(--tenue); font-weight: 600; }
+  tbody tr:nth-child(even) { background: var(--realce); }
+  td.clave, th.clave { width: 9.5rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; color: var(--tenue); }
+  td.cantidad, th.cantidad { width: 8rem; text-align: right; }
+  td.cantidad b { font-size: 1.05rem; font-weight: 600; }
+  .marca { color: var(--aviso); font-size: .8rem; display: block; }
+  .vendido { color: var(--tenue); font-size: .8rem; display: block; }
+  @media (max-width: 34rem) {
+    td.clave, th.clave { width: auto; }
+    .detalle { display: block; }
+  }
 </style>
 </head>
 <body>
 <main>
   <h1>Continental</h1>
-  <p class="sub">La suite de operación de la farmacia. Todavía es un esqueleto: el primer módulo es el Pedido.</p>
+  <p class="sub">La suite de operación de la farmacia.</p>
+
+  <section>
+    <h2>Pedido sugerido</h2>
+    <p class="corte" id="corte">Armando la lista…</p>
+    <p class="nota" id="pedido-nota" hidden></p>
+    <table id="pedido-tabla" hidden>
+      <caption id="pedido-resumen"></caption>
+      <thead>
+        <tr>
+          <th class="clave">Clave</th>
+          <th>Producto</th>
+          <th class="cantidad">Cantidad a pedir</th>
+        </tr>
+      </thead>
+      <tbody id="pedido-renglones"></tbody>
+    </table>
+  </section>
 
   <section>
     <h2>Estado</h2>
@@ -81,6 +124,119 @@ const pintar = (id, filas) => {
   ul.replaceChildren(...filas);
 };
 
+// ------------------------------------------------------- el pedido sugerido
+
+// La fecha se arma a mano y NO con `new Date('2026-09-16')`.
+// Ese constructor interpreta una fecha sola como UTC, y aquí el reloj va en
+// UTC-6: el navegador mostraría "lunes 15" para el dato del martes 16. Sería
+// la misma trampa de zona horaria que ya costó 11.7 puntos de crecimiento
+// inventados, pero del lado del cliente.
+const enPalabras = (iso) => {
+  const [a, m, d] = iso.split('-').map(Number);
+  const fecha = new Date(a, m - 1, d);
+  // El día de la semana va a propósito: "el viernes 12" y "el martes 16" no se
+  // confunden, y una fecha sola sí. Es el criterio del ticket.
+  return fecha.toLocaleDateString('es-MX', {
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
+  }).replace(',', '');
+};
+
+const plural = (n, singular, pluralizado) => n + ' ' + (n === 1 ? singular : pluralizado);
+
+const nota = (texto, clase) => {
+  const p = document.getElementById('pedido-nota');
+  p.className = 'nota' + (clase ? ' ' + clase : '');
+  p.textContent = texto;
+  p.hidden = !texto;
+};
+
+const renglon = (r) => {
+  const tr = document.createElement('tr');
+
+  const clave = document.createElement('td');
+  clave.className = 'clave';
+  clave.textContent = r.clave || '—';
+
+  const producto = document.createElement('td');
+  producto.textContent = r.descripcion;
+  if (!r.esta_en_el_catalogo) {
+    const marca = document.createElement('span');
+    marca.className = 'marca';
+    marca.textContent = 'No está en el catálogo: revísalo en SICAR.';
+    producto.append(marca);
+  }
+
+  const cantidad = document.createElement('td');
+  cantidad.className = 'cantidad';
+  const numero = document.createElement('b');
+  numero.textContent = r.cantidad_propuesta;
+  cantidad.append(numero);
+  // Solo para granel: si se vendieron 2.5 y se proponen 3, la diferencia se
+  // dice. Callarla haría que la propuesta no cuadre con el ticket.
+  if (r.piezas_vendidas !== r.cantidad_propuesta) {
+    const d = document.createElement('span');
+    d.className = 'vendido';
+    d.textContent = 'se vendieron ' + r.piezas_vendidas;
+    cantidad.append(d);
+  }
+
+  tr.append(clave, producto, cantidad);
+  return tr;
+};
+
+async function cargarPedido() {
+  const corte = document.getElementById('corte');
+  const tabla = document.getElementById('pedido-tabla');
+  let datos;
+
+  try {
+    datos = await (await fetch('/api/pedido-sugerido')).json();
+  } catch (e) {
+    corte.textContent = 'No se pudo armar el pedido sugerido.';
+    nota('Continental no contestó. Vuelve a cargar la página; si sigue igual, avísale a Eddie.', 'mal');
+    return;
+  }
+
+  // Un hueco con su motivo, nunca una lista vacía: vacío se lee "hoy no se
+  // vendió nada" y el pedido del día no se hace.
+  if (datos.ok === false) {
+    corte.textContent = 'No se pudo armar el pedido sugerido.';
+    nota(datos.detalle + '. La lista no está vacía: no se pudo leer. Avísale a Eddie.', 'mal');
+    return;
+  }
+
+  if (!datos.fecha_de_ventas) {
+    corte.textContent = 'Todavía no hay ventas de las cuales reponer.';
+    nota('El almacén no tiene ni una venta registrada.', 'aviso');
+    return;
+  }
+
+  corte.innerHTML = '';
+  corte.append('Ventas del ');
+  const cuando = document.createElement('strong');
+  cuando.textContent = enPalabras(datos.fecha_de_ventas);
+  corte.append(cuando);
+
+  if (!datos.renglones.length) {
+    nota('Ese día no se vendió nada que reponer.', 'aviso');
+    return;
+  }
+
+  nota(datos.sin_catalogo
+    ? (datos.sin_catalogo === 1
+        ? 'Un renglón es de un producto que el catálogo no conoce. Se muestra igual: se vendió y hay que reponerlo.'
+        : datos.sin_catalogo + ' renglones son de productos que el catálogo no conoce. Se muestran igual: se vendieron y hay que reponerlos.')
+    : '', datos.sin_catalogo ? 'aviso' : '');
+
+  document.getElementById('pedido-resumen').textContent =
+    plural(datos.renglones.length, 'renglón', 'renglones') +
+    ', uno por producto vendido. Se propone reponer lo que salió, pieza por pieza.';
+  document.getElementById('pedido-renglones').replaceChildren(...datos.renglones.map(renglon));
+  tabla.hidden = false;
+}
+
+// ------------------------------------------------------------- el esqueleto
+
 async function cargar() {
   try {
     const salud = await (await fetch('/api/salud')).json();
@@ -102,6 +258,7 @@ async function cargar() {
   }
 }
 
+cargarPedido();
 cargar();
 </script>
 </body>
