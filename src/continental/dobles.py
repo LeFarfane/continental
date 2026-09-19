@@ -236,6 +236,27 @@ class AlmacenamientoFalso:
         fila = self._fila(negocio, fecha_del_pedido)
         return None if fila is None else armar_guardado(fila, fila["renglones"])
 
+    def corte_del_ultimo_cerrado(
+        self, negocio: str, antes_de: dt.date
+    ) -> dt.date | None:
+        """El `max(ventas_consideradas_hasta)` de las cerradas, en memoria.
+
+        Las tres condiciones son el `WHERE` de `_ULTIMO_CORTE`, en el mismo
+        orden, y el `max` es el mismo: lo que se busca es hasta dónde llegó lo
+        ya pedido, no cuál fila se cerró al final. Un doble que devolviera la
+        última cerrada por orden de cierre haría retroceder el corte cuando
+        alguien cierra hoy una lista vieja — y esos días se pedirían dos veces.
+        """
+        self._revisar()
+        cortes = [
+            lista["ventas_consideradas_hasta"]
+            for lista in self.listas
+            if lista["negocio"] == negocio
+            and lista["estado"] == CERRADO
+            and lista["fecha_del_pedido"] < antes_de
+        ]
+        return max(cortes) if cortes else None
+
     # ----------------------------------------------------------- escritura
 
     def abrir_el_dia(

@@ -41,6 +41,7 @@ from continental.almacenamiento import (
     AlmacenamientoPostgres,
     PedidoSugeridoDuplicado,
     Ventana,
+    dias_primera_vez_configurados,
 )
 from continental.dobles import AlmacenamientoFalso
 from continental.sugerido import Renglon
@@ -80,7 +81,13 @@ def test_al_abrir_el_dia_se_crea_el_pedido_sugerido_si_no_existe(
     guardado = almacenamiento.leer(NEGOCIO, dt.date(2024, 3, 5))
     assert guardado is not None
     assert guardado.estado == ABIERTO
-    assert guardado.ventana == Ventana(dt.date(2024, 3, 5), dt.date(2024, 3, 5))
+    # Sin un cierre anterior, la ventana es la de la primera vez: los días que
+    # diga `pedido.dias_primera_vez` en el YAML, contando los dos extremos. El
+    # extremo derecho es el último día con datos. Ver `test_acumulacion.py`.
+    assert guardado.ventana == Ventana(
+        dt.date(2024, 3, 5) - dt.timedelta(days=dias_primera_vez_configurados() - 1),
+        dt.date(2024, 3, 5),
+    )
     assert [r.propuesto.clave for r in guardado.renglones] == ["7501000000001"]
     assert [r.estado for r in guardado.renglones] == [RENGLON_ABIERTO]
 

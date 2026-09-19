@@ -30,9 +30,10 @@ distintas y esa separación es a propósito:
   la obedece.
 
 **La lista larga es el otro dato de la decisión.** El sugerido trae tantos
-renglones como productos distintos se vendieron, y con el ticket 09 la ventana
-dejará de ser un día para acumular desde el último cierre —con el hueco de fin
-de semana, hasta 2.5 días—. Mandar la lista completa una vez y filtrarla en el
+renglones como productos distintos se vendieron, y desde el ticket 09 la
+ventana ya no es un día: acumula desde el último cierre —con el hueco de fin de
+semana, hasta 2.5 días, y más si nadie cerró una lista en toda la semana—.
+Mandar la lista completa una vez y filtrarla en el
 navegador es el camino que **no** crece con el número de veces que alguien
 mueve el interruptor.
 

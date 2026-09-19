@@ -59,6 +59,9 @@
      cifras se leen en columna, que es como se verifica de un vistazo. */
   .corte { margin: 0 0 .35rem; font-size: 1.05rem; }
   .corte strong { font-weight: 600; }
+  /* Cuántos días acumula la ventana. Va en su propio renglón y en tono tenue:
+     es el dato que explica el rango de arriba, no compite con él. */
+  .dias-acumulados { color: var(--tenue); font-size: .8rem; display: block; }
   /* Cuándo se armó la lista y en qué estado está. Va DEBAJO del corte y en
      letra chica a propósito: el corte —de qué día son las ventas— es lo que
      decide qué se compra; esto es lo que deja auditar la lista después. Dos
@@ -237,6 +240,29 @@ const enPalabras = (iso) => {
   return fecha.toLocaleDateString('es-MX', {
     weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
   }).replace(',', '');
+};
+
+// El día sin el mes ni el año, para el extremo izquierdo de un rango que cae
+// en el mismo mes: "del viernes 11 al lunes 14 de septiembre de 2026" se lee de
+// un vistazo, y repetir el mes y el año dos veces no agrega nada. Arma la fecha
+// a mano por la misma razón que `enPalabras`.
+const diaEnPalabras = (iso) => {
+  const [a, m, d] = iso.split('-').map(Number);
+  return new Date(a, m - 1, d)
+    .toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric' })
+    .replace(',', '');
+};
+
+// De qué día a qué día de ventas salió la lista. Desde el ticket 09 la ventana
+// acumula desde el corte del último cerrado, así que casi nunca es un solo día:
+// decir solo la fecha final sería ENGAÑOSO —"Ventas del lunes 14" con una
+// ventana que arranca el viernes 11 hace creer que lo del fin de semana no
+// está, y el encargado no tiene cómo saber que sí—. Los dos extremos entran.
+const rangoEnPalabras = (desde, hasta) => {
+  if (!desde || desde === hasta) return 'del ' + enPalabras(hasta);
+  const mismoMes = desde.slice(0, 7) === hasta.slice(0, 7);
+  return 'del ' + (mismoMes ? diaEnPalabras(desde) : enPalabras(desde)) +
+    ' al ' + enPalabras(hasta);
 };
 
 // `armado_en` y `cerrado_en` SÍ pasan por `new Date(...)`, y eso no contradice
@@ -467,7 +493,9 @@ const pintarCabecera = (datos) => {
   if (datos.armado_en) armado.append(' · Armada el ' + instanteEnPalabras(datos.armado_en));
   if (datos.cerrado_en) {
     armado.append(' · Se cerró el ' + instanteEnPalabras(datos.cerrado_en) +
-      ', con las ventas hasta el ' + enPalabras(datos.ventas_consideradas_hasta) + '.');
+      ', con las ventas ' +
+      rangoEnPalabras(datos.ventas_consideradas_desde, datos.ventas_consideradas_hasta) +
+      '. La siguiente lista arranca al día siguiente de ese corte.');
   } else if (datos.estado === 'vencido') {
     // Se dice con todas sus letras: una lista vencida no es un error del
     // sistema, es un día en que nadie la cerró, y lo que quedó sin atender
@@ -488,8 +516,12 @@ const pintarCierre = (datos, alCerrar) => {
     caja.hidden = true;
     return;
   }
+  // Se dice de qué día a qué día, y qué implica cerrarla: el corte es desde
+  // donde acumula la siguiente, así que cerrar es decidir que lo de esos días
+  // ya se pidió. Decir solo la fecha final escondería los días de en medio.
   detalle.textContent = 'Al cerrarla queda guardado que consideró las ventas ' +
-    'hasta el ' + enPalabras(datos.ventas_consideradas_hasta) + '. No se borra nada.';
+    rangoEnPalabras(datos.ventas_consideradas_desde, datos.ventas_consideradas_hasta) +
+    '. La siguiente arranca al día siguiente. No se borra nada.';
   boton.disabled = false;
   boton.onclick = () => alCerrar(boton, detalle);
   caja.hidden = false;
@@ -551,10 +583,23 @@ async function cargarPedido() {
   }
 
   corte.innerHTML = '';
-  corte.append('Ventas del ');
+  corte.append('Ventas ');
   const cuando = document.createElement('strong');
-  cuando.textContent = enPalabras(datos.fecha_de_ventas);
+  cuando.textContent = rangoEnPalabras(
+    datos.ventas_consideradas_desde, datos.fecha_de_ventas);
   corte.append(cuando);
+  // Cuántos días son, dicho con el número. "Del viernes al lunes" son cuatro
+  // días y no tres: los dos extremos entran, y el domingo cuenta aunque la
+  // farmacia cierre —no se vendió nada, pero tampoco se dejó de mirar—.
+  const dias = Math.round(
+    (Date.parse(datos.fecha_de_ventas) - Date.parse(datos.ventas_consideradas_desde))
+    / 86400000) + 1;
+  if (dias > 1) {
+    const cuantos = document.createElement('span');
+    cuantos.className = 'dias-acumulados';
+    cuantos.textContent = dias + ' días acumulados desde el último cierre';
+    corte.append(' ', cuantos);
+  }
 
   // Antes de cualquier salida temprana: una lista sin renglones también se
   // guardó, también tiene hora de armado y también se puede cerrar.

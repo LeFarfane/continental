@@ -23,6 +23,8 @@ from continental.almacenamiento import (
     AlmacenamientoDelPedido,
     PedidoSugeridoGuardado,
     Ventana,
+    dias_primera_vez_configurados,
+    ventana_de_reposicion,
 )
 from continental.clasificacion import reglas_configuradas
 from continental.config import cargar
@@ -191,10 +193,20 @@ def pedido_sugerido(
     crecimiento inventados. Esa misma fecha es el día de la lista, el extremo
     de su ventana y el ancla contra la que vencen las anteriores.
 
-    Hoy la ventana de reposición sigue siendo **el último día con datos**.
-    Acumular desde el corte del último cerrado —que es lo que ADR 0002 decide,
-    porque lo del sábado llega hasta el lunes en la noche— es el ticket 09, y
-    lo único que necesita es mover `Ventana.desde`.
+    **La ventana de reposición acumula desde el corte del último cerrado.** No
+    es el último día con datos: con el hueco de fin de semana eso tiraría al
+    piso lo del sábado y lo del viernes por la tarde, que llegan juntos hasta el
+    lunes en la noche —peor caso medido, 2.5 días— (ADR 0002). El día del corte
+    **no** vuelve a entrar y el porqué está en `ventana_de_reposicion`, que es
+    quien decide; aquí solo se le pasan los dos datos, los dos anclados en el
+    dato y no en el reloj.
+
+    Preguntar por el corte cuesta una consulta más por carga, también cuando la
+    lista del día ya existe: `abrir_el_dia` recibe la ventana ya hecha porque es
+    lo que va en el `INSERT`. Es un `max()` sobre un puñado de filas de
+    `pedidos.pedido_sugerido` —una lista por día— contra las dos lecturas
+    grandes que `armar` evita, así que el cambio del ticket 08 sigue pagándose
+    solo.
 
     **Armar cuesta y por eso se arma solo cuando hace falta.** El cálculo viaja
     como función (`armar`) y no como lista: leer el catálogo entero (3,429
@@ -241,11 +253,16 @@ def pedido_sugerido(
                 ultima,
             )
 
+        ventana = ventana_de_reposicion(
+            corte=almacenamiento.corte_del_ultimo_cerrado(negocio, ultima),
+            hasta=ultima,
+            dias_primera_vez=dias_primera_vez_configurados(),
+        )
         guardado = almacenamiento.abrir_el_dia(
             negocio,
             ultima,
-            Ventana(desde=ultima, hasta=ultima),
-            lambda: _armar(almacen, ultima).renglones,
+            ventana,
+            lambda: _armar(almacen, ventana).renglones,
         )
     except Exception as exc:  # noqa: BLE001 — los dos bordes caídos son un hueco, no un 500
         log.exception("No se pudo abrir el pedido sugerido del %s", ultima)
@@ -342,32 +359,47 @@ def cerrar_pedido_sugerido(
     return _como_json(cerrado)
 
 
-def _armar(almacen: LecturaDelAlmacen, ultima: dt.date):
+def _armar(almacen: LecturaDelAlmacen, ventana: Ventana):
     """Las dos lecturas y el cálculo. Solo corre cuando la lista **no** existía.
 
-    **La cobertura se mide sobre otra ventana**, más larga (`DIAS_DE_RITMO`), y
-    las dos salen de **una sola lectura**: la de reposición es un subconjunto de
-    la del ritmo, así que se recorta aquí en memoria —del orden de 600 filas— en
-    vez de pedirle dos veces lo mismo a Postgres. El porqué de los 28 días está
-    junto a la constante, en `sugerido.py`.
+    **Son dos ventanas distintas y este ticket alargó solo una.** La de
+    reposición es la que llega por argumento —lo acumulado desde el corte— y la
+    del ritmo son `DIAS_DE_RITMO` días fijos, que es cuánta historia se mira
+    para estimar "a este ritmo, ¿cuánto dura lo que queda?". El porqué de los 28
+    está junto a la constante, en `sugerido.py`.
 
-    El `- 1` es el rango completo menos el propio día: de `ultima - 27` a
-    `ultima` son 28 días, porque el almacén incluye los dos extremos.
+    Hasta el ticket 08 la de reposición era un solo día y por tanto un
+    subconjunto de la del ritmo: bastaba leer 28 días y recortar. **Eso dejó de
+    valer**: una lista cerrada hace dos meses hace que la de reposición sea la
+    más larga de las dos. Así que se lee **el rango unión** —el `min` de los dos
+    extremos izquierdos— en una sola consulta y se recortan las dos en memoria.
+
+    Recortar la del ritmo no es opcional aunque la lectura la contenga: el
+    divisor de `_ritmo_diario` sale de las fechas que recibe, así que pasarle la
+    lectura entera estiraría el rango, bajaría el ritmo e inflaría la cobertura
+    — y lo urgente se hundiría al fondo de la lista.
+
+    Una sola lectura y no dos: le ahorra a Postgres un recorrido de
+    `fct_ventas` por carga y, sobre todo, evita que la reposición y el ritmo
+    salgan de dos fotos tomadas en momentos distintos. Son del orden de 600
+    filas por cada 28 días (21,035 líneas en 33 meses, medido sobre el respaldo
+    del 2026-07-27).
+
+    El `- 1` es el rango completo menos el propio día: de `hasta - 27` a
+    `hasta` son 28 días, porque el almacén incluye los dos extremos.
 
     Las listas de anaqueles se leen aquí y se pasan hacia adentro: el cálculo es
     una función pura y no abre archivos, igual que no mira el reloj. `cargar()`
     está cacheado, así que esto no relee el YAML por petición.
     """
-    ventas_del_ritmo = almacen.ventas(
-        ultima - dt.timedelta(days=DIAS_DE_RITMO - 1), ultima
-    )
+    desde_del_ritmo = ventana.hasta - dt.timedelta(days=DIAS_DE_RITMO - 1)
+    leidas = almacen.ventas(min(ventana.desde, desde_del_ritmo), ventana.hasta)
     catalogo = almacen.catalogo()
-    ventas = [v for v in ventas_del_ritmo if v.fecha == ultima]
 
     return calcular_pedido_sugerido(
-        ventas=ventas,
+        ventas=[v for v in leidas if ventana.desde <= v.fecha <= ventana.hasta],
         catalogo=catalogo,
-        ventas_del_ritmo=ventas_del_ritmo,
+        ventas_del_ritmo=[v for v in leidas if v.fecha >= desde_del_ritmo],
         reglas=reglas_configuradas(),
     )
 

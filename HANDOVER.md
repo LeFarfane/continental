@@ -24,7 +24,7 @@ contestan. Nada más.
 
 ```bash
 python iniciar.py     # http://127.0.0.1:8585
-pytest                # 129 pruebas y 1 saltada, ~0.6 s (2026-09-19)
+pytest                # 148 pruebas y 1 saltada, ~0.7 s (2026-09-19, ticket 09)
 ```
 
 | Archivo | Qué es |
@@ -122,3 +122,15 @@ más barato y se le pidió a otro.**
    ofuscadas pero recuperables. Está aceptado con mitigación (permisos `700`,
    fuera de respaldos) en el ADR 0008 de Doyle. Si alguien saca una copia del
    disco, se cambian las cuatro contraseñas.
+6. **El día del corte se cierra a medias y ese pedacito se pierde.** El
+   respaldo de SICAR corta a las 18:51, así que el último día del almacén
+   siempre está incompleto: lo que se venda después llega al día siguiente. El
+   sugerido acumula desde el corte del último cerrado y **arranca al día
+   siguiente** de ese corte (ver `almacenamiento.ventana_de_reposicion`), así
+   que si alguien cierra una lista cuyo `ventas_consideradas_hasta` es ese día
+   a medias, la cola de esa tarde queda fuera. No se arregla moviendo el
+   límite —incluir el día entero duplicaría todo lo demás de ese día, en
+   silencio—: se arregla con hora en `marts.fct_ventas` o cerrando solo
+   ventanas de días completos, y las dos son otra decisión. **Condición de
+   disparo:** si el encargado reporta faltantes de productos que sí se
+   vendieron, medir primero cuánto vende la farmacia después de las 18:51.

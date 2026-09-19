@@ -12,9 +12,10 @@ sería meter la lógica de la tarjeta O2 de Metabase por la puerta de atrás, y 
 dueño pidió explícitamente no usarla como fuente del pedido (ADR 0002). Cada
 renglón **dice** si es medicamento, abarrote o algo sin clasificar, y eso es
 justo lo contrario de filtrar: quien lea la lista decide, la lista no decide
-por él. El interruptor entre vistas es el ticket 06. Hoy la ventana de
-reposición es **el último día con datos** y la acumulación desde el corte es el
-ticket 09.
+por él. El interruptor entre vistas es el ticket 06. Qué ventana de ventas
+entra —lo acumulado desde el corte del último cerrado, y no el último día con
+datos— lo decide `almacenamiento.ventana_de_reposicion` y lo resuelve la ruta:
+aquí las ventas llegan ya elegidas.
 
 Reposición 1 a 1: "se vendieron tres, se piden tres". Es aritmética que el
 encargado verifica de un vistazo, y eso importa más que ser óptima —una lista
@@ -52,9 +53,9 @@ _DECIMALES_DE_GRANEL = 3
 _DECIMALES_DE_COBERTURA = 1
 
 #: Días de venta con los que se mide el ritmo para la cobertura. **No es la
-#: ventana de reposición** —esa es el último día con datos, y con el ticket 09
-#: será lo acumulado desde el cierre—: es cuánta historia se mira para estimar
-#: "a este ritmo, ¿cuánto dura lo que queda?".
+#: ventana de reposición** —esa es lo acumulado desde el corte del último
+#: cerrado—: es cuánta historia se mira para estimar "a este ritmo, ¿cuánto
+#: dura lo que queda?".
 #:
 #: 28 y no 30 porque son **cuatro semanas exactas**: cada día de la semana entra
 #: el mismo número de veces, así que el promedio no depende de en qué día haya
@@ -71,7 +72,11 @@ _DECIMALES_DE_COBERTURA = 1
 #: para que un producto de rotación lenta no salga con el ritmo de un solo día.
 #: Medido sobre el respaldo del 2026-07-27: 21,035 líneas de venta en 33 meses
 #: son ~640 al mes, así que leer 28 días es del orden de 600 filas — nada para
-#: Postgres, y una sola consulta porque la reposición sale de este mismo rango.
+#: Postgres. Sigue siendo **una sola consulta**: la ruta lee el rango que cubre
+#: a las dos ventanas y las recorta en memoria (ver `web/app.py::_armar`). Ojo
+#: con eso: desde el ticket 09 la de reposición puede ser **más larga** que
+#: ésta —una lista cerrada hace dos meses—, así que la del ritmo hay que
+#: recortarla de verdad y no suponer que la lectura ya es ella.
 DIAS_DE_RITMO = 28
 
 
@@ -208,14 +213,17 @@ def calcular_pedido_sugerido(
     crecimiento inventados—. Derivarla de los datos, en vez de recibirla como
     parámetro, hace que la función no pueda desmentir a la lista que devuelve.
 
-    Un producto vendido varias veces en el día se suma en un solo renglón:
-    `fct_ventas` tiene grano ticket × artículo, así que el mismo producto
-    aparece una vez por cada ticket en que salió.
+    Un producto vendido varias veces se suma en un solo renglón, y eso vale
+    igual dentro de un día que a lo largo de la ventana entera: `fct_ventas`
+    tiene grano ticket × artículo, así que el mismo producto aparece una vez
+    por cada ticket en que salió, y la suma es sobre todas las líneas
+    recibidas. Dos renglones del mismo producto serían pedirlo dos veces, y
+    `ux_renglon_producto` los rechaza.
 
     `ventas` es **lo que se repone** y `ventas_del_ritmo` es **con qué se mide
     la cobertura**: son dos ventanas distintas y por eso son dos argumentos.
-    La reposición mira el último día con datos (ticket 09: lo acumulado desde
-    el último cierre); la cobertura necesita más historia, o un producto que
+    La reposición acumula desde el corte del último cerrado y puede abarcar
+    meses; la cobertura necesita una historia de largo fijo, o un producto que
     vendió una pieza hoy y una al mes saldría con el mismo ritmo. Si no se da,
     el ritmo se mide sobre `ventas` — el ritmo siempre sale de ventas que
     entran por argumento, porque aquí no hay reloj ni almacén que consultar.

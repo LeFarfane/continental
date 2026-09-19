@@ -58,6 +58,24 @@ guardar no agregó una sola consulta a Postgres porque el doble vive en un
 diccionario, y **leer lo guardado ahorra dos lecturas del almacén por carga**
 —el catálogo entero y 28 días de ventas— que antes se pagaban siempre.
 
+**Con el ticket 09 dentro sube ~0.2 s y se sabe por qué.** Medido el
+2026-09-19, en seis corridas seguidas, 149 recolectadas —148 pasan, 1 saltada—
+en **0.70-0.80 s**, con la recolección en 0.07 s. Las 19 pruebas nuevas de
+`test_acumulacion.py` cuestan ~0.01-0.02 s cada una de las que pasan por
+`TestClient` —el doble de lo que cuesta una de sus vecinas, porque casi todas
+hacen **dos** cargas de la página y un cierre en medio: ese ida y vuelta es lo
+que se está probando— y nada las que llaman a `ventana_de_reposicion` directo.
+Siete de ellas aparecen entre las ocho más lentas. La más lenta del suite sigue
+sin ser una prueba: es la primera que sirve un archivo estático (0.15 s), que
+ahora es la de la pantalla de este archivo, y sigue siendo `mimetypes.init()`
+leyendo el registro de Windows.
+
+Lo que este ticket **no** costó: ni una consulta más al almacén. La ventana de
+reposición puede ser más larga que la del ritmo, pero la ruta sigue leyendo las
+ventas una sola vez —el rango unión— y recortando en memoria. Lo que sí agrega
+es una consulta corta al almacenamiento por carga, la del corte, que contra el
+doble es recorrer una lista de diccionarios.
+
 La saltada bajó de 2 a 1 con el ticket 07: `sql/crear_tablas.sql` estrenó los
 casos de `.sql` de `test_compila.py` y solo queda saltado el del shebang, que
 espera a que exista un `.sh`.

@@ -112,15 +112,20 @@ def test_la_ventana_se_ancla_en_el_ultimo_dato_y_nunca_en_el_reloj(cliente, alma
     y la lista sale vacía, que es exactamente la falla silenciosa que
     farmacia-data pagó con 11.7 puntos de crecimiento inventados.
 
-    De paso comprueba la otra mitad: hoy la ventana es **el último día con
-    datos**, así que lo del día anterior no entra. La acumulación desde el
-    corte es el ticket 09.
+    De paso comprueba la otra mitad, que el ticket 09 cambió: **sin un cierre
+    anterior la ventana son los días de `pedido.dias_primera_vez`**, así que lo
+    del día anterior entra y lo de hace un mes no. El extremo derecho sigue
+    siendo el último día con datos, y de ahí cuelga todo lo demás. La
+    acumulación desde el corte tiene su propio archivo,
+    `test_acumulacion.py`.
     """
     almacen.catalogo_en_memoria = [
         _producto(1, "7501000000001", "PARACETAMOL"),
         _producto(2, "7501000000002", "NAPROXENO"),
+        _producto(3, "7501000000003", "AMOXICILINA"),
     ]
     almacen.ventas_en_memoria = [
+        _venta(dt.date(2024, 2, 5), producto_id=3, cantidad=7),  # un mes antes: fuera
         _venta(dt.date(2024, 3, 4), producto_id=2, cantidad=9),  # el día anterior
         _venta(dt.date(2024, 3, 5), producto_id=1, cantidad=3),  # el último con datos
     ]
@@ -129,7 +134,10 @@ def test_la_ventana_se_ancla_en_el_ultimo_dato_y_nunca_en_el_reloj(cliente, alma
 
     assert cuerpo["fecha_de_ventas"] == "2024-03-05"
     assert cuerpo["fecha_de_ventas"] != dt.date.today().isoformat()
-    assert [r["clave"] for r in cuerpo["renglones"]] == ["7501000000001"]
+    assert sorted(r["clave"] for r in cuerpo["renglones"]) == [
+        "7501000000001",
+        "7501000000002",
+    ]
 
 
 def test_el_calculo_no_menciona_el_reloj_en_ninguna_parte():
@@ -139,9 +147,17 @@ def test_el_calculo_no_menciona_el_reloj_en_ninguna_parte():
     resultado. Un `date.today()` colado en una rama que hoy no se recorre
     —"si no hay ventas, usa hoy"— pasaría en verde y mordería en producción.
     Esto lo caza al leer el archivo.
+
+    `almacenamiento.py` entra a la lista con el ticket 09: ahí vive
+    `ventana_de_reposicion`, que decide desde qué día se repone. Un "si no hay
+    corte, usa hoy menos siete" sería la misma trampa con otro nombre, y en un
+    almacén cuyo último dato es de 2024 dejaría la lista vacía sin un error que
+    ver. Los instantes con zona de `armado_en` y `cerrado_en` no se cazan aquí
+    porque no son fechas y no salen de Python: los pone `now()` en el servidor
+    que guarda la fila.
     """
     raiz = Path(__file__).resolve().parent.parent / "src" / "continental"
-    for nombre in ("sugerido.py", "web/app.py"):
+    for nombre in ("sugerido.py", "almacenamiento.py", "web/app.py"):
         fuente = (raiz / nombre).read_text(encoding="utf-8")
         # Se miran las llamadas, no la palabra: `dt.date` como anotación de
         # tipo es legítima y está por todos lados.
@@ -378,9 +394,11 @@ def test_cada_renglon_dice_sus_dias_de_cobertura(cliente, almacen):
     cuerpo = cliente.get(RUTA).json()
 
     assert cuerpo["renglones"][0]["dias_de_cobertura"] == 10.0
-    # La reposición sigue siendo la del último día: el ritmo se mide sobre una
-    # ventana larga, pero no es lo que se pide.
-    assert cuerpo["renglones"][0]["cantidad_propuesta"] == 1
+    # La reposición es otra ventana: sin cierre anterior son los siete días de
+    # `pedido.dias_primera_vez`, así que aquí entran las cuatro piezas. Que las
+    # dos ventanas no se confundan es lo que prueba
+    # `test_acumulacion.py::test_el_ritmo_sigue_midiendose_sobre_28_dias_aunque_la_reposicion_sea_mas_larga`.
+    assert cuerpo["renglones"][0]["cantidad_propuesta"] == 4
 
 
 def test_la_lista_va_ordenada_por_urgencia_y_nada_se_filtra(cliente, almacen):
@@ -445,10 +463,12 @@ def test_un_producto_que_no_se_vendio_en_la_ventana_no_tiene_cobertura_de_cero()
     Pintarlo como `0` se leería **agotado**, que es lo contrario de lo que
     pasa: hay mercancía y no se está moviendo. Dividir entre cero tampoco es
     opción, y un infinito no se puede serializar a JSON ni leer en una
-    pantalla. Hoy la ruta siempre manda un ritmo que contiene las ventas del
-    renglón, así que esta rama se prueba llamando a la función directo — pero
-    deja de ser hipotética con el ticket 09, cuando la ventana de reposición
-    acumule desde el cierre y ya no coincida con la del ritmo.
+    pantalla. Se prueba llamando a la función directo porque es una rama del
+    cálculo, pero **ya no es hipotética por la ruta**: desde el ticket 09 la
+    ventana de reposición acumula desde el cierre y puede ser más larga que la
+    del ritmo, así que un producto que solo se movió hace dos meses sale en la
+    lista sin haberse vendido en las últimas cuatro semanas. Ése es justo este
+    renglón.
     """
     pedido = calcular_pedido_sugerido(
         ventas=[_venta(dt.date(2026, 9, 16), producto_id=1, cantidad=2)],

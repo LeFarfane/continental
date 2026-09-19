@@ -6,8 +6,8 @@
 
 **Status:** ready-for-agent
 
-- [ ] Un pedido sugerido nuevo incluye todo lo vendido **desde el corte del último cerrado**.
-- [ ] La primera vez, cuando no hay cierre anterior, la ventana es de 7 días.
-- [ ] El sugerido del lunes incluye las ventas del viernes por la tarde y del sábado completo, que llegan juntas al almacén (peor caso medido: 2.5 días de retraso).
-- [ ] Si un día nadie abrió la lista, lo de ese día aparece en la siguiente y no se pierde.
-- [ ] Un producto vendido en varios días acumula su cantidad en un solo renglón.
+- [x] Un pedido sugerido nuevo incluye todo lo vendido **desde el corte del último cerrado**.
+- [x] La primera vez, cuando no hay cierre anterior, la ventana es de 7 días.
+- [x] El sugerido del lunes incluye las ventas del viernes por la tarde y del sábado completo, que llegan juntas al almacén (peor caso medido: 2.5 días de retraso).
+- [x] Si un día nadie abrió la lista, lo de ese día aparece en la siguiente y no se pierde.
+- [x] Un producto vendido en varios días acumula su cantidad en un solo renglón.

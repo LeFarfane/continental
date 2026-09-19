@@ -51,6 +51,7 @@ costó 11.7 puntos de crecimiento inventados).
 from __future__ import annotations
 
 import datetime as dt
+import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
@@ -60,6 +61,8 @@ from sqlalchemy import text
 
 from continental.clasificacion import ABARROTE, MEDICAMENTO, SIN_CLASIFICAR
 from continental.sugerido import Renglon
+
+log = logging.getLogger("continental")
 
 # ------------------------------------------------------- el vocabulario
 #
@@ -127,9 +130,15 @@ class Ventana:
     """De qué día a qué día de **ventas** consideró la lista, extremos incluidos.
 
     Es un rango y no un solo extremo porque guardar únicamente el derecho haría
-    imposible auditar de dónde salió un renglón. Hoy los dos valen lo mismo —la
-    ventana de reposición es el último día con datos—; el ticket 09 mueve
-    `desde` al corte del último cerrado.
+    imposible auditar de dónde salió un renglón. Desde el ticket 09 los dos
+    extremos casi nunca valen lo mismo: `hasta` sigue siendo el último día con
+    datos y `desde` es el día siguiente al corte del último cerrado. Quién
+    decide eso es `ventana_de_reposicion`, aquí abajo.
+
+    **Los dos extremos entran**, y eso no es un detalle de implementación: es lo
+    que hace que una lista cerrada cubra su `hasta` y que la siguiente pueda
+    arrancar en el día de después sin dejar hueco. `almacen.ventas(desde,
+    hasta)` cuenta el rango igual (`between` de SQL).
 
     Fechas y no instantes: el grano más fino que existe en el almacén es el
     día. `marts.fct_ventas` se une a `marts.dim_fecha` por `fecha_id` y no
@@ -150,6 +159,108 @@ class Ventana:
                 f"La ventana va al revés: desde {self.desde} hasta {self.hasta}. "
                 "Lo rechaza ck_pedido_sugerido_ventana."
             )
+
+
+def ventana_de_reposicion(
+    corte: dt.date | None, hasta: dt.date, dias_primera_vez: int
+) -> Ventana:
+    """Desde dónde repone el sugerido nuevo: **desde el corte del último cerrado**.
+
+    Función pura: no mira el reloj, no lee el YAML y no toca la base. Los dos
+    datos que necesita —el corte y el último día con ventas— le llegan por
+    argumento, los dos anclados en el dato (ADR 0002 y regla del repo: todo
+    sale de `max(fecha)`, nunca de `current_date`).
+
+    **El día del corte NO entra en la ventana nueva: se arranca al día
+    siguiente.** Era la decisión de este ticket y tenía dos opciones:
+
+    - *Incluirlo* (`desde = corte`). `Ventana` incluye los dos extremos, así
+      que la lista cerrada ya propuso —y alguien ya pidió— todo lo de ese día.
+      Volver a meterlo lo propone por segunda vez, y **la duplicación no se ve
+      en el renglón**: las piezas del día del corte se suman con las de los
+      demás días y salen como un solo número. Un sugerido que pide el doble en
+      silencio es exactamente la falla que la regla 4 de `CLAUDE.md` prohíbe, y
+      rompe lo que hace defendible a la reposición 1 a 1: "se vendieron tres,
+      se piden tres", aritmética que el encargado verifica de un vistazo.
+    - *Excluirlo* (`desde = corte + 1 día`), que es lo que se hace. Las ventanas
+      **embaldosan el calendario**: `[…, corte]` y `[corte + 1, hasta]` no se
+      traslapan ni dejan un día en medio, así que cada día de ventas cae en
+      exactamente una lista. Eso es lo que se puede afirmar y probar.
+
+    Lo que sí cuesta esta decisión, dicho con su número: el respaldo de SICAR
+    corta a las **18:51**, así que el último día del almacén siempre está a
+    medias y lo que se venda después llega al día siguiente. Si se cierra una
+    lista cuyo `hasta` es ese día a medias, el pedacito de la tarde queda fuera
+    —el grano de `marts.fct_ventas` es el **día** (se une a `dim_fecha` por
+    `fecha_id` y no guarda hora), así que no hay forma de partirlo—. No se
+    resuelve moviendo este límite: incluir el día entero cuesta duplicar todo lo
+    demás de ese día. Se resolvería con hora en el almacén o cerrando solo
+    ventanas de días completos, y las dos son otra decisión. Queda anotado en
+    `HANDOVER.md`, hilo 6.
+
+    Esto **no aplica al día que nadie cerró**: una lista `abierta` o `vencida`
+    no movió el corte —nada se pidió— así que sus días siguen adentro. Quién
+    decide qué cuenta como corte es `corte_del_ultimo_cerrado`.
+
+    Sin corte —la primera vez— la ventana es de `dias_primera_vez` días
+    contando los dos extremos, y ese número sale de
+    `config/continental.yml`, nunca de aquí.
+    """
+    if corte is None:
+        return Ventana(
+            desde=hasta - dt.timedelta(days=dias_primera_vez - 1), hasta=hasta
+        )
+
+    desde = corte + dt.timedelta(days=1)
+    if desde > hasta:
+        # Estado imposible con datos sanos: el corte de un cerrado siempre es de
+        # un día anterior al último con ventas. Solo sale de aquí si alguien le
+        # quitó filas al almacén. `ck_pedido_sugerido_ventana` rechazaría una
+        # ventana al revés, así que se acota al propio día y se avisa: el pedido
+        # del día se hace y el motivo queda escrito (regla 4).
+        log.warning(
+            "El corte del último pedido sugerido cerrado (%s) es igual o "
+            "posterior al último día con ventas (%s). La ventana se acota a ese "
+            "día: revisa si al almacén le faltan días.",
+            corte,
+            hasta,
+        )
+        return Ventana(desde=hasta, hasta=hasta)
+    return Ventana(desde=desde, hasta=hasta)
+
+
+def dias_primera_vez_configurados() -> int:
+    """Cuántos días toma el PRIMER sugerido, leídos de `config/continental.yml`.
+
+    La capa delgada que lee el archivo, igual que `reglas_configuradas` para los
+    anaqueles: el número es una decisión del negocio y vive en el YAML
+    versionado —con su comentario—, no en una constante de Python que se
+    quedaría desincronizada el día que el dueño lo cambie.
+
+    Si la clave falta o no es un entero positivo, la ventana es de **un día** y
+    se avisa. Un día es el último con datos: lo que el módulo hacía antes de
+    este ticket y el único valor que no inventa una política. Tronar aquí
+    dejaría a la farmacia sin pedido del día por una línea que falta en el YAML,
+    y adivinar un 7 metería en el código justo el número que se sacó de él.
+    """
+    from continental.config import cargar
+
+    crudo = cargar().pedido.get("dias_primera_vez")
+    try:
+        dias = int(crudo)
+    except (TypeError, ValueError):
+        dias = 0
+
+    if dias < 1:
+        log.warning(
+            "config/continental.yml no trae un `pedido.dias_primera_vez` "
+            "utilizable (%r). El primer pedido sugerido va a mirar un solo día "
+            "de ventas; agrégalo al YAML para que mire los que el negocio "
+            "quiere.",
+            crudo,
+        )
+        return 1
+    return dias
 
 
 @dataclass(frozen=True, slots=True)
@@ -381,7 +492,7 @@ def revisar_el_renglon(columnas: dict) -> None:
 
 @runtime_checkable
 class AlmacenamientoDelPedido(Protocol):
-    """El borde de escritura. Cuatro operaciones y ninguna de ellas borra.
+    """El borde de escritura. Cinco operaciones y ninguna de ellas borra.
 
     Es aparte de `LecturaDelAlmacen` a propósito, igual que Doyle lo es del
     almacén: una prueba tiene que poder sustituir una sola, y un borde caído no
@@ -418,6 +529,27 @@ class AlmacenamientoDelPedido(Protocol):
         self, negocio: str, fecha_del_pedido: dt.date
     ) -> PedidoSugeridoGuardado | None:
         """La lista de ese día con sus renglones, o `None` si no hay."""
+        ...
+
+    def corte_del_ultimo_cerrado(
+        self, negocio: str, antes_de: dt.date
+    ) -> dt.date | None:
+        """Hasta qué día de ventas llegó el último pedido sugerido **cerrado**.
+
+        Es el dato desde el cual acumula el siguiente (ADR 0002), y la razón por
+        la que el ticket 08 guardó `ventas_consideradas_hasta`. `None` es "nunca
+        se ha cerrado uno", que es la primera vez.
+
+        **Solo cuenta lo `cerrado`, y eso es la mitad de la decisión.** Una
+        lista `abierta` o `vencida` no pidió nada —`vencida` es literalmente
+        "pasó su día y quedaron renglones sin atender"—, así que tomarla como
+        corte dejaría fuera días que nadie repuso: la venta se caería al piso
+        sin un solo error que ver. Puede haber listas anteriores y ninguna
+        cerrada: entonces no hay corte y la ventana es la de la primera vez.
+
+        `antes_de` acota a los días anteriores al que se está abriendo y viene
+        del dato (`max(fecha)` del almacén), nunca del reloj.
+        """
         ...
 
     def cerrar(
@@ -479,6 +611,28 @@ _LEER_RENGLONES = text(
     from pedidos.renglon
     where negocio = :negocio and pedido_sugerido_id = :pedido_sugerido_id
     order by renglon_id
+    """
+)
+
+# El corte desde el cual acumula el siguiente sugerido (ADR 0002).
+#
+# `max(...)` y no un `order by ... limit 1`: lo que se busca es **hasta dónde
+# llegó lo ya pedido**, no cuál fila se cerró al final. Si alguien cierra hoy
+# una lista vieja que había dejado abierta, el corte no debe retroceder: los
+# días que ya cubrió una lista más nueva se volverían a proponer y se pedirían
+# dos veces.
+#
+# `estado = 'cerrado'` es la otra mitad: una abierta o una vencida no pidió
+# nada, así que no mueve el corte. Cero filas -o un `max` nulo, que es lo que
+# Postgres devuelve cuando no hay ninguna- significa "nunca se ha cerrado una",
+# y eso es la primera vez.
+_ULTIMO_CORTE = text(
+    """
+    select max(ventas_consideradas_hasta) as corte
+    from pedidos.pedido_sugerido
+    where negocio = :negocio
+      and estado = 'cerrado'
+      and fecha_del_pedido < :antes_de
     """
 )
 
@@ -617,6 +771,19 @@ class AlmacenamientoPostgres:
             .all()
         )
         return armar_guardado(cabecera, filas)
+
+    def corte_del_ultimo_cerrado(
+        self, negocio: str, antes_de: dt.date
+    ) -> dt.date | None:
+        with self._motor().connect() as conexion:
+            fila = (
+                conexion.execute(
+                    _ULTIMO_CORTE, {"negocio": negocio, "antes_de": antes_de}
+                )
+                .mappings()
+                .first()
+            )
+        return None if fila is None else fila["corte"]
 
     # --------------------------------------------------------- escritura
 
