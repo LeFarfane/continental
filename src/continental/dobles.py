@@ -29,12 +29,18 @@ from continental.almacenamiento import (
     VENCIDO,
     PedidoSugeridoDuplicado,
     PedidoSugeridoGuardado,
+    PrecioDeProveedor,
     Ventana,
     armar_guardado,
     columnas_de_la_lista,
+    columnas_del_precio,
     columnas_del_renglon,
+    precio_desde_columnas,
+    renglon_guardado_desde_columnas,
+    revisar_el_precio,
     revisar_el_renglon,
     revisar_la_lista,
+    ultimo_por_proveedor,
 )
 from continental.doyle import (
     BusquedaPedida,
@@ -43,6 +49,7 @@ from continental.doyle import (
     RespuestaDeProveedor,
     SesionDeProveedor,
 )
+from continental.precios import LecturaDePrecio
 
 
 @dataclass
@@ -97,11 +104,27 @@ class DoyleFalso:
     resultados_por_termino: dict[str, dict[str, RespuestaDeProveedor]] = field(
         default_factory=dict
     )
+    #: Cómo va cambiando una búsqueda entre una consulta y la siguiente: una
+    #: entrada por vuelta de sondeo. Se consume en orden y **la última se
+    #: repite** cuando se acaban, que es lo que hace un trabajo ya terminado.
+    #:
+    #: Existe porque sin esto no se puede probar que Continental **sondea**.
+    #: Con un solo resultado fijo, una implementación que preguntara una vez y
+    #: se quedara con lo primero que vio pasaría en verde — y contra el Doyle
+    #: real congelaría cuatro huecos, porque los ~9 s del piso se pasan enteros
+    #: en `buscando`.
+    vueltas_por_termino: dict[str, list[dict[str, RespuestaDeProveedor]]] = field(
+        default_factory=dict
+    )
     sesiones_en_memoria: list[dict] = field(default_factory=list)
     falla: Exception | None = None
     #: Términos que se pidieron, en orden. Sirve para comprobar el ORDEN de
     #: importancia del lote nocturno sin mirar dentro de la implementación.
     pedidos: list[str] = field(default_factory=list)
+    #: Cuántas veces se preguntó por el estado de cada trabajo. Es lo que
+    #: permite afirmar "sondeó tres veces" sin mirar dentro de la
+    #: implementación.
+    consultas: list[str] = field(default_factory=list)
     _trabajos: dict[str, str] = field(default_factory=dict)
 
     def _revisar(self) -> None:
@@ -113,18 +136,35 @@ class DoyleFalso:
         self.pedidos.append(termino)
         job_id = f"trabajo-{len(self.pedidos)}"
         self._trabajos[job_id] = termino
-        return BusquedaPedida(
-            job_id=job_id,
-            proveedores=tuple(sorted(self.resultados_por_termino.get(termino, {}))),
-        )
+        return BusquedaPedida(job_id=job_id, proveedores=self._proveedores(termino))
+
+    def _proveedores(self, termino: str) -> tuple[str, ...]:
+        """Los cuatro proveedores del trabajo, salgan de donde salgan.
+
+        Doyle contesta el acuse con **todos** los proveedores que va a
+        consultar, sin esperar a que ninguno termine, así que la lista sale de
+        la primera vuelta preparada y no del resultado final.
+        """
+        vueltas = self.vueltas_por_termino.get(termino)
+        if vueltas:
+            return tuple(sorted(vueltas[0]))
+        return tuple(sorted(self.resultados_por_termino.get(termino, {})))
 
     def estado_de_busqueda(self, job_id: str) -> EstadoDeBusqueda:
         self._revisar()
         termino = self._trabajos.get(job_id, "")
-        return EstadoDeBusqueda(
-            termino=termino,
-            proveedores=dict(self.resultados_por_termino.get(termino, {})),
-        )
+        self.consultas.append(job_id)
+
+        vueltas = self.vueltas_por_termino.get(termino)
+        if vueltas:
+            # La última se queda: un trabajo terminado sigue contestando lo
+            # mismo si alguien vuelve a preguntar, igual que el Doyle real
+            # mientras el trabajo siga en memoria.
+            proveedores = vueltas.pop(0) if len(vueltas) > 1 else vueltas[0]
+        else:
+            proveedores = self.resultados_por_termino.get(termino, {})
+
+        return EstadoDeBusqueda(termino=termino, proveedores=dict(proveedores))
 
     def sesiones(self) -> list[SesionDeProveedor]:
         self._revisar()
@@ -170,6 +210,57 @@ def respuesta_con_error(proveedor: str, mensaje: str) -> RespuestaDeProveedor:
     return RespuestaDeProveedor(proveedor=proveedor, estado="error", mensaje=mensaje)
 
 
+#: El texto con el que Doyle anuncia una sesión caducada, copiado de
+#: `Doyle/src/doyle/web/buscador.py` (revisado el 2026-09-19). Se copia entero
+#: y no se inventa uno parecido: lo que `precios.leer_el_precio` distingue es
+#: **este** mensaje, y una prueba escrita contra un texto inventado diría que
+#: la sesión caducada se reconoce cuando en realidad no.
+MENSAJE_DE_SESION_CAIDA = (
+    "[nadro] la sesión caducó (o el portal rechazó esta sesión): "
+    "el portal mandó al login."
+)
+
+
+def respuesta_con_sesion_caducada(proveedor: str) -> RespuestaDeProveedor:
+    """El tercero de los cuatro finales: la sesión de ese portal ya no vale.
+
+    Llega como un `error` cualquiera —Doyle no tiene un estado aparte para
+    esto— y lo que lo distingue es el mensaje. Es el final que MÁS importa
+    separar de los otros: es el único que el encargado arregla él, en dos clics
+    (historia 33 del spec).
+    """
+    return RespuestaDeProveedor(
+        proveedor=proveedor,
+        estado="error",
+        mensaje=MENSAJE_DE_SESION_CAIDA.replace("[nadro]", f"[{proveedor}]"),
+    )
+
+
+def respuesta_pendiente(proveedor: str, estado: str = "buscando") -> RespuestaDeProveedor:
+    """El cuarto final, que no es un final: el proveedor sigue trabajando.
+
+    `buscando` por omisión y no `pendiente`, porque es el estado en el que el
+    Doyle real pasa los ~9 s de una búsqueda: `iniciar_busqueda` crea el
+    trabajo en `pendiente` y el hilo lo mueve a `buscando` en su primera línea.
+    Una prueba que solo usara `pendiente` dejaría sin ejercitar justo el estado
+    que llega de verdad.
+    """
+    return RespuestaDeProveedor(proveedor=proveedor, estado=estado)
+
+
+def respuesta_en_reconocimiento(proveedor: str) -> RespuestaDeProveedor:
+    """Doyle todavía no sabe leer esa página.
+
+    No es un fallo del portal y no se puede confundir con uno: lo primero se
+    arregla escribiendo selectores y lo segundo volviendo a intentar.
+    """
+    return RespuestaDeProveedor(
+        proveedor=proveedor,
+        estado="reconocimiento",
+        mensaje="Doyle todavía no sabe leer esta página",
+    )
+
+
 @dataclass
 class AlmacenamientoFalso:
     """Doble de `AlmacenamientoDelPedido`: las mismas tablas, en memoria.
@@ -211,10 +302,17 @@ class AlmacenamientoFalso:
     """
 
     listas: list[dict] = field(default_factory=list)
+    #: Las filas de `pedidos.precio_de_proveedor`, en el orden en que se
+    #: escribieron. Una LISTA y no un diccionario por pareja (renglón,
+    #: proveedor): la tabla **agrega y nunca pisa**, y un diccionario haría que
+    #: el doble sobreescribiera lo que Postgres conserva — el suite quedaría en
+    #: verde sobre la decisión más importante del ticket 12.
+    precios: list[dict] = field(default_factory=list)
     falla: Exception | None = None
     antes_de_insertar: Callable[[], object] | None = None
     _siguiente_lista: int = 1
     _siguiente_renglon: int = 1
+    _siguiente_precio: int = 1
 
     def _revisar(self) -> None:
         if self.falla is not None:
@@ -256,6 +354,17 @@ class AlmacenamientoFalso:
         self._revisar()
         fila = self._fila(negocio, fecha_del_pedido)
         return None if fila is None else armar_guardado(fila, fila["renglones"])
+
+    def leer_renglon(self, negocio: str, renglon_id: int):
+        """El `WHERE` de `_LEER_RENGLON_POR_ID`: el negocio y el id, nada más."""
+        self._revisar()
+        encontrado = self._renglon_por_id(renglon_id)
+        if encontrado is None:
+            return None
+        fila, _ = encontrado
+        if fila["negocio"] != negocio:
+            return None
+        return renglon_guardado_desde_columnas(fila)
 
     def corte_del_ultimo_cerrado(
         self, negocio: str, antes_de: dt.date
@@ -555,6 +664,90 @@ class AlmacenamientoFalso:
         # Las dos columnas se van a `None` juntas: lo exige ck_renglon_descarte
         # y lo comprueba `poner_estado_del_renglon`.
         return self.poner_estado_del_renglon(renglon_id, RENGLON_ABIERTO)
+
+    # ------------------------------------------- el precio congelado (12)
+
+    def guardar_precios(
+        self, negocio: str, renglon_id: int, lecturas: Sequence[LecturaDePrecio]
+    ) -> int:
+        """El `INSERT ... SELECT` de `_GUARDAR_PRECIO`, con sus mismas reglas.
+
+        Tres cosas se copian del lado real y las tres tienen una prueba:
+
+        - **El renglón y el negocio son el `WHERE`.** Si no hay renglón con ese
+          id en ese negocio no se escribe nada y se devuelve cero, igual que
+          cero filas del `INSERT ... SELECT`. El estado del renglón NO entra:
+          congelar un precio no es una transición (ver `guardar_precios` en
+          `almacenamiento.py`).
+        - **Todo o nada.** Se validan las cuatro lecturas antes de escribir la
+          primera, igual que la transacción del lado real. Una consulta a
+          medias diría que a dos proveedores no se les preguntó.
+        - **Agrega, nunca pisa.** Una segunda consulta del mismo renglón deja
+          filas nuevas y las anteriores siguen ahí.
+        """
+        self._revisar()
+        if not lecturas:
+            return 0
+
+        encontrado = self._renglon_por_id(renglon_id)
+        if encontrado is None or encontrado[0]["negocio"] != negocio:
+            return 0
+
+        filas = []
+        for lectura in lecturas:
+            columnas = columnas_del_precio(lectura, negocio, renglon_id)
+            revisar_el_precio(columnas)
+            filas.append(columnas)
+
+        # El instante real con zona que en la tabla pone `DEFAULT now()`. Se
+        # calcula UNA vez para las cuatro filas porque `now()` es la hora de la
+        # TRANSACCIÓN: fue una sola lectura y las cuatro lo comparten. Un
+        # `now()` por fila daría cuatro instantes distintos y la pantalla
+        # mostraría cuatro fechas donde hubo una.
+        instante = dt.datetime.now(dt.UTC)
+        for columnas in filas:
+            columnas["consultado_en"] = instante
+            columnas["precio_de_proveedor_id"] = self._siguiente_precio
+            self._siguiente_precio += 1
+            self.precios.append(columnas)
+        return len(filas)
+
+    def precios_del_renglon(
+        self, negocio: str, renglon_id: int
+    ) -> tuple[PrecioDeProveedor, ...]:
+        self._revisar()
+        return ultimo_por_proveedor(
+            [
+                precio_desde_columnas(f)
+                for f in self.precios
+                if f["negocio"] == negocio and f["renglon_id"] == renglon_id
+            ]
+        )
+
+    def precios_de_la_lista(
+        self, negocio: str, pedido_sugerido_id: int
+    ) -> dict[int, tuple[PrecioDeProveedor, ...]]:
+        self._revisar()
+        de_la_lista = {
+            fila["renglon_id"]
+            for lista in self.listas
+            if lista["pedido_sugerido_id"] == pedido_sugerido_id
+            and lista["negocio"] == negocio
+            for fila in lista["renglones"]
+        }
+
+        por_renglon: dict[int, list] = {}
+        for f in self.precios:
+            if f["negocio"] != negocio or f["renglon_id"] not in de_la_lista:
+                continue
+            por_renglon.setdefault(f["renglon_id"], []).append(precio_desde_columnas(f))
+
+        # Un renglón sin ninguna consulta no aparece, igual que en el SQL: son
+        # las filas que el `DISTINCT ON` no devuelve porque no existen.
+        return {
+            renglon_id: ultimo_por_proveedor(filas)
+            for renglon_id, filas in por_renglon.items()
+        }
 
     def vencer_las_de_dias_anteriores(
         self, negocio: str, fecha_del_pedido: dt.date

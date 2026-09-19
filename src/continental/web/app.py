@@ -1,8 +1,9 @@
 """El backend de Continental.
 
 Dice si está vivo, quién está entrando, si los módulos contestan, arma el
-pedido sugerido del día **y lo guarda**. Todavía no trae precios: eso son los
-tickets 12 en adelante.
+pedido sugerido del día **y lo guarda**, y congela el precio que Doyle trae de
+los cuatro proveedores. Lo que falta de precios —emparejar por EAN, comparar
+los cuatro, contar los huecos— son los tickets 13 en adelante.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from continental import __version__
 from continental.almacen import LecturaDelAlmacen
 from continental.almacenamiento import (
     CANTIDAD_FINAL_MINIMA,
+    RENGLON_ABIERTO,
     AlmacenamientoDelPedido,
     PedidoSugeridoGuardado,
     Ventana,
@@ -30,12 +32,19 @@ from continental.almacenamiento import (
 )
 from continental.clasificacion import reglas_configuradas
 from continental.config import cargar
+from continental.consultas import (
+    RegistroDeConsultas,
+    ajustes_de_la_consulta,
+    consultar_y_congelar,
+    lecturas_como_json,
+)
 from continental.doyle import ClienteDeDoyle
 from continental.sugerido import DIAS_DE_RITMO, calcular_pedido_sugerido
 from continental.vistas import VISTAS
 from continental.web.dependencias import (
     obtener_almacen,
     obtener_almacenamiento,
+    obtener_consultas,
     obtener_doyle,
 )
 
@@ -284,7 +293,31 @@ def pedido_sugerido(
             ],
         )
 
-    return _como_json(guardado)
+    # Los precios congelados viajan en la MISMA respuesta que la lista, y esa
+    # es la mitad del ticket 12 que se ve al recargar: lo que se muestra es lo
+    # guardado. Sin esto, una consulta lanzada hace diez minutos se vería como
+    # si nunca hubiera pasado en cuanto alguien recarga la página.
+    #
+    # Es una consulta más por carga y una sola para toda la lista. Una por
+    # renglón costaría tantas como productos distintos se vendieron, y —peor—
+    # cada una leería en un momento distinto: la tabla podría dejar de
+    # coincidir consigo misma mientras alguien la trabaja.
+    #
+    # Su falla es un hueco y no tumba la lista: un pedido sugerido sin precios
+    # todavía sirve para pedir, y la quinta casilla del ticket dice que un
+    # precio que no se pudo leer se ve como hueco, nunca como cero.
+    try:
+        precios = almacenamiento.precios_de_la_lista(
+            negocio, guardado.pedido_sugerido_id
+        )
+    except Exception:  # noqa: BLE001 — sin precios la lista sigue sirviendo
+        log.exception(
+            "No se pudieron leer los precios congelados de la lista %s",
+            guardado.pedido_sugerido_id,
+        )
+        precios = {}
+
+    return _como_json(guardado, precios)
 
 
 @app.post("/api/pedido-sugerido/{pedido_sugerido_id}/cerrar")
@@ -425,6 +458,7 @@ def descartar_renglon(
             "Ese renglón ya no estaba abierto. Vuelve a cargar la página para "
             "ver cómo quedó."
         ),
+        almacenamiento=almacenamiento,
     )
 
 
@@ -462,6 +496,7 @@ def devolver_renglon(
             "Ese renglón ya no estaba descartado. Vuelve a cargar la página "
             "para ver cómo quedó."
         ),
+        almacenamiento=almacenamiento,
     )
 
 
@@ -569,7 +604,223 @@ def ajustar_la_cantidad_del_renglon(
             "página para ver cómo quedó."
         ),
         nota=f"La cantidad a pedir queda en {cuerpo.cantidad}.",
+        almacenamiento=almacenamiento,
     )
+
+
+@app.post("/api/renglon/{renglon_id}/precio")
+def consultar_el_precio(
+    renglon_id: int,
+    request: Request,
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+    doyle: ClienteDeDoyle = Depends(obtener_doyle),
+    consultas: RegistroDeConsultas = Depends(obtener_consultas),
+):
+    """Le pide a Doyle el precio de este renglón en los cuatro proveedores.
+
+    **Contesta de inmediato y la consulta sigue por su cuenta.** Una búsqueda
+    tiene un piso medido de ~9 s por proveedor y un techo de 60-90 s: dejar la
+    petición HTTP abierta hasta que Doyle termine colgaría la pantalla minuto y
+    medio, y una recarga tiraría una visita al portal que ya se hizo. Quien
+    espera es un hilo de Continental, que **escribe el precio congelado en
+    cuanto llega** — así que cerrar la pestaña no pierde la consulta y la
+    siguiente carga de la página la encuentra guardada. El porqué entero, con
+    las dos alternativas descartadas, está en `consultas.py`.
+
+    **Un segundo clic no consulta dos veces.** Si ya hay una consulta en vuelo
+    para este renglón se devuelve ésa, con `nueva: false`. No es comodidad:
+    Doyle abre navegadores de verdad contra los portales con las credenciales
+    del dueño, y dos clics nerviosos serían ocho visitas en lugar de cuatro.
+
+    **Se busca por la clave, que es el EAN.** Es lo único que significa lo
+    mismo en nuestro catálogo y en el de un proveedor (`CONTEXT.md`), y por eso
+    un renglón sin clave no se consulta: se contesta 422 diciendo por qué. Los
+    688 artículos sin anaquel y los que el catálogo no conoce caen aquí, y el
+    hueco con su motivo es la respuesta honesta — buscar por descripción traería
+    el producto de otro y la comparación diría cualquier cosa (ADR 0002).
+
+    Un 409 si el renglón no existe, es de otro negocio, o ya no está `abierto`.
+    Lo último es lo que evita molestar a cuatro portales por un renglón que ya
+    se descartó o que ya se le pidió a alguien. **Esa comprobación vive aquí y
+    no en el `WHERE` del `INSERT`**, y es deliberado: lo que se guarda es un
+    hecho del mundo en un instante, no una transición del renglón, así que si
+    alguien lo descarta mientras Doyle consulta la lectura se guarda igual — ver
+    `almacenamiento.guardar_precios`.
+
+    Es `def` y no `async def` a propósito: los dos bordes son síncronos y así
+    FastAPI los corre en su pool de hilos sin bloquear el bucle de eventos.
+    """
+    negocio = cargar().negocio
+    firma = quien(request)
+
+    try:
+        renglon = almacenamiento.leer_renglon(negocio, renglon_id)
+    except Exception as exc:  # noqa: BLE001 — el almacenamiento caído es un hueco, no un 500
+        log.exception("No se pudo leer el renglón %s para consultar su precio", renglon_id)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "detalle": f"no se pudo leer el renglón ({type(exc).__name__})",
+            },
+        )
+
+    if renglon is None or renglon.estado != RENGLON_ABIERTO:
+        log.info(
+            "%s quiso consultar el precio del renglón %s y no había ninguno "
+            "abierto con ese id en %s.",
+            firma,
+            renglon_id,
+            negocio,
+        )
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "detalle": (
+                    "Ese renglón ya no está abierto. Vuelve a cargar la página "
+                    "para ver cómo quedó."
+                ),
+            },
+        )
+
+    if not renglon.propuesto.clave:
+        log.info(
+            "%s quiso consultar el precio del renglón %s (%s) y no tiene clave.",
+            firma,
+            renglon_id,
+            renglon.propuesto.descripcion,
+        )
+        return JSONResponse(
+            status_code=422,
+            content={
+                "ok": False,
+                "detalle": (
+                    "Este renglón no tiene código de barras, y el código de "
+                    "barras es lo único que significa lo mismo en nuestro "
+                    "catálogo y en el del proveedor. Buscarlo por su nombre "
+                    "traería el producto de otro. Ponle la clave en SICAR y "
+                    "vuelve a intentarlo."
+                ),
+            },
+        )
+
+    tope_seg, cada_seg = ajustes_de_la_consulta()
+    consulta, nueva = consultas.pedir(
+        renglon_id,
+        renglon.propuesto.clave,
+        lambda en_curso: consultar_y_congelar(
+            en_curso,
+            doyle=doyle,
+            almacenamiento=almacenamiento,
+            registro=consultas,
+            negocio=negocio,
+            tope_seg=tope_seg,
+            cada_seg=cada_seg,
+        ),
+    )
+
+    if nueva:
+        log.info(
+            "%s pidió el precio del renglón %s (%s, clave %s) en los cuatro "
+            "proveedores.",
+            firma,
+            renglon_id,
+            renglon.propuesto.descripcion,
+            renglon.propuesto.clave,
+        )
+    else:
+        log.info(
+            "%s volvió a pedir el precio del renglón %s y ya había una consulta "
+            "en curso: no se lanzó otra.",
+            firma,
+            renglon_id,
+        )
+
+    # La consulta que se devuelve es la del registro y no la que se acaba de
+    # crear: con el lanzador síncrono del suite —y con un Doyle muy rápido— ya
+    # terminó para cuando se llega aquí, y devolver la de antes diría "en
+    # curso" sobre algo que ya está guardado.
+    return _consulta_como_json(
+        consultas.de(renglon_id) or consulta,
+        nueva,
+        _precios_del_renglon(almacenamiento, negocio, renglon_id),
+    )
+
+
+@app.get("/api/renglon/{renglon_id}/precio")
+def precio_del_renglon(
+    renglon_id: int,
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+    consultas: RegistroDeConsultas = Depends(obtener_consultas),
+):
+    """Cómo va la consulta y **qué hay congelado**. Es lo que sondea la pantalla.
+
+    Las dos cosas en una respuesta a propósito: separarlas obligaría al
+    navegador a hacer dos llamadas en dos momentos distintos y a decidir él cuál
+    tiene razón cuando no coincidan —"terminada" con los precios de antes, o
+    "en curso" con los de después—. Aquí el estado y lo guardado salen de la
+    misma lectura.
+
+    Lo congelado sale de la **tabla** y no de lo que el hilo recuerde: si
+    Continental se reinició a media consulta, el estado se perdió y los precios
+    que ya se habían escrito siguen ahí. Eso es lo que hace que recargar la
+    página no pierda nada.
+    """
+    negocio = cargar().negocio
+    return _consulta_como_json(
+        consultas.de(renglon_id),
+        nueva=False,
+        precios=_precios_del_renglon(almacenamiento, negocio, renglon_id),
+    )
+
+
+def _precios_del_renglon(almacenamiento, negocio: str, renglon_id: int):
+    """Lo congelado de un renglón, o nada si el almacenamiento no contestó.
+
+    Una tupla vacía cuando la lectura falla y no una excepción hacia arriba: el
+    estado de la consulta sigue siendo información aunque la tabla no conteste,
+    y la falla ya quedó entera en la bitácora. Lo que no puede pasar es que un
+    borde caído deje la pantalla sin decir nada (regla 4).
+    """
+    try:
+        return almacenamiento.precios_del_renglon(negocio, renglon_id)
+    except Exception:  # noqa: BLE001 — leer precios caído no puede tumbar la pantalla
+        log.exception("No se pudieron leer los precios del renglón %s", renglon_id)
+        return ()
+
+
+def _consulta_como_json(consulta, nueva: bool, precios) -> dict:
+    """El estado de una consulta más lo congelado, como la pantalla lo lee.
+
+    `ok` es cierto también cuando la consulta terminó mal, y eso no es
+    contradictorio: la petición se atendió. Lo que salió mal se dice en `estado`
+    y en `detalle`, que es lo que la pantalla pinta como hueco con su motivo.
+    Un `ok: false` aquí haría que el JavaScript lo tratara como "no se pudo
+    preguntar", que es otra cosa.
+    """
+    return {
+        "ok": True,
+        "nueva": nueva,
+        "consulta": (
+            None
+            if consulta is None
+            else {
+                "estado": consulta.estado,
+                "en_curso": consulta.en_curso,
+                "clave": consulta.clave,
+                "job_id": consulta.job_id,
+                "pedida_en": consulta.pedida_en.isoformat(),
+                "terminada_en": (
+                    consulta.terminada_en.isoformat()
+                    if consulta.terminada_en
+                    else None
+                ),
+                "detalle": consulta.detalle,
+            }
+        ),
+        "precios": lecturas_como_json(precios),
+    }
 
 
 def _mover_el_renglon(
@@ -579,8 +830,17 @@ def _mover_el_renglon(
     verbo: str,
     choque: str,
     nota: str = "",
+    almacenamiento: AlmacenamientoDelPedido | None = None,
 ):
     """Lo que las tres rutas que mueven un renglón comparten entero.
+
+    `almacenamiento` entra solo para releer los **precios congelados** del
+    renglón movido (ticket 12). Es opcional por comodidad de quien llama, y no
+    por duda: sin él, el renglón que vuelve tendría la misma forma pero con la
+    lista de precios vacía, y la pantalla —que sustituye el renglón entero por
+    el que llega— borraría de la vista precios que siguen guardados. Un dato
+    que desaparece de la pantalla sin desaparecer de la tabla es peor que uno
+    que nunca estuvo: nadie sabe cuál de los dos creer.
 
     Cambia la operación y cambia el texto; el resto —la firma, el `try` que
     convierte una base caída en un hueco con su motivo, el 409 de "no había
@@ -623,6 +883,11 @@ def _mover_el_renglon(
         return JSONResponse(status_code=409, content={"ok": False, "detalle": choque})
 
     movido = next(r for r in guardado.renglones if r.renglon_id == renglon_id)
+    precios = (
+        ()
+        if almacenamiento is None
+        else _precios_del_renglon(almacenamiento, negocio, renglon_id)
+    )
     log.info(
         "%s acaba de %s %s (%s) de la lista %s.%s Van %d descartado(s) de %d "
         "renglones.",
@@ -638,7 +903,7 @@ def _mover_el_renglon(
     return {
         "ok": True,
         "pedido_sugerido_id": guardado.pedido_sugerido_id,
-        "renglon": _renglon_como_json(movido),
+        "renglon": _renglon_como_json(movido, precios),
         # Los conteos salen del servidor y no de una cuenta del navegador: dos
         # pestañas abiertas en el mostrador bastan para que un número que el
         # JavaScript va sumando se separe de la verdad, y ese número es el que
@@ -694,8 +959,13 @@ def _armar(almacen: LecturaDelAlmacen, ventana: Ventana):
     )
 
 
-def _como_json(guardado: PedidoSugeridoGuardado) -> dict:
+def _como_json(guardado: PedidoSugeridoGuardado, precios: dict | None = None) -> dict:
     """La lista guardada, como la pantalla la lee.
+
+    `precios` es lo congelado por renglón, indexado por `renglon_id`. Va por
+    omisión en `None` y no en `{}` para que los dos caminos que devuelven una
+    lista sin precios —cerrar la lista, que no los toca— no tengan que
+    inventarse un diccionario vacío.
 
     `fecha_de_ventas` se conserva con ese nombre y apunta a
     `ventas_consideradas_hasta`: es lo que la pantalla ya pinta como "Ventas
@@ -726,7 +996,10 @@ def _como_json(guardado: PedidoSugeridoGuardado) -> dict:
         # podrían no coincidir y nadie sabría cuál tiene razón. Es el mismo
         # criterio por el que el interruptor de vistas filtra en el navegador
         # (`vistas.py`).
-        "renglones": [_renglon_como_json(r) for r in guardado.renglones],
+        "renglones": [
+            _renglon_como_json(r, (precios or {}).get(r.renglon_id, ()))
+            for r in guardado.renglones
+        ],
         # Los dos conteos se calculan en Python —donde hay pruebas— y no en el
         # JavaScript. `descartados` es lo que el ticket pide que se vea y, de
         # paso, el numerador de la condición de revisión del ADR 0002.
@@ -741,8 +1014,15 @@ def _como_json(guardado: PedidoSugeridoGuardado) -> dict:
     }
 
 
-def _renglon_como_json(renglon) -> dict:
+def _renglon_como_json(renglon, precios=()) -> dict:
     """Un renglón guardado, como la pantalla lo lee.
+
+    `precios` son las lecturas congeladas de ese renglón, una por proveedor que
+    contestó alguna vez. Viaja **dentro del renglón** por la misma razón que la
+    existencia y la clasificación: se leyó para ese renglón, en ese instante, y
+    quien pinte la lista no tiene que volver a emparejarlo con nada. Por omisión
+    va vacío, que es un renglón que nadie ha consultado — y eso es un dato, no
+    un hueco: es lo que el ticket 15 va a contar como *sin comparar*.
 
     `esta_agotado` va explícito porque `asdict` no incluye propiedades, y la
     regla —existencia conocida y en cero o negativa— tiene que vivir en un solo
@@ -789,6 +1069,12 @@ def _renglon_como_json(renglon) -> dict:
         "ajustada_en": (
             renglon.ajustada_en.isoformat() if renglon.ajustada_en else None
         ),
+        # Lo congelado: el precio con el que se va a decidir, no el de hoy. La
+        # traducción a JSON vive en `consultas.lecturas_como_json` —con el
+        # precio como cadena, para que no pase por la coma flotante de
+        # JavaScript justo al salir— y no aquí, porque las dos rutas de precio
+        # la usan igual.
+        "precios": lecturas_como_json(precios),
     }
 
 

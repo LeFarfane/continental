@@ -101,15 +101,20 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
                   WHERE nspname = 'pedidos'
                     AND pg_get_userbyid(nspowner) <> 'continental'))),
 
+-- CUATRO desde el ticket 12, que estrenó `pedidos.precio_de_proveedor`. El
+-- número está escrito a mano a propósito: si alguien crea una quinta tabla en
+-- este esquema sin pasar por `crear_tablas.sql`, esta comprobación se pone en
+-- [MAL] en vez de darla por buena. El DDL se corre a mano una vez, así que
+-- agregar una tabla es un acto deliberado y debe verse como tal.
 (4,
- 'Las tres tablas existen y NO las posee continental',
- '3 tablas, con otro propietario',
+ 'Las cuatro tablas existen y NO las posee continental',
+ '4 tablas, con otro propietario',
  (SELECT format('%s tabla(s): %s', count(*),
                 coalesce(string_agg(c.relname || ' -> ' || pg_get_userbyid(c.relowner),
                                     ', ' ORDER BY c.relname), '--'))
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname = 'pedidos' AND c.relkind = 'r'),
- (SELECT count(*) = 3
+ (SELECT count(*) = 4
          AND count(*) FILTER (WHERE pg_get_userbyid(c.relowner) = 'continental') = 0
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname = 'pedidos' AND c.relkind = 'r')),
@@ -131,8 +136,14 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
          END),
  NULL),
 
+-- Dinámico a propósito: recorre TODAS las tablas de `pedidos`, así que la
+-- cuarta -- y la quinta, el día que la haya-- entra sola. Es la comprobación
+-- que caza el olvido más caro de este esquema: una migración que crea una
+-- tabla y a la que nadie le corrió `crear_rol.sql` después. El GRANT no se
+-- puede dar sobre una tabla que no existía, y el síntoma aparece en atlas como
+-- "permission denied for table ..." en el primer INSERT.
 (6,
- 'continental puede SELECT, INSERT y UPDATE sus tres tablas',
+ 'continental puede SELECT, INSERT y UPDATE sus cuatro tablas',
  'no le falta ninguno',
  (SELECT coalesce(string_agg(x.tabla || ': le falta ' || x.priv, '; '
                              ORDER BY x.tabla, x.priv),
@@ -284,6 +295,71 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
     JOIN pg_class c ON c.oid = a.attrelid
     JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname = 'pedidos' AND c.relkind = 'r' AND a.attidentity <> ''),
+ NULL),
+
+-- ------------------------------------------- la forma del precio congelado
+--
+-- El ticket 12 guarda dinero, y el dinero es donde este esquema tiene más que
+-- perder. Tres comprobaciones, y cada una caza una falla que no se ve.
+
+-- Si la tabla quedó con un UNIQUE sobre (renglón, proveedor), alguien
+-- convirtió el diseño en "una fila por proveedor" y el código -- que solo hace
+-- INSERT-- empezaría a rebotar en la segunda consulta de un renglón. Peor si
+-- además alguien "arregla" eso con un UPSERT: entonces una consulta fallida
+-- borraría un precio bueno, en silencio. Esta tabla SOLO CRECE.
+(18,
+ 'El precio congelado se AGREGA: no hay UNIQUE que obligue a pisarlo',
+ 'ninguna restricción única de más',
+ (SELECT coalesce(string_agg(pg_get_constraintdef(con.oid), '; '),
+                  'ninguna restricción única de más')
+    FROM pg_constraint con
+   WHERE con.conrelid = to_regclass('pedidos.precio_de_proveedor')
+     AND con.contype = 'u'),
+ NULL),
+
+-- Los ocho motivos de `precios.MOTIVOS`, leídos DE VUELTA desde el catálogo.
+-- Se compara contra el texto entero y con sus acentos: si psql mandó el DDL
+-- como latin1, el CHECK guardó 'el portal no contestÃ³' y el primer INSERT con
+-- motivo rebotaría con una violación de restricción que nadie sabría explicar.
+-- Es la misma trampa que la comprobación 15 caza para 'en tránsito', y aquí
+-- son ocho textos en vez de uno.
+(19,
+ 'Los ocho motivos del precio sobrevivieron al CHECK, con sus acentos',
+ 'están los ocho',
+ coalesce(
+   (SELECT CASE
+             WHEN pg_get_constraintdef(con.oid) LIKE '%sin resultados%'
+              AND pg_get_constraintdef(con.oid) LIKE '%varios resultados%'
+              AND pg_get_constraintdef(con.oid) LIKE '%no empareja%'
+              AND pg_get_constraintdef(con.oid) LIKE '%el portal no contestó%'
+              AND pg_get_constraintdef(con.oid) LIKE '%la sesión caducó%'
+              AND pg_get_constraintdef(con.oid) LIKE '%no se sabe leer la página%'
+              AND pg_get_constraintdef(con.oid) LIKE '%no alcanzó el tiempo%'
+              AND pg_get_constraintdef(con.oid) LIKE '%precio ilegible%'
+                  THEN 'están los ocho'
+             ELSE pg_get_constraintdef(con.oid)
+           END
+      FROM pg_constraint con
+     WHERE con.conrelid = to_regclass('pedidos.precio_de_proveedor')
+       AND con.conname = 'ck_precio_motivo_conocido'),
+   'NO EXISTE ck_precio_motivo_conocido'),
+ NULL),
+
+-- LAS DOS RESTRICCIONES QUE IMPIDEN QUE UN HUECO SE VEA COMO EL MÁS BARATO.
+-- `ck_precio_positivo` prohíbe el cero -- el único número que aquí hace daño--
+-- y `ck_precio_sin_dato` obliga a que todo precio faltante traiga su motivo.
+-- Sin la primera, un 0.00 gana toda comparación; sin la segunda, un NULL mudo
+-- deja al encargado sin saber si lo puede resolver él (historia 23).
+(20,
+ 'Un precio nunca puede ser cero, y un hueco nunca puede ser mudo',
+ 'están las dos',
+ (SELECT CASE count(*) WHEN 2 THEN 'están las dos'
+                       ELSE format('solo %s: %s', count(*),
+                                   coalesce(string_agg(con.conname, ', '), '--'))
+         END
+    FROM pg_constraint con
+   WHERE con.conrelid = to_regclass('pedidos.precio_de_proveedor')
+     AND con.conname IN ('ck_precio_positivo', 'ck_precio_sin_dato')),
  NULL),
 
 -- AVISO y no MAL: una tabla temporal vive en la sesión, no puede leer nada que

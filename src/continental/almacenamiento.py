@@ -54,12 +54,14 @@ import datetime as dt
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Protocol, runtime_checkable
 
 import sqlalchemy
 from sqlalchemy import text
 
 from continental.clasificacion import ABARROTE, MEDICAMENTO, SIN_CLASIFICAR
+from continental.precios import MOTIVOS, LecturaDePrecio
 from continental.sugerido import Renglon
 
 log = logging.getLogger("continental")
@@ -704,6 +706,218 @@ def revisar_el_renglon(columnas: dict) -> None:
         )
 
 
+# ------------------------------------ el precio congelado (ticket 12)
+#
+# Todo lo de aquí abajo vive en `pedidos.precio_de_proveedor`, la cuarta tabla.
+# Las mismas dos mitades que el renglón: `columnas_del_precio` arma las
+# columnas y `revisar_el_precio` es el CHECK del DDL escrito en Python, y las
+# llaman las DOS implementaciones.
+
+
+@dataclass(frozen=True, slots=True)
+class PrecioDeProveedor:
+    """Lo que un proveedor dijo de un renglón, **con el instante de la lectura**.
+
+    Es una `precios.LecturaDePrecio` que ya tiene fila: lo mismo más
+    `consultado_en`, que es el dato que vuelve congelada a una cifra. Sin él,
+    "$86.05 en NADRO" no dice si se leyó hace una hora o hace tres semanas, y la
+    tercera casilla del ticket 12 es exactamente eso: *un pedido dice a qué
+    precio se decidió, no a cómo está hoy*.
+
+    `precio` es `Decimal` y no `float`, de punta a punta. La conversión desde el
+    texto del portal ocurre una sola vez, en `precios.precio_a_numero`, y el
+    número no vuelve a pasar por coma flotante ni siquiera para pintarlo: el
+    JSON lo manda como cadena. En `float`, `0.1 + 0.2` no es `0.3` y el total de
+    un pedido deja de cuadrar contra la factura por centavos que nadie puede
+    explicar.
+
+    **`precio is None` siempre viene con `motivo`.** Es lo que hace que un hueco
+    sea información y no un `NULL` mudo, y lo garantizan tres cosas a la vez:
+    `precios.leer_el_precio` no tiene un camino que produzca uno sin el otro,
+    `revisar_el_precio` lo rechaza, y `ck_precio_sin_dato` lo rechaza en la
+    tabla.
+    """
+
+    renglon_id: int
+    proveedor: str
+    consultado_en: dt.datetime
+    precio_como_llego: str = ""
+    precio: Decimal | None = None
+    existencia_como_llego: str = ""
+    existencia: Decimal | None = None
+    motivo: str | None = None
+    detalle: str = ""
+    clave_del_proveedor: str = ""
+    descripcion_del_proveedor: str = ""
+    resultados: int = 0
+
+    @property
+    def sin_dato(self) -> bool:
+        """Si este proveedor no dejó precio. **Jamás se deduce de un cero.**"""
+        return self.precio is None
+
+
+def _vacio_a_nulo(texto: str | None) -> str | None:
+    """`""` → `NULL`, igual que la clave del renglón y por lo mismo.
+
+    Una cadena vacía es un tercer valor que se compara igual que un dato y
+    empareja con cualquier otra vacía. O hay texto o no se sabe. Cada columna de
+    texto de esta tabla lleva su `CHECK (... <> '')` del otro lado.
+    """
+    return texto or None
+
+
+def columnas_del_precio(
+    lectura: LecturaDePrecio, negocio: str, renglon_id: int
+) -> dict:
+    """Las columnas de `pedidos.precio_de_proveedor` para una lectura.
+
+    **`consultado_en` no está aquí, y es a propósito.** Lo pone la base con
+    `now()`, por la misma razón que `descartado_en` y `cerrado_en`: la hora la
+    escribe el servidor que guarda la fila, así que dos procesos con relojes
+    distintos no dejan lecturas incomparables. Y trae de regalo justo lo que
+    hace falta: `now()` es la hora de la **transacción**, así que los cuatro
+    proveedores de una misma consulta quedan con el mismo instante —que es la
+    verdad: fue una sola lectura— y dos consultas distintas nunca lo comparten.
+
+    Los `numeric` **no se redondean aquí** y eso es distinto del renglón:
+    `precios.precio_a_numero` ya devuelve el `Decimal` cuantizado a la escala de
+    la columna, porque ahí es donde se sabe qué escala tiene cada cosa —dos
+    decimales el precio, tres la existencia—. Redondear dos veces sería la misma
+    regla escrita en dos lugares.
+    """
+    return {
+        "negocio": negocio,
+        "renglon_id": renglon_id,
+        "proveedor": lectura.proveedor,
+        "precio_como_llego": _vacio_a_nulo(lectura.precio_como_llego),
+        "precio": lectura.precio,
+        "existencia_como_llego": _vacio_a_nulo(lectura.existencia_como_llego),
+        "existencia": lectura.existencia,
+        "motivo": lectura.motivo,
+        "detalle": _vacio_a_nulo(lectura.detalle),
+        "clave_del_proveedor": _vacio_a_nulo(lectura.clave_del_proveedor),
+        "descripcion_del_proveedor": _vacio_a_nulo(lectura.descripcion_del_proveedor),
+        "resultados": lectura.resultados,
+    }
+
+
+def revisar_el_precio(columnas: dict) -> None:
+    """Los CHECK de `pedidos.precio_de_proveedor`, escritos en Python.
+
+    Postgres los aplica por su cuenta y no necesita esto; el doble sí. Cada
+    `raise` nombra la restricción que estaría violando.
+    """
+    if not columnas["negocio"]:
+        raise ValueError("negocio vacío: lo rechaza ck_precio_negocio.")
+    if not columnas["proveedor"]:
+        raise ValueError(
+            "proveedor vacío: lo rechaza ck_precio_proveedor. Sin saber quién "
+            "dio el precio, el precio no sirve para nada."
+        )
+    for columna in (
+        "precio_como_llego",
+        "existencia_como_llego",
+        "detalle",
+        "clave_del_proveedor",
+        "descripcion_del_proveedor",
+    ):
+        if columnas[columna] == "":
+            raise ValueError(
+                f"{columna} en cadena vacía. La columna tiene CHECK "
+                f"({columna} <> ''): o hay texto o es NULL. Ver "
+                "columnas_del_precio."
+            )
+    if columnas["precio"] is not None and columnas["precio"] <= 0:
+        raise ValueError(
+            f"Precio de {columnas['precio']}: lo rechaza ck_precio_positivo. "
+            "**Un cero no es un precio**: gana toda comparación de 'el más "
+            "barato' y dispara la compra equivocada. Un precio que no se pudo "
+            "leer es NULL con su motivo (regla 4 de CLAUDE.md)."
+        )
+    if columnas["existencia"] is not None and columnas["existencia"] < 0:
+        raise ValueError(
+            "Existencia negativa reportada por un proveedor: lo rechaza "
+            "ck_precio_existencia. Un proveedor no tiene menos que cero; la "
+            "existencia negativa de SICAR es otra cosa y vive en el renglón."
+        )
+    if columnas["resultados"] < 0:
+        raise ValueError("resultados negativo: lo rechaza ck_precio_resultados.")
+    if columnas["motivo"] is not None and columnas["motivo"] not in MOTIVOS:
+        raise ValueError(
+            f"Motivo {columnas['motivo']!r} fuera del vocabulario. Lo rechaza "
+            f"ck_precio_motivo_conocido, que solo conoce {MOTIVOS}. El ticket "
+            "15 cuenta los huecos por motivo, y un conteo sobre texto libre "
+            "cuenta faltas de ortografía."
+        )
+    if (columnas["precio"] is None) != (columnas["motivo"] is not None):
+        raise ValueError(
+            "Un precio faltante sin motivo, o un motivo en una lectura que sí "
+            "trajo precio. Lo rechaza ck_precio_sin_dato. **Un precio que no "
+            "está no es un NULL mudo**: 'la sesión caducó' lo arregla el "
+            "encargado en dos clics y 'no está en ese catálogo' no lo arregla "
+            "nadie, y sin el motivo los dos se ven igual (historia 23)."
+        )
+    if columnas["precio"] is not None and not columnas["precio_como_llego"]:
+        raise ValueError(
+            "Precio guardado sin el texto del que salió. Lo rechaza "
+            "ck_precio_con_su_texto: el texto original es lo único que permite "
+            "auditar una conversión dudosa meses después."
+        )
+
+
+def precio_desde_columnas(fila) -> PrecioDeProveedor:
+    """Una fila leída → el dato congelado. Lo usan las dos implementaciones.
+
+    `NULL` vuelve a ser `""` en las columnas de texto, que es como el resto del
+    código y la pantalla dicen "no se sabe". Los `numeric` llegan como `Decimal`
+    desde Postgres y **se quedan como `Decimal`**: es la única columna de dinero
+    que Continental lee, y convertirla a `float` en el borde —como hace
+    `almacen.py` con las piezas— sería volver a meter el dinero en coma
+    flotante justo después de haberlo sacado.
+    """
+    return PrecioDeProveedor(
+        renglon_id=int(fila["renglon_id"]),
+        proveedor=fila["proveedor"],
+        consultado_en=fila["consultado_en"],
+        precio_como_llego=fila["precio_como_llego"] or "",
+        precio=None if fila["precio"] is None else Decimal(fila["precio"]),
+        existencia_como_llego=fila["existencia_como_llego"] or "",
+        existencia=(
+            None if fila["existencia"] is None else Decimal(fila["existencia"])
+        ),
+        motivo=fila["motivo"],
+        detalle=fila["detalle"] or "",
+        clave_del_proveedor=fila["clave_del_proveedor"] or "",
+        descripcion_del_proveedor=fila["descripcion_del_proveedor"] or "",
+        resultados=int(fila["resultados"]),
+    )
+
+
+def ultimo_por_proveedor(
+    filas: Sequence[PrecioDeProveedor],
+) -> tuple[PrecioDeProveedor, ...]:
+    """De todas las lecturas de un renglón, **la más reciente de cada proveedor**.
+
+    Es el `DISTINCT ON` de `_LEER_PRECIOS` escrito en Python, para que el doble
+    conteste lo mismo que Postgres. Vive aquí y no dentro del doble por la misma
+    razón que los validadores: si las dos implementaciones eligieran con reglas
+    distintas, el suite quedaría en verde y la pantalla mostraría otro precio en
+    atlas.
+
+    El desempate es el **orden de escritura** cuando dos lecturas comparten
+    instante, igual que el `precio_de_proveedor_id desc` del SQL. Puede pasar:
+    `now()` es la hora de la transacción, así que dos consultas que se
+    solapen en el mismo microsegundo lo comparten.
+    """
+    ultimas: dict[str, PrecioDeProveedor] = {}
+    for fila in filas:
+        previa = ultimas.get(fila.proveedor)
+        if previa is None or fila.consultado_en >= previa.consultado_en:
+            ultimas[fila.proveedor] = fila
+    return tuple(ultimas[clave] for clave in sorted(ultimas))
+
+
 # --------------------------------------------------------------- interfaz
 
 
@@ -888,6 +1102,98 @@ class AlmacenamientoDelPedido(Protocol):
         """
         ...
 
+    def leer_renglon(self, negocio: str, renglon_id: int) -> RenglonGuardado | None:
+        """Un renglón suelto, con sus números congelados. `None` si no hay.
+
+        Existe desde el ticket 12 y para una sola cosa: antes de pedirle un
+        precio a Doyle hay que saber **con qué clave buscar** y si el renglón
+        sigue `abierto`. Leer la lista entera para mirar un renglón costaría
+        traerse los cientos de filas del día por cada clic de un botón.
+
+        Es lectura y no decide nada: la garantía de que el precio no se le
+        pegue a un renglón de otro negocio vive en el `WHERE` de
+        `guardar_precios`, no en lo que esta función devuelva.
+        """
+        ...
+
+    def guardar_precios(
+        self, negocio: str, renglon_id: int, lecturas: Sequence[LecturaDePrecio]
+    ) -> int:
+        """Congela lo que contestaron los proveedores. Cuántas filas escribió.
+
+        **Agrega, nunca pisa**, y ésa es la cuarta decisión del ticket 12.
+        Congelado quiere decir congelado: una segunda consulta del mismo renglón
+        deja una lectura nueva al lado de la anterior y la comparación usa la
+        más reciente (`ultimo_por_proveedor`). Las tres razones, en orden de
+        cuánto duelen:
+
+        1. **Un `UPDATE` haría que una consulta fallida borrara un precio
+           bueno.** Es el caso ordinario, no el raro: se consulta a las 8, NADRO
+           da $86.05; a las 9 alguien vuelve a consultar, la sesión ya caducó, y
+           con un `UPDATE` el $86.05 se convierte en un hueco. Se habría perdido
+           el dato **por intentar mejorarlo**.
+        2. **El precio al que se decidió comprar tiene que seguir ahí.** Es
+           literal la tercera casilla del ticket: *un pedido dice a qué precio se
+           decidió, no a cómo está hoy*. Con una sola fila por proveedor, la
+           cifra que el encargado vio cuando eligió NADRO desaparece en cuanto
+           alguien recarga los precios.
+        3. **El rol no tiene `DELETE`** (ADR 0003) y toda la zona de datos de la
+           casa es append-only por convención. Una tabla que solo crece se
+           audita; una que se sobreescribe no.
+
+        Lo que cuesta, dicho: la tabla crece con cada consulta y nadie la poda.
+        Son cuatro filas por renglón consultado —del orden de cientos al día en
+        el peor caso— contra una base que hoy guarda 460 mil filas en total.
+        Cuando estorbe, se archiva con el pedido sugerido que la originó, que
+        es la unidad con la que se puede tirar sin perder el porqué.
+
+        **El renglón y su negocio viven en el `WHERE`**, no en un `if`: se
+        escribe contra el renglón que existe en ese negocio y no contra el que
+        Python creyó haber leído un momento antes. Cero filas es "no había
+        renglón al que guardarle precio", y quien llame lo dice.
+
+        Lo que ese `WHERE` **no** lleva, a propósito, es el estado del renglón.
+        Los estados van en el `WHERE` cuando lo que se escribe es una
+        transición —descartar, cerrar, corregir la cantidad—, y esto no lo es:
+        es un **hecho del mundo en un instante**. Si alguien descarta el renglón
+        mientras Doyle todavía consulta, tirar la lectura no protege nada —nadie
+        va a comprar un renglón descartado— y sí pierde la evidencia, que
+        además vuelve a hacer falta en cuanto alguien lo devuelva a `abierto`.
+        Quien decide si vale la pena molestar a los portales es la ruta, que
+        mira el estado **antes** de pedir la búsqueda y puede explicarlo.
+        """
+        ...
+
+    def precios_del_renglon(
+        self, negocio: str, renglon_id: int
+    ) -> tuple[PrecioDeProveedor, ...]:
+        """La lectura más reciente de **cada** proveedor para ese renglón.
+
+        Una por proveedor que alguna vez contestó, ordenadas por clave. Un
+        renglón que nunca se consultó devuelve la tupla vacía, y eso es un dato:
+        el ticket 15 cuenta exactamente los que quedaron *sin comparar*.
+        """
+        ...
+
+    def precios_de_la_lista(
+        self, negocio: str, pedido_sugerido_id: int
+    ) -> dict[int, tuple[PrecioDeProveedor, ...]]:
+        """Lo mismo para la lista entera, en **una sola consulta**.
+
+        Es lo que la pantalla necesita al cargar: sin esto haría una llamada por
+        renglón y una lista trae tantos renglones como productos distintos se
+        vendieron. Y hay algo peor que el costo — con una llamada por renglón,
+        cada una leería en un momento distinto y la tabla podría dejar de
+        coincidir consigo misma mientras alguien la trabaja. Es la misma razón
+        por la que las dos vistas del ticket 06 salen de una sola lectura.
+
+        Un renglón sin ninguna consulta **no aparece** en el diccionario, en vez
+        de aparecer con una tupla vacía: "no está" y "está vacío" quieren decir
+        lo mismo aquí y tener dos maneras de decirlo invita a que alguien
+        compruebe solo una.
+        """
+        ...
+
 
 # ------------------------------------------------- la implementación real
 #
@@ -925,6 +1231,22 @@ _LEER_RENGLONES = text(
     from pedidos.renglon
     where negocio = :negocio and pedido_sugerido_id = :pedido_sugerido_id
     order by renglon_id
+    """
+)
+
+# Un renglón suelto (ticket 12): con qué clave buscar y si sigue abierto. Las
+# MISMAS columnas que `_LEER_RENGLONES` porque las dos desembocan en
+# `armar_guardado`; pedir menos aquí obligaría a un segundo camino de lectura
+# que se desincronizaría con el primero a la tercera columna nueva.
+_LEER_RENGLON_POR_ID = text(
+    """
+    select renglon_id, pedido_sugerido_id, producto_id, clave, descripcion,
+           piezas_vendidas, cantidad_propuesta, esta_en_el_catalogo, existencia,
+           dias_de_cobertura, clasificacion, estado,
+           descartado_por, descartado_en,
+           cantidad_final, ajustada_por, ajustada_en
+    from pedidos.renglon
+    where negocio = :negocio and renglon_id = :renglon_id
     """
 )
 
@@ -1081,6 +1403,89 @@ _AJUSTAR_LA_CANTIDAD = text(
     """
 )
 
+# Congelar lo que contestaron los proveedores (ticket 12).
+#
+# `INSERT ... SELECT` y no `INSERT ... VALUES`, y ahí está la garantía: el
+# renglón y su negocio se comprueban DENTRO de la sentencia contra
+# `pedidos.renglon`, así que una lectura no se le puede pegar a un renglón que
+# no existe ni a uno de otro negocio (regla 7). Un `SELECT` previo en Python y
+# un `INSERT` después tienen una carrera en medio; esto no.
+#
+# La llave foránea `fk_precio_renglon` lo volvería a rechazar de todas formas,
+# pero con un error de restricción que no explica nada. Cero filas sí explica:
+# "no había renglón al que guardarle precio".
+#
+# `consultado_en` NO se escribe: lo pone el DEFAULT `now()` de la columna, que
+# es la hora de la TRANSACCIÓN. Los cuatro proveedores de una consulta quedan
+# con el mismo instante —fue una sola lectura— y dos consultas distintas nunca
+# lo comparten. Una hora calculada en Python dejaría lecturas incomparables
+# entre dos procesos con relojes distintos, que es la misma razón del cierre y
+# del descarte.
+#
+# **Sin `ON CONFLICT` y sin `UPDATE`**: esta tabla solo crece. El porqué entero
+# está en el docstring de `guardar_precios`; en corto, un `UPDATE` haría que
+# una consulta fallida borrara un precio bueno.
+_GUARDAR_PRECIO = text(
+    """
+    insert into pedidos.precio_de_proveedor
+        (negocio, renglon_id, proveedor, precio_como_llego, precio,
+         existencia_como_llego, existencia, motivo, detalle,
+         clave_del_proveedor, descripcion_del_proveedor, resultados)
+    select r.negocio, r.renglon_id, :proveedor, :precio_como_llego, :precio,
+           :existencia_como_llego, :existencia, :motivo, :detalle,
+           :clave_del_proveedor, :descripcion_del_proveedor, :resultados
+      from pedidos.renglon as r
+     where r.negocio = :negocio
+       and r.renglon_id = :renglon_id
+    """
+)
+
+# La lectura MÁS RECIENTE de cada proveedor, de todos los renglones de una
+# lista. `DISTINCT ON` es de Postgres y es justo la herramienta: pide una fila
+# por pareja (renglón, proveedor) y el `ORDER BY` decide cuál.
+#
+# El `precio_de_proveedor_id desc` del desempate no es adorno: `now()` es la
+# hora de la transacción, así que dos consultas que se solapen pueden compartir
+# `consultado_en` y sin el desempate cuál gana dependería del plan de Postgres.
+# `ultimo_por_proveedor` desempata igual en el doble.
+#
+# El `join` contra `renglon` lleva las DOS columnas de `fk_precio_renglon`
+# —id y negocio—, así que el `negocio` del parámetro acota las dos tablas.
+_LEER_PRECIOS = text(
+    """
+    select distinct on (p.renglon_id, p.proveedor)
+           p.renglon_id, p.proveedor, p.consultado_en,
+           p.precio_como_llego, p.precio,
+           p.existencia_como_llego, p.existencia,
+           p.motivo, p.detalle,
+           p.clave_del_proveedor, p.descripcion_del_proveedor, p.resultados
+      from pedidos.precio_de_proveedor as p
+      join pedidos.renglon as r
+        on r.renglon_id = p.renglon_id and r.negocio = p.negocio
+     where p.negocio = :negocio
+       and r.pedido_sugerido_id = :pedido_sugerido_id
+     order by p.renglon_id, p.proveedor,
+              p.consultado_en desc, p.precio_de_proveedor_id desc
+    """
+)
+
+# Lo mismo para un renglón solo. Sin el `join`, porque no hace falta llegar a
+# la lista: `negocio` y `renglon_id` ya identifican la fila.
+_LEER_PRECIOS_DEL_RENGLON = text(
+    """
+    select distinct on (p.proveedor)
+           p.renglon_id, p.proveedor, p.consultado_en,
+           p.precio_como_llego, p.precio,
+           p.existencia_como_llego, p.existencia,
+           p.motivo, p.detalle,
+           p.clave_del_proveedor, p.descripcion_del_proveedor, p.resultados
+      from pedidos.precio_de_proveedor as p
+     where p.negocio = :negocio
+       and p.renglon_id = :renglon_id
+     order by p.proveedor, p.consultado_en desc, p.precio_de_proveedor_id desc
+    """
+)
+
 # `now()` y no una hora calculada en Python: la hora del cierre la pone el
 # servidor que guarda la fila, así que dos procesos con relojes distintos no
 # escriben cierres incomparables. Es un INSTANTE con zona, no una fecha.
@@ -1189,6 +1594,57 @@ class AlmacenamientoPostgres:
             )
         return None if fila is None else fila["corte"]
 
+    def leer_renglon(self, negocio: str, renglon_id: int) -> RenglonGuardado | None:
+        with self._motor().connect() as conexion:
+            fila = (
+                conexion.execute(
+                    _LEER_RENGLON_POR_ID,
+                    {"negocio": negocio, "renglon_id": renglon_id},
+                )
+                .mappings()
+                .first()
+            )
+        return None if fila is None else renglon_guardado_desde_columnas(fila)
+
+    def precios_del_renglon(
+        self, negocio: str, renglon_id: int
+    ) -> tuple[PrecioDeProveedor, ...]:
+        with self._motor().connect() as conexion:
+            filas = (
+                conexion.execute(
+                    _LEER_PRECIOS_DEL_RENGLON,
+                    {"negocio": negocio, "renglon_id": renglon_id},
+                )
+                .mappings()
+                .all()
+            )
+        return tuple(precio_desde_columnas(f) for f in filas)
+
+    def precios_de_la_lista(
+        self, negocio: str, pedido_sugerido_id: int
+    ) -> dict[int, tuple[PrecioDeProveedor, ...]]:
+        with self._motor().connect() as conexion:
+            filas = (
+                conexion.execute(
+                    _LEER_PRECIOS,
+                    {
+                        "negocio": negocio,
+                        "pedido_sugerido_id": pedido_sugerido_id,
+                    },
+                )
+                .mappings()
+                .all()
+            )
+
+        por_renglon: dict[int, list[PrecioDeProveedor]] = {}
+        for fila in filas:
+            precio = precio_desde_columnas(fila)
+            por_renglon.setdefault(precio.renglon_id, []).append(precio)
+        return {
+            renglon_id: tuple(precios)
+            for renglon_id, precios in por_renglon.items()
+        }
+
     # --------------------------------------------------------- escritura
 
     def abrir_el_dia(
@@ -1294,6 +1750,48 @@ class AlmacenamientoPostgres:
             },
         )
 
+    def guardar_precios(
+        self, negocio: str, renglon_id: int, lecturas: Sequence[LecturaDePrecio]
+    ) -> int:
+        if not lecturas:
+            # Sin lecturas no hay nada que escribir y no es un error: una
+            # búsqueda que no alcanzó a preguntarle a ningún proveedor deja el
+            # renglón sin comparar, que es lo que el ticket 15 cuenta.
+            return 0
+
+        filas = []
+        for lectura in lecturas:
+            columnas = columnas_del_precio(lectura, negocio, renglon_id)
+            # Se revisa TODO antes de escribir la primera fila, igual que al
+            # insertar la lista: los cuatro proveedores de una consulta entran
+            # juntos o no entra ninguno. Una consulta a medias diría que a dos
+            # proveedores no se les preguntó, y el conteo del ticket 15
+            # mentiría.
+            revisar_el_precio(columnas)
+            filas.append(columnas)
+
+        # UNA EJECUCIÓN POR FILA, y no un `executemany` con las cuatro. No es
+        # descuido: **psycopg2 no tiene `supports_sane_multi_rowcount`**
+        # (comprobado sobre el dialecto el 2026-09-19), así que el `rowcount`
+        # de una ejecución con varias parejas de parámetros no es de fiar —
+        # viene en -1 o con el de la última—. Y ese número es justo el que
+        # distingue "se guardó" de "no había renglón": una consulta buena se
+        # habría anotado como `sin guardar` con el motivo "ese renglón ya no
+        # está en la lista", en atlas y solo en atlas, después de que aquí todo
+        # se viera verde.
+        #
+        # Lo que cuesta son cuatro idas y vueltas en vez de una, por loopback y
+        # una vez por clic. Contra los ~9 s por proveedor que acaba de costar la
+        # consulta, no se mide.
+        #
+        # Siguen siendo UNA transacción: los cuatro proveedores entran juntos o
+        # no entra ninguno.
+        with self._motor().begin() as conexion:
+            return sum(
+                max(conexion.execute(_GUARDAR_PRECIO, fila).rowcount, 0)
+                for fila in filas
+            )
+
     def _mover_el_renglon(self, sentencia, parametros: dict):
         """El `UPDATE` de un renglón y la relectura de su lista, en una transacción.
 
@@ -1353,22 +1851,30 @@ def armar_guardado(cabecera, filas) -> PedidoSugeridoGuardado:
         ),
         armado_en=cabecera["armado_en"],
         cerrado_en=cabecera["cerrado_en"],
-        renglones=tuple(
-            RenglonGuardado(
-                renglon_id=int(f["renglon_id"]),
-                estado=f["estado"],
-                propuesto=renglon_desde_columnas(f),
-                descartado_por=f["descartado_por"],
-                descartado_en=f["descartado_en"],
-                # `int(...)` en el borde, igual que el resto: Postgres devuelve
-                # `integer` como `int`, pero el día que la columna cambie de
-                # tipo esto no se entera a medias.
-                cantidad_final=(
-                    None if f["cantidad_final"] is None else int(f["cantidad_final"])
-                ),
-                ajustada_por=f["ajustada_por"],
-                ajustada_en=f["ajustada_en"],
-            )
-            for f in filas
+        renglones=tuple(renglon_guardado_desde_columnas(f) for f in filas),
+    )
+
+
+def renglon_guardado_desde_columnas(fila) -> RenglonGuardado:
+    """Una fila de `pedidos.renglon` → el renglón guardado, entero.
+
+    Sale de dentro de `armar_guardado` con el ticket 12, que estrenó la lectura
+    de un renglón suelto (`leer_renglon`): dos caminos que arman el mismo objeto
+    con dos códigos distintos se separan a la tercera columna nueva, y el que
+    menos se usa es el que se queda viejo.
+    """
+    return RenglonGuardado(
+        renglon_id=int(fila["renglon_id"]),
+        estado=fila["estado"],
+        propuesto=renglon_desde_columnas(fila),
+        descartado_por=fila["descartado_por"],
+        descartado_en=fila["descartado_en"],
+        # `int(...)` en el borde, igual que el resto: Postgres devuelve
+        # `integer` como `int`, pero el día que la columna cambie de tipo esto
+        # no se entera a medias.
+        cantidad_final=(
+            None if fila["cantidad_final"] is None else int(fila["cantidad_final"])
         ),
+        ajustada_por=fila["ajustada_por"],
+        ajustada_en=fila["ajustada_en"],
     )

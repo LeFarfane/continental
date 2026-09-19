@@ -68,16 +68,26 @@
 -- se corren a mano con credenciales de dueño (ADR 0003) y ninguno de los dos
 -- lo toca el código de arranque.
 --
--- Hoy hay dos, y se corren en orden:
+-- Hoy hay tres, y se corren en orden:
 --
 --   1. `sql/migraciones/0001-renglon-quien-descarto-y-cuando.sql` (ticket 10),
 --      que agrega `descartado_por` y `descartado_en`.
 --   2. `sql/migraciones/0002-renglon-cantidad-final-y-quien-la-ajusto.sql`
 --      (ticket 11), que agrega `cantidad_final`, `ajustada_por` y
 --      `ajustada_en`.
+--   3. `sql/migraciones/0003-precio-congelado-por-renglon-y-proveedor.sql`
+--      (ticket 12), que crea la CUARTA tabla, `pedidos.precio_de_proveedor`.
 --
--- Las dos son idempotentes, así que correrlas sobre una base que ya las tiene
+-- Las tres son idempotentes, así que correrlas sobre una base que ya las tiene
 -- -o sobre una recién creada con este archivo- no rompe nada.
+--
+-- **La 0003 es distinta de las otras dos y hay que decirlo**: crea una tabla
+-- entera, así que además exige volver a correr `sql/crear_rol.sql` -- un GRANT
+-- no se puede dar sobre una tabla que no existía-. Las dos primeras no lo
+-- exigían porque el GRANT es sobre la tabla completa y cubre las columnas
+-- nuevas. Sin ese paso, el primer precio que se intente guardar en atlas
+-- rebota con "permission denied for table precio_de_proveedor", después de que
+-- aquí todo se vio verde.
 --
 --
 -- ## Acentos
@@ -563,6 +573,258 @@ COMMENT ON COLUMN pedidos.renglon.ajustada_en IS
 
 
 -- --------------------------------------------------------------------------
+-- 4) El precio de un proveedor: lo que contestó, congelado, con su instante.
+-- --------------------------------------------------------------------------
+--
+-- Va después de `renglon` porque le apunta con una llave foránea.
+--
+-- ## Por qué una tabla y no columnas en `renglon`
+--
+-- El spec del módulo decía que el renglón guardaría "los precios leídos por
+-- proveedor con su momento de lectura", y en columnas eso son cuatro
+-- proveedores por nueve datos: treinta y seis columnas cuyo nombre lleva
+-- dentro el nombre de un proveedor. El día que entre un quinto -o que
+-- QuePharma salga, que el ADR 0002 ya da por probable- hay que alterar la
+-- tabla, y el rol no puede (ADR 0003). Peor: "contra cuántos proveedores se
+-- comparó este renglón", que es lo que el ticket 15 tiene que contar, se
+-- volvería un CASE de nueve columnas en vez de un count(*).
+--
+-- El grano es (renglón, proveedor) porque eso es lo que se lee de una vez: una
+-- visita a un portal con una clave devuelve el precio y la existencia de ese
+-- producto en ese proveedor. Una fila por hecho.
+--
+-- ## ESTA TABLA SOLO CRECE, Y ES LA DECISIÓN DEL TICKET
+--
+-- Una segunda consulta del mismo renglón AGREGA filas; no pisa las anteriores.
+-- No hay UNIQUE sobre (renglón, proveedor) a propósito y no hay un solo UPDATE
+-- en el código que la toque. Tres razones, de la que más duele hacia abajo:
+--
+--   1. CON UPDATE, UNA CONSULTA FALLIDA BORRARÍA UN PRECIO BUENO. Se consulta
+--      a las 8 y NADRO da $86.05; a las 9 alguien vuelve a consultar, la
+--      sesión ya caducó, y el $86.05 se convierte en un hueco. Se habría
+--      perdido el dato POR INTENTAR MEJORARLO, sin un solo error que ver.
+--   2. "Un pedido dice a qué precio se decidió, no a cómo está hoy" (ticket
+--      12). Con una sola fila por proveedor, la cifra que el encargado vio
+--      cuando eligió NADRO desaparece en cuanto alguien recarga los precios, y
+--      el pedido deja de poder explicarse.
+--   3. El rol no tiene DELETE (ADR 0003) y la zona de datos de la casa es
+--      append-only por convención. Una tabla que solo crece se audita.
+--
+-- Lo que cuesta, dicho: cuatro filas por renglón consultado, del orden de
+-- cientos al día en el peor caso, contra una base que hoy guarda ~460 mil
+-- filas en total. Cuando estorbe, se archiva junto con el pedido sugerido que
+-- la originó, que es la unidad con la que se puede tirar sin perder el porqué.
+--
+-- Quién decide cuál vale hoy es el DISTINCT ON (renglon_id, proveedor) de
+-- `almacenamiento._LEER_PRECIOS`, ordenado por consultado_en DESC.
+
+CREATE TABLE IF NOT EXISTS pedidos.precio_de_proveedor (
+    precio_de_proveedor_id    bigint        GENERATED ALWAYS AS IDENTITY,
+    negocio                   text          NOT NULL,
+    renglon_id                bigint        NOT NULL,
+    proveedor                 text          NOT NULL,
+    consultado_en             timestamptz   NOT NULL DEFAULT now(),
+    precio_como_llego         text,
+    precio                    numeric(12,2),
+    existencia_como_llego     text,
+    existencia                numeric(12,3),
+    motivo                    text,
+    detalle                   text,
+    clave_del_proveedor       text,
+    descripcion_del_proveedor text,
+    resultados                integer       NOT NULL DEFAULT 0,
+
+    CONSTRAINT pk_precio_de_proveedor
+        PRIMARY KEY (precio_de_proveedor_id),
+
+    CONSTRAINT ck_precio_negocio
+        CHECK (negocio <> ''),
+
+    -- Sin saber quién dio el precio, el precio no sirve para nada.
+    CONSTRAINT ck_precio_proveedor
+        CHECK (proveedor <> ''),
+
+    -- EL CERO ES EL ÚNICO NÚMERO QUE AQUÍ PUEDE HACER DAÑO. Un precio en cero
+    -- gana toda comparación de "el más barato" y dispara la compra
+    -- equivocada: es exactamente la regla 4 de CLAUDE.md -"un precio que no se
+    -- pudo leer es sin dato, jamás un cero ni un más caro"-. Un portal que
+    -- escribe "0.00" tampoco está regalando nada: es un portal que no supo
+    -- decir cuánto cuesta.
+    --
+    -- Es la SEGUNDA puerta para el mismo cero: `precios.precio_a_numero` ya
+    -- devuelve NULL para él. Ésta es la que sigue puesta el día que alguien
+    -- escriba en la tabla desde un psql o desde un módulo que todavía no
+    -- existe.
+    CONSTRAINT ck_precio_positivo
+        CHECK (precio > 0),
+
+    -- Un proveedor no tiene menos que cero. La existencia negativa sí ocurre
+    -- en `renglon.existencia` -SICAR la permite cuando se vendió más de lo que
+    -- el inventario decía- y eso es lo NUESTRO; esto es lo que reporta el
+    -- portal de otro.
+    --
+    -- (Al redactar dentro de un CREATE TABLE de este archivo: los nombres de
+    -- los tipos de coma flotante no se escriben ni en un comentario.
+    -- `test_el_dinero_no_es_coma_flotante` los busca en el CUERPO entero, y es
+    -- a propósito: un tipo prohibido escondido en una línea comentada está a
+    -- un `git revert` de ser una columna.)
+    CONSTRAINT ck_precio_existencia
+        CHECK (existencia >= 0),
+
+    CONSTRAINT ck_precio_resultados
+        CHECK (resultados >= 0),
+
+    -- UN PRECIO FALTANTE NO ES UN NULL MUDO. "NADRO no dio precio" quiere
+    -- decir cinco cosas distintas y cada una se arregla de otra manera: si la
+    -- sesión caducó el encargado la abre en dos clics; si el portal no
+    -- contestó se reintenta; si el producto no está en ese catálogo no hay
+    -- nada que hacer. Sin el motivo las cinco se ven iguales y ninguna se
+    -- puede atender (historia 23 del spec, segunda casilla del ticket 15).
+    --
+    -- Las dos mitades hacen falta. Sin la de ida, un NULL podría quedarse
+    -- callado; sin la de vuelta, un motivo podría quedar colgado en una
+    -- lectura que sí trajo precio y el conteo del ticket 15 contaría huecos
+    -- que no existen.
+    CONSTRAINT ck_precio_sin_dato
+        CHECK ((precio IS NULL) = (motivo IS NOT NULL)),
+
+    -- El vocabulario cerrado de `precios.MOTIVOS`, con el mismo texto exacto.
+    -- Cerrado y no texto libre porque el ticket 15 tiene que CONTAR los huecos
+    -- por motivo, y un conteo sobre texto libre cuenta faltas de ortografía.
+    --
+    -- `no empareja` todavía no lo escribe nadie: lo va a producir el
+    -- emparejamiento por EAN del ticket 13. Está desde hoy a propósito, porque
+    -- agregarlo después cuesta una migración del CHECK y una visita a atlas
+    -- con credenciales de dueño (ADR 0003).
+    --
+    -- LOS ACENTOS DE ESTOS OCHO TEXTOS VIAJAN DENTRO DEL CHECK, igual que el
+    -- de 'en tránsito' en `ck_renglon_estado`: si psql manda este archivo como
+    -- latin1, el primer INSERT con motivo rebota con una violación de
+    -- restricción que nadie sabría explicar. Ver el SET client_encoding de la
+    -- cabecera y la comprobación 15 de verificar_rol.sql.
+    CONSTRAINT ck_precio_motivo_conocido
+        CHECK (motivo IS NULL OR motivo IN (
+            'sin resultados', 'varios resultados', 'no empareja',
+            'el portal no contestó', 'la sesión caducó',
+            'no se sabe leer la página', 'no alcanzó el tiempo',
+            'precio ilegible')),
+
+    -- EL TEXTO ORIGINAL ES LA AUDITORÍA DE LA CONVERSIÓN. El portal escribe
+    -- "1,234.50" y aquí se guarda 1234.50; si solo sobreviviera el número, la
+    -- pregunta "¿de dónde salió este 1234.50?" no tendría respuesta seis meses
+    -- después. Un precio sin su texto es un número sin procedencia.
+    CONSTRAINT ck_precio_con_su_texto
+        CHECK (precio IS NULL OR precio_como_llego IS NOT NULL),
+
+    -- La cadena vacía no existe en ninguna columna de texto, por la misma
+    -- razón que `ck_renglon_clave`: una cadena vacía se compara igual que un
+    -- dato y empareja con cualquier otra vacía. O hay texto o no se sabe.
+    -- `columnas_del_precio` hace la traducción del lado de Python.
+    CONSTRAINT ck_precio_textos
+        CHECK (precio_como_llego <> ''
+               AND existencia_como_llego <> ''
+               AND detalle <> ''
+               AND clave_del_proveedor <> ''
+               AND descripcion_del_proveedor <> ''),
+
+    -- Compuesta con `negocio`, igual que las otras dos llaves foráneas de este
+    -- esquema: con ella, un precio de farmacia_01 no puede colgar de un
+    -- renglón de otro negocio (regla 7 de CLAUDE.md).
+    CONSTRAINT fk_precio_renglon
+        FOREIGN KEY (renglon_id, negocio)
+        REFERENCES pedidos.renglon (renglon_id, negocio)
+);
+
+COMMENT ON TABLE pedidos.precio_de_proveedor IS
+    'Lo que un proveedor contestó de un renglón, CONGELADO, con el instante de '
+    'la lectura. SOLO CRECE: una segunda consulta agrega filas y la '
+    'comparación usa la más reciente por proveedor.';
+
+COMMENT ON COLUMN pedidos.precio_de_proveedor.proveedor IS
+    'La clave de Doyle: nadro, levic, vicma, quepharma (config/proveedores.yml '
+    'de ese repo). Se guarda la clave y no el nombre porque la clave es lo que '
+    'no cambia; cómo se escribe cada una vive en precios.NOMBRES_DE_PROVEEDOR.';
+
+-- EL INSTANTE ES LO QUE VUELVE CONGELADA A UNA CIFRA. Sin él, "$86.05 en
+-- NADRO" no dice si se leyó hace una hora o hace tres semanas, y la tercera
+-- casilla del ticket 12 es literalmente eso: un pedido dice a qué precio se
+-- decidió, no a cómo está hoy.
+--
+-- `now()` como DEFAULT y no una hora calculada en Python, por la misma razón
+-- que `armado_en`, `cerrado_en` y `descartado_en`: la pone el servidor que
+-- guarda la fila, así que dos procesos con relojes distintos no dejan lecturas
+-- incomparables. Y trae de regalo justo lo que hace falta: now() es la hora de
+-- la TRANSACCIÓN, así que los cuatro proveedores de una misma consulta quedan
+-- con el mismo instante -fue una sola lectura- y dos consultas distintas nunca
+-- lo comparten.
+--
+-- `timestamptz` y no `timestamp`: el contenedor corre en UTC, y un `timestamp`
+-- sin zona guardaría un reloj de pared que alguien en México lee seis horas en
+-- el futuro. Esto NO contradice "todo se ancla en max(fecha)": esa regla es
+-- sobre FECHAS DE VENTA; esto es un instante que ocurrió aquí.
+COMMENT ON COLUMN pedidos.precio_de_proveedor.consultado_en IS
+    'Cuándo se leyó este precio, instante con zona. Los cuatro proveedores de '
+    'una misma consulta lo comparten: fue una sola lectura.';
+
+-- DECIMAL EXPLÍCITO, NUNCA COMA FLOTANTE, igual que `pedido.total_sin_iva` y
+-- por la misma lección medida en farmacia-data: dejar que una librería DEDUZCA
+-- el tipo terminó metiendo dinero en `double precision`, donde 0.1 + 0.2 no es
+-- 0.3 y un total deja de cuadrar contra la factura por centavos que nadie
+-- puede explicar.
+--
+-- SIN IVA, como todo costo nuestro: el de mostrador lleva IVA y restarlos
+-- directo es el error con el que Marlowe puso la flecha al revés.
+--
+-- NULL = no se sabe, JAMÁS cero. El cero está prohibido por
+-- `ck_precio_positivo` y el porqué está ahí arriba.
+COMMENT ON COLUMN pedidos.precio_de_proveedor.precio IS
+    'Precio de COMPRA, sin IVA, decimal explícito. NULL = sin dato, y entonces '
+    'motivo dice por qué. Nunca cero.';
+
+-- La conversión ocurre en Python (`precios.precio_a_numero`) y NO en el SQL
+-- con un ::numeric, y la diferencia es concreta: '1,234.50'::numeric TRUENA, y
+-- un error de conversión aborta la transacción entera -se perderían también
+-- los tres proveedores que sí contestaron bien-. En Python, un texto que no se
+-- puede leer es una fila más con `precio ilegible` de motivo, que es
+-- información.
+COMMENT ON COLUMN pedidos.precio_de_proveedor.precio_como_llego IS
+    'El precio TAL CUAL lo escribió el portal ("1,234.50", a veces con $). Es '
+    'lo único que permite auditar una conversión dudosa meses después.';
+
+COMMENT ON COLUMN pedidos.precio_de_proveedor.existencia_como_llego IS
+    'La existencia tal cual la escribió el portal. Los portales dicen "40", '
+    '"+100" o "Disponible", y el texto vale cuando el número no: que la '
+    'existencia no se pueda convertir NUNCA es motivo para tirar el precio.';
+
+COMMENT ON COLUMN pedidos.precio_de_proveedor.motivo IS
+    'Por qué NO hay precio, del vocabulario de precios.MOTIVOS. NULL cuando sí '
+    'lo hay. Cada motivo lleva a una acción distinta: la sesión caducada la '
+    'arregla el encargado en dos clics, "sin resultados" no la arregla nadie.';
+
+COMMENT ON COLUMN pedidos.precio_de_proveedor.detalle IS
+    'Lo que Doyle dijo, primera línea y acotado. Es un mensaje que Doyle '
+    'redacta PARA QUE UNA PERSONA LO LEA (historia 23); lo que nunca viaja al '
+    'navegador es el texto de una excepción nuestra (regla 5 de CLAUDE.md).';
+
+-- CUÁNTAS ENCONTRÓ EL PORTAL, no cuántas trajo Doyle (que corta en 20). La
+-- diferencia decide: el ticket 13 acepta VICMA "únicamente si la búsqueda del
+-- EAN devuelve exactamente un resultado", y con len(filas) un portal con 43
+-- resultados diría 20. Se guarda desde hoy aunque hoy solo alimente el motivo
+-- `varios resultados`: si no se guardara, esa regla tendría que releer el
+-- portal mañana -o mentir-.
+COMMENT ON COLUMN pedidos.precio_de_proveedor.resultados IS
+    'Cuántos resultados encontró el portal para esa clave. Es el dato con el '
+    'que el ticket 13 decide VICMA.';
+
+-- LA EVIDENCIA DE QUE SE COMPARÓ EL MISMO PRODUCTO. Es la lección que Marlowe
+-- pagó: una caja de 60 más barata por pieza se veía como más cara, sin fallar
+-- y sin avisar. Con la descripción del proveedor a la vista, una persona lo
+-- caza de un vistazo; sin ella, nadie.
+COMMENT ON COLUMN pedidos.precio_de_proveedor.descripcion_del_proveedor IS
+    'Cómo describe el portal el producto de esta fila. Evidencia de que se '
+    'comparó lo mismo.';
+
+-- --------------------------------------------------------------------------
 -- Índices
 -- --------------------------------------------------------------------------
 --
@@ -585,6 +847,23 @@ CREATE INDEX IF NOT EXISTS ix_renglon_en_transito
 CREATE INDEX IF NOT EXISTS ix_renglon_pedido
     ON pedidos.renglon (pedido_id)
  WHERE pedido_id IS NOT NULL;
+
+-- "La lectura más reciente de cada proveedor para estos renglones": es
+-- EXACTAMENTE el DISTINCT ON de `almacenamiento._LEER_PRECIOS`, columna por
+-- columna y con el mismo DESC. Con él, Postgres recorre el índice y se lleva
+-- la primera fila de cada pareja; sin él, ordena la tabla entera cada vez que
+-- alguien carga la pantalla.
+--
+-- Esta tabla SOLO CRECE, así que es la única del esquema donde el índice deja
+-- de ser opcional con el tiempo: sin él, el costo de pintar la lista crece con
+-- el historial de precios y no con lo que se está mirando.
+--
+-- `renglon_id` va después de `negocio` y no al revés porque toda consulta
+-- lleva las dos, y `negocio` primero deja el índice listo para el día que haya
+-- una segunda farmacia (regla 7).
+CREATE INDEX IF NOT EXISTS ix_precio_ultimo
+    ON pedidos.precio_de_proveedor
+       (negocio, renglon_id, proveedor, consultado_en DESC);
 
 
 -- --------------------------------------------------------------------------

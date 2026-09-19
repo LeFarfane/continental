@@ -16,6 +16,7 @@ from __future__ import annotations
 from continental.almacen import AlmacenPostgres, LecturaDelAlmacen, motor
 from continental.almacenamiento import AlmacenamientoDelPedido, AlmacenamientoPostgres
 from continental.config import cargar
+from continental.consultas import RegistroDeConsultas
 from continental.doyle import ClienteDeDoyle, DoylePorHttp
 
 
@@ -77,3 +78,29 @@ def obtener_almacenamiento() -> AlmacenamientoDelPedido:
     en vez de un 500 genérico.
     """
     return AlmacenamientoPostgres(motor)
+
+
+#: Las consultas de precio en vuelo, **para todo el proceso**.
+#:
+#: Es lo único de este archivo que no nace por petición, y la diferencia es el
+#: punto: los otros tres bordes no recuerdan nada entre llamadas y éste existe
+#: justamente para recordar —que ya se le está preguntando a Doyle por este
+#: renglón, y que la consulta anterior terminó mal—. Uno por petición no
+#: recordaría nada y el segundo clic volvería a molestar a los cuatro portales.
+#:
+#: Se construye al importar, y eso no rompe la regla de "nada se conecta al
+#: importarse": esto no abre una conexión ni un cliente. Es un diccionario con
+#: un candado.
+_CONSULTAS = RegistroDeConsultas()
+
+
+def obtener_consultas() -> RegistroDeConsultas:
+    """El registro de consultas de precio. Se sustituye en pruebas.
+
+    En el suite se sustituye por uno cuyo `lanzar` ejecuta la tarea ahí mismo:
+    ninguna prueba arranca un hilo, así que no hay nada que sincronizar ni que
+    esperar, y una prueba que falle no deja un hilo vivo contaminando a la
+    siguiente. Que la espera no duerma de verdad lo resuelven aparte el `dormir`
+    y el `ahora` de `consultas.consultar_a_doyle`.
+    """
+    return _CONSULTAS

@@ -148,6 +148,24 @@
      frecuente pero secundaria —lo que se lee es la cantidad a pedir—, así que
      el botón no compite con ella por atención. */
   td.acciones, th.acciones { width: 6.5rem; text-align: right; }
+  /* Los cuatro proveedores, uno por renglón dentro de la celda. En columna y
+     no en una línea: son cuatro cifras que se comparan entre sí, y comparar
+     hacia abajo es lo que un ojo hace sin pensar. 13rem cabe
+     "QuePharma 1,234.50" sin partirse. */
+  td.precios, th.precios { width: 13rem; }
+  .precio { display: flex; gap: .4rem; align-items: baseline; font-size: .85rem; }
+  .precio .quien { color: var(--tenue); flex: 1 0 auto; }
+  .precio b { font-variant-numeric: tabular-nums; font-weight: 600; }
+  /* UN HUECO NO PUEDE VERSE COMO UNA CIFRA. "sin dato" va en cursiva y en tono
+     tenue justo para que no se lea como un número: un proveedor sin dato tiene
+     que distinguirse de uno caro de un vistazo (ticket 14), y lo que nunca
+     puede parecer es el más barato (regla 4 de CLAUDE.md). */
+  .precio .sindato { color: var(--tenue); font-style: italic; }
+  /* El motivo, debajo y en chico. Es la diferencia entre un hueco que alguien
+     puede atender y uno que solo frustra: "la sesión caducó" se arregla en dos
+     clics y "sin resultados" no se arregla (historia 23). */
+  .precio-motivo { color: var(--aviso); font-size: .75rem; display: block; margin: 0 0 .3rem; }
+  .precio-cuando { color: var(--tenue); font-size: .75rem; display: block; margin-top: .25rem; }
   /* 2.2rem de alto mínimo: a 375 px esto se toca con el dedo, y un objetivo
      más chico se falla y se descarta el renglón de al lado. Que se pueda
      deshacer no vuelve gratis equivocarse. */
@@ -203,11 +221,15 @@
          padding: .55rem .4rem; border-bottom: 1px solid var(--linea); }
     td { display: block; border: 0; padding: 0; }
     td.clave, td.producto { flex: 0 0 100%; width: auto; }
-    td.numero, td.cantidad, td.acciones { width: auto; text-align: left; }
+    td.numero, td.cantidad, td.acciones, td.precios { width: auto; text-align: left; }
     /* El botón se va a su propio renglón, pegado a la izquierda: a 375 px
        compartir línea con la cantidad dejaba las dos cosas apretadas contra
        los bordes y el objetivo táctil a menos de 2.2 rem. */
     td.acciones { flex: 0 0 100%; margin-top: .35rem; }
+    /* Los cuatro precios ocupan la línea entera. Compartirla con la cantidad
+       los dejaba a media columna y las cifras dejaban de alinearse entre sí,
+       que es lo único que hace comparable una lista de cuatro. */
+    td.precios { flex: 0 0 100%; margin-top: .45rem; }
     td.numero::before { content: attr(data-etiqueta) " "; color: var(--tenue); font-size: .78rem; }
     /* La cantidad se va al extremo derecho de la última línea: es la cifra
        que el encargado copia al pedido, y en el teléfono sigue siendo la que
@@ -253,6 +275,7 @@
           <th class="numero">Existencia</th>
           <th class="numero">Días de cobertura</th>
           <th class="cantidad">Cantidad a pedir</th>
+          <th class="precios">Precio de proveedor</th>
           <th class="acciones">Quitar</th>
         </tr>
       </thead>
@@ -490,6 +513,111 @@ const celdaDeCantidad = (r, editable, alAjustar) => {
   return td;
 };
 
+// --------------------------------------------- el precio de los proveedores
+
+// Los cuatro proveedores de un renglón, o el botón para preguntárselo a Doyle.
+//
+// **Ninguna cifra se calcula aquí.** El precio llega como CADENA desde el
+// servidor —el JSON de JavaScript solo tiene coma flotante, y meter dinero ahí
+// justo en el borde donde acababa de salir es la falla que el `numeric(12,2)`
+// del DDL existe para evitar— y se pinta tal cual. Cuál es el más barato y
+// cuánto se ahorra contra NADRO es el ticket 14, y va a salir de Python.
+//
+// `sin dato` se ve DISTINTO de una cifra, en cursiva y en tono tenue, y lleva
+// su motivo debajo. Las dos cosas son la quinta casilla del ticket: un
+// proveedor que no contestó nunca puede parecer barato ni parecer caro.
+const celdaDePrecios = (r, acciones) => {
+  const td = document.createElement('td');
+  td.className = 'precios';
+  td.dataset.etiqueta = 'Precio';
+
+  const precios = Array.isArray(r.precios) ? r.precios : [];
+  const consulta = r.consulta || null;
+
+  precios.forEach(p => {
+    const linea = document.createElement('div');
+    linea.className = 'precio';
+
+    const quien = document.createElement('span');
+    quien.className = 'quien';
+    quien.textContent = p.nombre;
+
+    const cifraOhueco = document.createElement(p.sin_dato ? 'span' : 'b');
+    if (p.sin_dato) {
+      cifraOhueco.className = 'sindato';
+      cifraOhueco.textContent = 'sin dato';
+    } else {
+      cifraOhueco.textContent = p.precio;
+      // La existencia va como título y no como una tercera columna: a 375 px
+      // no cabe, y lo que decide primero es el precio. El ticket 14 la va a
+      // subir a la vista, junto con la marca del más barato CON existencia.
+      if (p.existencia_como_llego) {
+        cifraOhueco.title = 'existencia: ' + p.existencia_como_llego;
+      }
+    }
+
+    linea.append(quien, cifraOhueco);
+    td.append(linea);
+
+    // El motivo, debajo. Es lo que distingue un hueco que el encargado puede
+    // atender de uno que no: "la sesión caducó" se arregla en dos clics.
+    if (p.sin_dato && p.motivo) {
+      const motivo = document.createElement('span');
+      motivo.className = 'precio-motivo';
+      motivo.textContent = p.motivo;
+      if (p.detalle) motivo.title = p.detalle;
+      td.append(motivo);
+    }
+  });
+
+  // CUÁNDO SE LEYÓ, a la vista. Sin esto, "$86.05 en NADRO" no dice si se leyó
+  // hace una hora o hace tres semanas, y el ticket es literal: un pedido dice a
+  // qué precio se decidió, no a cómo está hoy.
+  if (precios.length) {
+    const cuando = document.createElement('span');
+    cuando.className = 'precio-cuando';
+    cuando.textContent = 'leído el ' + instanteEnPalabras(precios[0].consultado_en);
+    td.append(cuando);
+  }
+
+  if (consulta && consulta.en_curso) {
+    const esperando = document.createElement('span');
+    esperando.className = 'precio-cuando';
+    // Se dice cuánto tarda. Una espera sin número se lee como "se colgó" a los
+    // quince segundos, y ésta tarda nueve por proveedor en el mejor caso.
+    esperando.textContent = 'Consultando a los cuatro proveedores… tarda un minuto.';
+    td.append(esperando);
+    return td;
+  }
+
+  if (consulta && consulta.detalle && !precios.length) {
+    // Doyle no contestó y no hay nada congelado: un hueco CON SU MOTIVO, nunca
+    // una celda vacía. Vacío se lee "no tiene precio en ningún lado".
+    const fallo = document.createElement('span');
+    fallo.className = 'precio-motivo';
+    fallo.textContent = consulta.detalle;
+    td.append(fallo);
+  }
+
+  // Sin el botón cuando la lista ya no está abierta: los precios congelados
+  // siguen viéndose —son la razón por la que se eligió un proveedor— pero
+  // volver a consultar una lista cerrada sería molestar a cuatro portales para
+  // cambiar un dato que ya no decide nada.
+  if (acciones.editable) {
+    const pedir = botonDeAccion(
+      precios.length ? 'Volver a consultar' : 'Consultar precio',
+      (boton) => acciones.consultarPrecio(r, boton));
+    pedir.title = precios.length
+      ? 'Vuelve a preguntarle a Doyle. Lo de hoy se guarda al lado; nada se borra.'
+      : 'Le pregunta a Doyle el precio en los cuatro proveedores. Tarda hasta un minuto.';
+    pedir.setAttribute('aria-label',
+      'Consultar el precio de ' + r.descripcion + ' en los cuatro proveedores');
+    td.append(pedir);
+  }
+
+  return td;
+};
+
 const renglon = (r, acciones) => {
   const tr = document.createElement('tr');
 
@@ -558,7 +686,8 @@ const renglon = (r, acciones) => {
   quitar.setAttribute('aria-label', 'Descartar ' + r.descripcion);
   celdaAcciones.append(quitar);
 
-  tr.append(clave, producto, existencia, cobertura, cantidad, celdaAcciones);
+  tr.append(clave, producto, existencia, cobertura, cantidad,
+            celdaDePrecios(r, acciones), celdaAcciones);
   return tr;
 };
 
@@ -871,6 +1000,7 @@ async function cargarPedido() {
       editable: datos.estado === 'abierto',
       descartar: descartar,
       ajustar: ajustar,
+      consultarPrecio: consultarPrecio,
     };
     if (vistas) {
       // Los conteos del interruptor son de la lista DE TRABAJO: decir "18" en
@@ -952,6 +1082,97 @@ async function cargarPedido() {
     if (r.fue_ajustada && cantidad === r.cantidad_a_pedir) return;
     moverRenglon(r.renglon_id, '/cantidad', campo, aplicar, { cantidad },
       () => { campo.value = r.cantidad_a_pedir; });
+  }
+
+  // Consultar el precio en los cuatro proveedores (ticket 12).
+  //
+  // **La petición vuelve de inmediato y la consulta sigue del lado del
+  // servidor.** Una búsqueda tarda nueve segundos por proveedor en el mejor
+  // caso y hasta minuto y medio en el peor: si esta llamada esperara el
+  // resultado, la pantalla se quedaría colgada todo ese rato y una recarga
+  // tiraría una visita al portal que ya se hizo. Quien espera es un hilo de
+  // Continental, que **escribe el precio en cuanto llega**; aquí solo se
+  // pregunta cómo va.
+  //
+  // Por eso cerrar la pestaña a la mitad no pierde nada: la siguiente carga de
+  // la página trae los precios congelados dentro de cada renglón.
+  async function consultarPrecio(r, boton) {
+    boton.disabled = true;
+    nota('pedido-accion', '');
+
+    let respuesta;
+    try {
+      respuesta = await (await fetch('/api/renglon/' + r.renglon_id + '/precio',
+                                     { method: 'POST' })).json();
+    } catch (e) {
+      boton.disabled = false;
+      nota('pedido-accion',
+        'Continental no contestó. El renglón se quedó como estaba; inténtalo otra vez.', 'mal');
+      return;
+    }
+
+    if (!respuesta.ok) {
+      boton.disabled = false;
+      // El motivo viene del servidor y es genérico a propósito (regla 5): el
+      // detalle está en la bitácora.
+      nota('pedido-accion', respuesta.detalle || 'No se pudo consultar el precio.', 'aviso');
+      return;
+    }
+
+    aplicarPrecios(r.renglon_id, respuesta);
+    if (respuesta.consulta && respuesta.consulta.en_curso) sondear(r.renglon_id);
+  }
+
+  // Lo que llega del servidor se mete DENTRO del renglón, que es donde vive el
+  // precio congelado en todo lo demás. Nada se deduce aquí: ni el motivo, ni
+  // la fecha, ni si hay dato — todo eso viene calculado de Python, que es
+  // donde hay pruebas.
+  const aplicarPrecios = (renglonId, respuesta) => {
+    const r = datos.renglones.find(x => x.renglon_id === renglonId);
+    if (!r) return;
+    r.precios = respuesta.precios || [];
+    r.consulta = respuesta.consulta || null;
+    repintar();
+  };
+
+  // Cada cuánto se le pregunta a Continental, y hasta cuándo. Dos segundos
+  // porque la consulta tarda decenas de segundos y no décimas: preguntar cada
+  // 200 ms serían trescientas peticiones para enterarse de lo mismo.
+  //
+  // El tope de aquí es más largo que el del servidor (120 s en
+  // `config/continental.yml`) a propósito: el que decide cuándo se acaba la
+  // espera es el servidor, y este número solo existe para que el navegador no
+  // se quede preguntando para siempre si el servidor se reinició a la mitad.
+  const CADA_MS = 2000;
+  const HASTA_MS = 180000;
+
+  function sondear(renglonId) {
+    const desde = Date.now();
+    const vuelta = async () => {
+      let respuesta;
+      try {
+        respuesta = await (await fetch('/api/renglon/' + renglonId + '/precio')).json();
+      } catch (e) {
+        nota('pedido-accion',
+          'Se perdió el contacto con Continental mientras se consultaba el precio. ' +
+          'Vuelve a cargar la página: si Doyle terminó, el precio está guardado.', 'aviso');
+        return;
+      }
+
+      aplicarPrecios(renglonId, respuesta);
+
+      if (!respuesta.consulta || !respuesta.consulta.en_curso) return;
+      if (Date.now() - desde > HASTA_MS) {
+        // No se dice "falló": no se sabe. Lo que se sabe es que esta pantalla
+        // dejó de preguntar, y que lo que Doyle haya contestado está guardado.
+        nota('pedido-accion',
+          'La consulta está tardando más de lo normal. Vuelve a cargar la página ' +
+          'en un rato: el precio se guarda solo en cuanto Doyle conteste.', 'aviso');
+        return;
+      }
+      setTimeout(vuelta, CADA_MS);
+    };
+    setTimeout(vuelta, CADA_MS);
   }
 
   // Un servidor viejo que no mande el conteo no puede dejar la pantalla

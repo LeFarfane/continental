@@ -4,6 +4,15 @@
 -- de farmacia-data), DESPUÉS de `sql/crear_tablas.sql`. El orden importa: no
 -- se puede otorgar un permiso sobre una tabla que todavía no existe.
 --
+-- **Y por eso también se corre después de toda migración que CREE una tabla.**
+-- Es el caso de `sql/migraciones/0003-*` (ticket 12), que estrena
+-- `pedidos.precio_de_proveedor`: el GRANT que este archivo corrió en su día no
+-- la alcanza, porque no existía. Las migraciones que solo agregan columnas no
+-- lo exigen -- el GRANT es sobre la tabla entera-- y es justo esa diferencia
+-- la que hace fácil olvidarlo. Sin este paso, el primer precio que se intente
+-- guardar en atlas rebota con "permission denied for table
+-- precio_de_proveedor", después de que en la torre todo se vio verde.
+--
 -- Desde `~/proyectos/Continental` en atlas:
 --
 --   docker exec -i farmacia_warehouse psql -U farmacia -d farmacia \
@@ -128,9 +137,30 @@ REVOKE CREATE ON SCHEMA pedidos FROM continental;
 -- lo va a decir y ahí se decide allá.
 REVOKE CREATE ON SCHEMA public FROM continental;
 
-GRANT SELECT, INSERT, UPDATE ON pedidos.pedido_sugerido TO continental;
-GRANT SELECT, INSERT, UPDATE ON pedidos.renglon         TO continental;
-GRANT SELECT, INSERT, UPDATE ON pedidos.pedido          TO continental;
+GRANT SELECT, INSERT, UPDATE ON pedidos.pedido_sugerido      TO continental;
+GRANT SELECT, INSERT, UPDATE ON pedidos.renglon              TO continental;
+GRANT SELECT, INSERT, UPDATE ON pedidos.pedido               TO continental;
+
+-- La cuarta, desde el ticket 12: el precio congelado por renglón y proveedor.
+--
+-- **Se otorga UPDATE aunque hoy ningún código lo ejercite**, y ésa es la
+-- excepción a "otorga exactamente lo que el código ejercita" -- así que va con
+-- su razón escrita, que es la condición que ese principio pone. Las otras tres
+-- tablas usan UPDATE para sus cambios de estado; ésta SOLO CRECE a propósito
+-- (ver `crear_tablas.sql`), así que en rigor le bastaría SELECT e INSERT.
+--
+-- Se otorga igual porque la alternativa es peor de las dos maneras: con un
+-- GRANT distinto por tabla, la comprobación 6 de `verificar_rol.sql` deja de
+-- poder ser "no le falta ninguno sobre ninguna" y pasa a ser una lista de
+-- parejas tabla-permiso que hay que mantener a mano -- justo el tipo de lista
+-- que se queda vieja y da luz verde sobre un rol que quedó mal. Y el riesgo
+-- que se evitaría es corto: un UPDATE sobre esta tabla no puede borrar una
+-- fila ni pisar un precio sin que alguien escriba la sentencia a propósito, y
+-- quien puede hacer eso ya tiene la contraseña del `.env`.
+--
+-- Si algún día vale la pena apretarlo, el lugar es aquí y la comprobación que
+-- hay que reescribir es la 6. No al revés.
+GRANT SELECT, INSERT, UPDATE ON pedidos.precio_de_proveedor TO continental;
 
 -- Sin GRANT sobre secuencias, y no es un olvido: las tres llaves son
 -- `GENERATED ALWAYS AS IDENTITY`, y la secuencia de una columna de identidad

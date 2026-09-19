@@ -32,6 +32,25 @@ pedido:
   # es mejor que uno que se estira hasta la mañana.
   tope_lote_minutos: 60
 
+  # Consultar el precio de UN renglón en Doyle (ticket 12). Esto no es el lote:
+  # es el botón que el encargado aprieta cuando quiere el precio de algo
+  # concreto, sin esperar a la noche.
+  consulta_de_precio:
+    # Cuánto se espera como mucho a que Doyle termine una búsqueda. El piso
+    # medido es de ~9 s por proveedor y el techo de 60-90 s si se estiran los
+    # timeouts; 120 va POR ENCIMA de ese techo a propósito, porque cortar en 90
+    # dejaría sin precio justo las búsquedas más lentas, que son las que nadie
+    # va a repetir a mano.
+    #
+    # Nada de esto cuelga la pantalla: quien espera es un hilo de Continental y
+    # el navegador pregunta cómo va. Lo que este numero decide es cuánto tarda
+    # en aparecer el hueco cuando un portal se queda colgado.
+    tope_seg: 120
+    # Cada cuánto se le pregunta a Doyle. Es el mismo intervalo que usa la
+    # propia pantalla de Doyle y la llamada que cuesta es un GET por loopback,
+    # que tarda menos de un milisegundo.
+    cada_seg: 1
+
   # Anaqueles que cuentan como "medicamento" para el toggle. Es una lista
   # blanca a propósito: lo que no está aquí y tampoco es abarrote se muestra
   # como `sin clasificar`, nunca se esconde. Ver CONTEXT.md.

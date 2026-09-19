@@ -52,15 +52,36 @@ class FilaDeProveedor:
     advertencia: str = ""
 
 
+#: Los estados en los que un proveedor **todavía no terminó**, con el
+#: vocabulario exacto de Doyle.
+#:
+#: Son DOS y no uno, y eso está medido contra el Doyle real el 2026-09-19: el
+#: trabajo nace con `pendiente` (`iniciar_busqueda` lo pone al crear el
+#: diccionario) y el hilo lo cambia a **`buscando`** en cuanto arranca
+#: (`_buscar_en_hilo`, primera línea). Los ~9 s de una búsqueda se pasan casi
+#: enteros en `buscando`, no en `pendiente`.
+#:
+#: Antes de este ticket `terminada` preguntaba solo por `pendiente`, así que
+#: contra el Doyle real habría dado **cierto en la primera vuelta** —con los
+#: cuatro proveedores todavía abriendo el portal— y el precio se habría
+#: congelado como cuatro huecos. Un lote en verde que no consultó nada: la
+#: falla silenciosa exacta que la regla 4 de `CLAUDE.md` prohíbe.
+ESTADOS_PENDIENTES: tuple[str, ...] = ("pendiente", "buscando")
+
+
 @dataclass(frozen=True, slots=True)
 class RespuestaDeProveedor:
     """Cómo le fue a un proveedor dentro de una búsqueda.
 
-    `estado` vale `pendiente`, `listo`, `reconocimiento` o `error`, con el
-    mismo vocabulario que usa Doyle. `mensaje` es el motivo cuando no hay dato:
-    sesión caducada, el portal no contestó, o que Doyle todavía no sabe leer
-    esa página. Sin motivo, el encargado no puede saber si lo puede resolver él
-    (historia 23 del spec).
+    `estado` vale `pendiente`, `buscando`, `listo`, `reconocimiento` o `error`,
+    con el mismo vocabulario que usa Doyle y **sin traducirlo**: decir
+    `pendiente` donde Doyle dijo `buscando` sería inventar un segundo nombre
+    para lo mismo, que es justo lo que el repo prohíbe. Quien necesita saber si
+    todavía no terminó pregunta por `ESTADOS_PENDIENTES`.
+
+    `mensaje` es el motivo cuando no hay dato: sesión caducada, el portal no
+    contestó, o que Doyle todavía no sabe leer esa página. Sin motivo, el
+    encargado no puede saber si lo puede resolver él (historia 23 del spec).
     """
 
     proveedor: str
@@ -95,8 +116,18 @@ class EstadoDeBusqueda:
 
         Un proveedor en `error` cuenta como terminado: el lote nocturno tiene
         un tope de 60 minutos y esperar a algo que ya falló es gastarlo.
+
+        **Una búsqueda sin proveedores NO está terminada**, y eso no es
+        pedantería sobre el `all()` de una colección vacía: Doyle contesta con
+        los cuatro proveedores en cuanto existe el trabajo, así que un
+        diccionario vacío significa que la respuesta no trae lo que debía —otra
+        versión, un cuerpo recortado—. Declararla terminada congelaría cero
+        precios y lo llamaría éxito, que es la falla silenciosa que la regla 4
+        de `CLAUDE.md` prohíbe. Quien espera lo distingue y lo dice.
         """
-        return all(r.estado != "pendiente" for r in self.proveedores.values())
+        return bool(self.proveedores) and all(
+            r.estado not in ESTADOS_PENDIENTES for r in self.proveedores.values()
+        )
 
 
 @dataclass(frozen=True, slots=True)

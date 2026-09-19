@@ -319,14 +319,23 @@ def test_la_pantalla_pinta_la_existencia_del_renglon_y_no_la_vuelve_a_buscar(cli
 
     assert "r.existencia" in portada
     assert "r.dias_de_cobertura" in portada
-    # Cinco consultas y ni una más, y **solo la primera ocurre al cargar**: el
-    # pedido. Las otras cuatro son la salud, los módulos, el cierre del ticket
-    # 08 y el mover un renglón del 10 —descartar y devolver comparten la misma
-    # llamada—, y las tres últimas son POST que ocurren cuando alguien los
-    # pide. La lista se pide UNA vez: ni el interruptor ni descartar vuelven a
-    # preguntarle al almacén, porque dos lecturas en momentos distintos pueden
-    # no coincidir y nadie sabría cuál tiene razón.
-    assert portada.count("fetch('/api/") == 5
+    # **La lista se pide UNA sola vez**, y eso es lo que de verdad se está
+    # afirmando: ni el interruptor, ni descartar, ni consultar un precio
+    # vuelven a pedirla. Dos lecturas en momentos distintos pueden no coincidir
+    # y nadie sabría cuál tiene razón.
+    assert portada.count("fetch('/api/pedido-sugerido')") == 1
+
+    # Siete llamadas en total y ni una más. Subió de cinco a siete con el
+    # ticket 12, y las dos nuevas son las del precio: el POST que pide la
+    # consulta y el GET que la sondea. **El sondeo es a Continental y nunca a
+    # Doyle** —el navegador no le habla a un módulo, regla 2 de CLAUDE.md— y
+    # tampoco vuelve a pedir la lista: trae el renglón y sus precios.
+    #
+    # Las otras cinco: la lista, la salud y los módulos al cargar, y dos POST
+    # que ocurren cuando alguien los pide —el cierre del ticket 08 y el mover
+    # un renglón, que es UNA sola llamada compartida por descartar, devolver
+    # (ticket 10) y ajustar la cantidad (ticket 11)—.
+    assert portada.count("fetch('/api/") == 7
     assert portada.count("fetch('/api/pedido-sugerido')") == 1
 
 

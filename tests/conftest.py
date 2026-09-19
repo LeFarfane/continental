@@ -108,6 +108,30 @@ hay que correr el suite sin ellas—.
 Ajustar una cantidad no agrega una sola lectura del almacén: la lista ya está
 guardada y lo que cambia es una columna de una fila que ya se leyó.
 
+**Con el ticket 12 dentro, el suite pasa de 232 a 336 recolectadas y la torre
+sigue lenta.** Medido el 2026-09-19, en tres corridas seguidas, 336
+recolectadas —335 pasan, 1 saltada— en **5.32-5.53 s**, con la recolección en
+0.33 s. El número asusta al lado de los 1.73-1.85 s del ticket 11 y **no son
+las 100 pruebas nuevas de `test_precio.py`**: medido en la misma sesión y con el
+archivo nuevo fuera (`pytest --ignore=tests/test_precio.py`), el árbol del
+ticket 11 —las mismas pruebas, más cuatro de la tabla nueva— costó
+**3.65-4.16 s** contra los 1.73-1.85 s de esa mañana. La diferencia atribuible
+a este ticket es la resta: **~1.3 s para 100 pruebas**, ~0.01 s cada una de las
+que pasan por `TestClient`, exactamente lo que ya costaba cada vecina. La más
+lenta del suite sigue sin ser una prueba de este ticket: es
+`test_la_pantalla_dice_el_rango_de_ventas...`, con 0.42 s, igual que antes.
+
+Es la misma lección de siempre, con otro número: **antes de culpar a las
+pruebas nuevas, corre el suite sin ellas.**
+
+Y hay una regla que este ticket agrega, porque estrenó lo primero que podría
+tardar de verdad: **ninguna prueba espera a Doyle ni duerme un segundo.** La
+espera entra por argumento (`dormir` y `ahora` de `consultar_a_doyle`) y las
+pruebas del tope pasan un reloj que avanza cuando alguien duerme, así que un
+sondeo de ciento veinte segundos simulados cuesta microsegundos reales. Y la
+fixture `consultas` sustituye el hilo por un lanzador que ejecuta la tarea ahí
+mismo: si una prueba de precios llega a tardar, está mal planteada.
+
 La saltada bajó de 2 a 1 con el ticket 07: `sql/crear_tablas.sql` estrenó los
 casos de `.sql` de `test_compila.py` y solo queda saltado el del shebang, que
 espera a que exista un `.sh`.
@@ -124,11 +148,13 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+from continental.consultas import RegistroDeConsultas
 from continental.dobles import AlmacenamientoFalso, AlmacenFalso, DoyleFalso
 from continental.web.app import app
 from continental.web.dependencias import (
     obtener_almacen,
     obtener_almacenamiento,
+    obtener_consultas,
     obtener_doyle,
 )
 
@@ -158,12 +184,37 @@ def almacenamiento() -> AlmacenamientoFalso:
 
 
 @pytest.fixture
+def consultas() -> RegistroDeConsultas:
+    """El registro de consultas de precio, **sin hilos** (ticket 12).
+
+    `lanzar` ejecuta la tarea ahí mismo en vez de arrancar un hilo, y eso es lo
+    que hace que una prueba de precios sea determinista: cuando la petición
+    vuelve, la consulta ya terminó y el precio ya está en el doble del
+    almacenamiento. Con hilos de verdad habría que esperar —y esperar en una
+    prueba es dormir, que es justo lo que este suite no hace— o sincronizar con
+    un `Event`, que probaría la sincronización y no el código.
+
+    Lo que **no** se finge aquí es la espera a Doyle: eso lo resuelven el
+    `dormir` y el `ahora` de `consultas.consultar_a_doyle`, que entran por
+    argumento. Contra el `DoyleFalso` la primera vuelta ya viene terminada, así
+    que ni siquiera se duerme una vez.
+
+    El registro es nuevo en cada prueba, que es lo que sería un proceso recién
+    arrancado. El de verdad vive en el módulo y se comparte: uno compartido
+    entre pruebas dejaría una consulta "en curso" de una prueba bloqueando la
+    siguiente.
+    """
+    return RegistroDeConsultas(lanzar=lambda tarea: tarea())
+
+
+@pytest.fixture
 def cliente(
     almacen: AlmacenFalso,
     doyle: DoyleFalso,
     almacenamiento: AlmacenamientoFalso,
+    consultas: RegistroDeConsultas,
 ):
-    """La aplicación real con los tres bordes sustituidos.
+    """La aplicación real con los cuatro bordes sustituidos.
 
     Se limpia al terminar: `app` es un objeto de módulo y un override que
     sobrevive a su prueba contamina a las demás en un orden que depende de
@@ -173,5 +224,6 @@ def cliente(
     app.dependency_overrides[obtener_almacen] = lambda: almacen
     app.dependency_overrides[obtener_doyle] = lambda: doyle
     app.dependency_overrides[obtener_almacenamiento] = lambda: almacenamiento
+    app.dependency_overrides[obtener_consultas] = lambda: consultas
     yield TestClient(app)
     app.dependency_overrides.clear()

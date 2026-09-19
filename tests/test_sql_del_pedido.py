@@ -40,8 +40,20 @@ CREAR_TABLAS = SQL / "crear_tablas.sql"
 CREAR_ROL = SQL / "crear_rol.sql"
 VERIFICAR_ROL = SQL / "verificar_rol.sql"
 
-#: Las tres del ticket, en el orden del glosario de `CONTEXT.md`.
-TABLAS = ("pedidos.pedido_sugerido", "pedidos.pedido", "pedidos.renglon")
+#: Las tres del glosario de `CONTEXT.md`, en su orden, más la cuarta que el
+#: ticket 12 agregó: el precio congelado de un renglón en un proveedor.
+#:
+#: La cuarta no está en el glosario y eso no es un descuido: "precio de
+#: proveedor" no es un concepto que el negocio nombre —el dueño dice "el precio
+#: de NADRO"—, es el grano con el que ese precio se puede guardar sin inventar
+#: treinta y seis columnas. El glosario manda sobre el nombre de lo que el
+#: negocio nombra.
+TABLAS = (
+    "pedidos.pedido_sugerido",
+    "pedidos.pedido",
+    "pedidos.renglon",
+    "pedidos.precio_de_proveedor",
+)
 
 #: Lo único que Continental lee del almacén. Cinco y ninguna más: `fct_merma`,
 #: `fct_caducidad` y `fct_precio_competencia` también viven en `marts` y no se
@@ -95,11 +107,13 @@ def test_los_tres_archivos_existen_y_son_utf8():
 
 
 def test_estan_las_tres_tablas_y_ninguna_mas():
-    """Tres tablas: el pedido sugerido, el renglón y el pedido por proveedor.
+    """Las cuatro y ninguna más: las tres del glosario y el precio congelado.
 
-    Una cuarta que aparezca sin pasar por aquí es una decisión de esquema que
+    Una quinta que aparezca sin pasar por aquí es una decisión de esquema que
     nadie razonó: el DDL se corre a mano una vez, así que agregar una tabla es
-    un acto deliberado y debe verse como tal.
+    un acto deliberado y debe verse como tal. La cuarta entró con el ticket 12
+    y llegó acompañada de su migración, de su GRANT y de tres comprobaciones
+    nuevas en el verificador — que es el precio completo de una tabla aquí.
     """
     declaradas = set(re.findall(r"CREATE TABLE IF NOT EXISTS (\S+)", _texto(CREAR_TABLAS)))
     assert declaradas == set(TABLAS)
