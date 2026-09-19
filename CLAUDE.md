@@ -105,13 +105,27 @@ probablemente recibido— está en `CONTEXT.md`, y el porqué de cada regla en
 Marlowe. `git push` desde la torre, `scripts/desplegar.sh` en atlas: compila,
 corre las pruebas y solo entonces reinicia el servicio.
 
+En atlas el repo va **plano** (`~/proyectos/Continental`, hermano de Marlowe),
+Continental escucha en el gateway de la red Docker `borde` y no en loopback
+(ADR 0005), y el túnel es *remotely-managed*: la ruta y la política de Access
+se dan de alta en el dashboard de Cloudflare, no por ssh. Todo el
+procedimiento, con lo que ya está hecho y lo que falta, en
+`docs/despliegue-en-atlas.md`.
+
 ## Comandos
 
 ```bash
 python iniciar.py             # web en http://127.0.0.1:8585
 python iniciar.py --servicio  # sin abrir navegador, sin buscar otro puerto
 pytest                        # pruebas
+
+# en atlas, para desplegar una versión nueva:
+ssh -t eddie@192.168.100.14 '~/proyectos/Continental/scripts/desplegar.sh'
 ```
+
+`--servicio` **se niega a arrancar** si el 8585 está ocupado, en vez de irse al
+8586: el túnel apunta a un puerto fijo y arrancar en otro dejaría el servicio
+vivo e inalcanzable. Está probado en `tests/test_despliegue.py`, no supuesto.
 
 ## Agent skills
 

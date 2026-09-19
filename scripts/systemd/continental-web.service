@@ -1,0 +1,128 @@
+# Continental: la puerta única de la farmacia (ticket 16).
+#
+# Es un SERVICIO PERSISTENTE, como marlowe-web.service y como Metabase: corre
+# todo el tiempo para que el encargado pueda entrar cuando quiera. No es un
+# trabajo de una corrida como farmacia-diario.service.
+#
+# Instalación (en atlas, con el repo ya clonado en ~/proyectos/Continental):
+#   sudo cp scripts/systemd/continental-web.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemd-analyze verify continental-web.service   # que no calle nada
+#   sudo systemctl enable --now continental-web.service
+#
+# Ver cómo le va:
+#   systemctl status continental-web.service
+#   journalctl -u continental-web -f
+#
+# Después de instalar esto faltan DOS pasos que NO se pueden hacer por ssh: el
+# túnel de atlas es "remotely-managed" -corre como `tunnel --no-autoupdate
+# run`, sin config.yml local, y su enrutamiento vive en el dashboard de
+# Cloudflare Zero Trust-. Están escritos paso a paso, con valores exactos, en
+# `docs/despliegue-en-atlas.md`. En una línea cada uno:
+#   1. Zero Trust -> Networks -> Tunnels -> (el túnel de atlas) -> Public
+#      Hostname -> Add: farmacia.farfanlab.uk -> HTTP -> 172.19.0.1:8585.
+#   2. Zero Trust -> Access -> Applications -> Add: la misma Public Hostname,
+#      con política de correos permitidos. Sin esto la lista queda abierta a
+#      internet: Continental NO tiene autenticación propia y el encabezado
+#      `Cf-Access-Authenticated-User-Email` es una FIRMA, no un permiso
+#      (regla 3 de CLAUDE.md). Quien alcance el puerto sin pasar por el túnel
+#      se lo puede inventar.
+
+[Unit]
+Description=Continental: la puerta única de la farmacia (pedido sugerido)
+Documentation=file:///home/eddie/proyectos/Continental/docs/despliegue-en-atlas.md
+Documentation=file:///home/eddie/proyectos/Continental/docs/decisiones/0005-continental-escucha-en-el-gateway-de-borde.md
+
+# LAS DEPENDENCIAS, y por qué son estas y no más:
+#
+# - `docker.service` es REQUISITO DURO. Dos motivos que van juntos: el almacén
+#   (`farmacia_warehouse`, postgres:16) corre en Docker, y la interfaz en la
+#   que este proceso escucha -172.19.0.1, el gateway de la red Docker `borde`-
+#   **no existe hasta que el demonio de Docker levanta esa red**. Sin el
+#   bridge, uvicorn muere al arrancar con "Cannot assign requested address".
+#
+# - Doyle (8383) y Marlowe (8484) NO son dependencias, ni duras ni blandas, y
+#   eso es una decisión: un módulo que no contesta se muestra como un hueco con
+#   su motivo (regla 4 de CLAUDE.md), no tira la puerta entera. Encadenarlos
+#   aquí convertiría "Marlowe está caído" en "la farmacia no puede ver su
+#   pedido", que es exactamente lo contrario de lo que el ADR 0001 decidió. Y
+#   un `Requires=doyle-web.service` sería peor todavía: esa unidad no existe en
+#   atlas al 2026-09-19, y systemd falla el arranque de quien requiere una
+#   unidad que no puede cargar. Ordenar el arranque tampoco compra nada: los
+#   módulos se pueden caer a cualquier hora, no solo al bootear, así que la
+#   única defensa que sirve es la que ya está en la pantalla.
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+# El límite de reinicios: si truena cinco veces en cinco minutos, systemd deja
+# de intentarlo. Distingue un tropiezo pasajero -el bridge de `borde` todavía
+# no estaba, Postgres tardó en levantar- de un problema real y sostenido, que
+# reintentar no arregla y sí llena el journal.
+#
+# OJO, Y ESTO ES LA LECCIÓN CARA DE MARLOWE: estas dos llaves van en [Unit],
+# NO en [Service]. Allá estuvieron en [Service] hasta el 2026-09-06 y systemd
+# las ignoraba EN SILENCIO -lo dijo `systemd-analyze verify`, no una falla:
+# "Unknown key 'StartLimitIntervalSec' in section [Service], ignoring"-. O sea
+# que el freno contra un bucle de reinicios no existía y nadie se habría
+# enterado hasta verlo reintentar sin parar. `tests/test_despliegue.py` lo
+# vigila ahora, para que la lección no dependa de que alguien se acuerde.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=eddie
+Group=eddie
+WorkingDirectory=/home/eddie/proyectos/Continental
+# El repo va PLANO en atlas -~/proyectos/Continental, hermano de
+# ~/proyectos/Marlowe y de ~/proyectos/Farmacia (que es farmacia-data)-, al
+# revés que en la torre, donde cuelga de Farmacia/.
+
+# El paquete no está instalado en el venv de atlas (no hace falta: nunca se
+# distribuye), así que `continental` solo se encuentra con esto.
+Environment=PYTHONPATH=/home/eddie/proyectos/Continental/src
+
+# DÓNDE ESCUCHA. `borde_tunel` (cloudflared) vive en la red Docker `borde` con
+# la IP 172.19.0.2, no en el host, y para él `localhost` es su propio
+# contenedor -Marlowe lo midió el 2026-09-06 como un 502 al probar
+# marlowe.farfanlab.uk-. Escuchar en el gateway de esa red lo hace visible al
+# túnel y al propio host, pero no a la LAN, que no tiene ruta a 172.19.0.0/16.
+# El razonamiento completo y lo que se descartó están en
+# docs/decisiones/0005-continental-escucha-en-el-gateway-de-borde.md.
+#
+# 172.19.0.1 está MEDIDO en atlas el 2026-09-19 con
+# `docker network inspect borde`, y es el mismo valor en el que marlowe-web
+# está escuchando hoy (`ss -ltn` lo confirma). **ESE VALOR CAMBIA SI SE RECREA
+# LA RED**: un `docker compose down` en ~/proyectos/borde seguido de un `up`
+# puede asignar otra subred, y entonces esto arranca y muere con "Cannot
+# assign requested address". Si eso pasa: volver a correr
+# `docker network inspect borde --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}'`,
+# poner el valor nuevo AQUÍ y en el Public Hostname del dashboard -los dos-, y
+# `sudo systemctl daemon-reload && sudo systemctl restart continental-web`.
+#
+# Esto gana sobre lo que diga el `.env`: `load_dotenv` no pisa el entorno.
+Environment=CONTINENTAL_HOST=172.19.0.1
+
+# SIN xvfb-run, y no es un olvido copiando la unidad de Marlowe: Continental no
+# abre un navegador nunca (regla 1 de CLAUDE.md, ADR 0001). Lo que necesita
+# pantalla -medir precios de competencia- lo hace Marlowe en su propio proceso.
+# El día que aquí haga falta un Xvfb, la separación del ADR 0001 se rompió.
+#
+# `--servicio` hace dos cosas, las dos imprescindibles aquí: no intenta abrir
+# un navegador que no tiene dónde abrirse, y **no se busca otro puerto** si el
+# 8585 está ocupado. El túnel apunta a ese puerto fijo: arrancar en el 8586
+# dejaría la unidad en `active (running)`, el journal limpio y
+# farmacia.farfanlab.uk devolviendo 502. Prefiere no arrancar y decirlo.
+ExecStart=/home/eddie/proyectos/Continental/.venv/bin/python iniciar.py --servicio
+
+# Persistente: si truena (el almacén no respondió, el bridge no estaba) se
+# reintenta solo, con el límite de arriba para que no sea un bucle.
+Restart=on-failure
+RestartSec=10
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

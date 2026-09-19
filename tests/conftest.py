@@ -189,6 +189,27 @@ ajustar cambiaron su lectura de *los precios de un renglón* por *los precios de
 la lista*. Es **la misma consulta**, no una más —un `DISTINCT ON` con otro
 `WHERE`—, y a cambio el conteo de arriba no envejece con cada clic.
 
+**Con el ticket 16 dentro ya no queda ninguna saltada.** Medido el
+2026-09-19, en tres corridas seguidas, 525 recolectadas —**525 pasan, 0
+saltadas**— en **2.03-2.50 s**, con la recolección en 0.15 s. Con el archivo
+nuevo fuera (`pytest --ignore=tests/test_despliegue.py`) y en la misma sesión,
+el árbol costó 2.43 s: las 23 pruebas nuevas de `test_despliegue.py` no se
+distinguen del ruido de ±0.4 s de la torre, y corriendo solas cuestan
+**0.27-0.28 s**.
+
+El salto de 500 a 525 recolectadas son dos cosas: las 23 nuevas, y **tres
+casos que `test_compila.py` ya tenía escritos y que hasta hoy no revisaban
+nada**. `scripts/desplegar.sh` y `scripts/systemd/continental-web.service`
+nacieron con este ticket, así que los dos casos de CRLF y el del shebang
+dejaron de ser un `skip` con su motivo y empezaron a mirar archivos de verdad.
+Esa era toda la idea de haberlos dejado puestos desde el ticket 02.
+
+Lo único que llama la atención en `--durations` es un **setup** de 0.07 s, y
+está explicado: la fixture `puerto_ocupado` abre un socket de verdad en
+loopback, porque lo que se prueba es una sonda sobre el sistema operativo y un
+doble la haría contestar lo que la prueba quiera oír. No sale de la máquina, no
+hay conexión, y el suite sigue corriendo sin Postgres, sin atlas y sin `.env`.
+
 La saltada bajó de 2 a 1 con el ticket 07: `sql/crear_tablas.sql` estrenó los
 casos de `.sql` de `test_compila.py` y solo queda saltado el del shebang, que
 espera a que exista un `.sh`.

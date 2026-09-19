@@ -24,14 +24,21 @@ ninguna prueba de comportamiento ve:
    comprueba la copia que de verdad está en disco, que es la que se va a
    ejecutar.
 
-**Hoy Continental no tiene ni un `.sh` ni una unidad de systemd**: medido el
-2026-09-19, `scripts/desplegar.sh` y `continental-web.service` siguen en la
-lista de "lo que todavía no existe" de `HANDOVER.md`. Por eso el caso del
-shebang se anuncia como **saltado con su motivo** en vez de pasar callado: un
-cero que nadie ve es indistinguible de una prueba que no revisa nada. Y para
-que el detector no llegue sin estrenar el día que los archivos aparezcan,
-`test_los_detectores_cazan_lo_que_deben` lo ejercita hoy contra bytes
-inventados.
+**Desde el ticket 16 ya no se salta nada, y ese era el plan.** El 2026-09-19
+nacieron `scripts/desplegar.sh` y `scripts/systemd/continental-web.service`, y
+con ellos los dos casos que hasta entonces se anunciaban como saltados —el del
+shebang y el del `.service`— empezaron a revisar archivos de verdad. El
+detector no llegó sin estrenar porque `test_los_detectores_cazan_lo_que_deben`
+lo venía ejercitando contra bytes inventados; el aparato del salto se deja en
+pie igual, porque el día que alguien mueva o renombre esos archivos vuelve a
+ser la diferencia entre "no había nada que revisar" y "la búsqueda dejó de
+encontrar lo que hay".
+
+Un CRLF en esos dos archivos no es un detalle de estilo: un `.sh` así muere en
+bash con `$'': command not found` antes de la primera línea útil, y una
+unidad de systemd con CRLF **no carga** —o peor, carga con el valor de
+`ExecStart` terminado en un retorno de carro—. Los dos se editan en la torre y
+se ejecutan en atlas, que es justo el viaje donde el CRLF se cuela sin verse.
 
 Esto no reemplaza probar el comportamiento; solo cierra el hueco entre "las
 pruebas pasan" y "el proceso al menos levanta".
@@ -87,12 +94,11 @@ CARPETAS_QUE_NO_SE_MIRAN = {".venv", ".git", "__pycache__", "node_modules", ".py
 EXTENSIONES_PARA_ATLAS = (".sh", ".service", ".timer", ".sql")
 
 MOTIVO_SIN_ARCHIVOS = (
-    "Todavía no existe ningún archivo de esta clase en el repo. Los .sql sí "
-    "existen desde el 2026-09-19 (sql/crear_tablas.sql y compañía, ticket "
-    "07); los que siguen pendientes son scripts/desplegar.sh y "
-    "continental-web.service, que HANDOVER.md tiene en su lista. El día que "
-    "se agreguen, estos casos dejan de saltarse solos y empiezan a "
-    "revisarlos."
+    "No se encontró ningún archivo de esta clase en el repo. Al 2026-09-19 "
+    "deberían existir los .sql del ticket 07 (sql/crear_tablas.sql y "
+    "compañía), scripts/desplegar.sh y scripts/systemd/continental-web.service "
+    "del ticket 16. Si este caso vuelve a saltarse, no es que no haya nada que "
+    "revisar: es que la búsqueda dejó de encontrar lo que hay."
 )
 
 
@@ -140,10 +146,11 @@ def _archivos_para_atlas() -> list[Path]:
     """Los `.sh`, `.service`, `.timer` y `.sql` de todo el repo, vengan de donde
     vengan.
 
-    Se busca en el repo entero y no solo en `scripts/` o en `sql/` porque la
-    primera carpeta todavía no existe y nadie ha decidido dónde va a vivir cada
-    unidad de systemd. Marlowe las tiene en `scripts/systemd/`; si aquí alguien
-    las pone en otro lado, la prueba las encuentra igual.
+    Se busca en el repo entero y no solo en `scripts/` o en `sql/`: desde el
+    ticket 16 las unidades viven en `scripts/systemd/`, igual que en Marlowe,
+    pero si alguien mueve una a otro lado la prueba la encuentra igual. Una
+    búsqueda atada a una carpeta se convierte en una prueba que no revisa nada
+    el día que la carpeta cambia, y no lo dice.
     """
     return sorted(
         carpeta / nombre

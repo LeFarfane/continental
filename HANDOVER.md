@@ -118,10 +118,11 @@ más barato y se le pidió a otro.**
 
 ## Lo que todavía no existe y va a hacer falta
 
-- `scripts/desplegar.sh` y `continental-web.service`, calcados de Marlowe:
-  `pull`, compila, pruebas, y **solo entonces** reinicia. Marlowe aprendió el
-  2026-09-08 por qué: se desplegó un `app.py` que no compilaba y el servicio
-  quedó en bucle mientras el dueño trabajaba contra un servidor que no existía.
+- ~~`scripts/desplegar.sh` y `continental-web.service`~~ **ya existen** desde
+  el ticket 16 (2026-09-19), con 23 pruebas en `tests/test_despliegue.py`. Lo
+  que falta no son los archivos: es **instalarlos en atlas**, y eso empieza por
+  algo que todavía no hay (ver abajo). Los pasos completos, en orden y con las
+  casillas sin marcar, están en `docs/despliegue-en-atlas.md`.
 - **El rol `continental` y sus tablas, CREADOS EN LA BASE.** El SQL ya está
   escrito (ticket 07): `sql/crear_tablas.sql`, `sql/crear_rol.sql` y
   `sql/verificar_rol.sql`, con su cabecera explicando el porqué de cada
@@ -205,9 +206,22 @@ más barato y se le pidió a otro.**
   Postgres borra sus permisos y cada `dbt build` recrea los modelos de
   `marts`: un GRANT dado a mano dura hasta las 20:30 de ese día. Marlowe lo
   midió el 2026-09-06. El detalle está al final de `sql/crear_rol.sql`.
-- El remoto de GitHub y la llave de despliegue de solo lectura para atlas.
-- La ruta del túnel de Cloudflare para `farmacia.farfanlab.uk`, con Access
-  delante.
+- **El remoto de git**, y es lo que bloquea todo el despliegue. Continental no
+  tiene ninguno (verificado el 2026-09-19), así que `desplegar.sh` se detiene
+  en su paso 1 y lo dice con ese motivo exacto. Hace falta el remoto de GitHub
+  y la llave de despliegue de solo lectura para atlas.
+- **Continental no está en atlas.** Medido el 2026-09-19 en solo lectura:
+  `~/proyectos/` tiene `borde`, `Farmacia` (que es farmacia-data), `Marlowe` y
+  `Sarabia`, y nada más. Clonarlo va **plano**, en `~/proyectos/Continental`.
+- **La ruta del túnel de Cloudflare para `farmacia.farfanlab.uk`, con Access
+  delante.** Esto **no se puede hacer por ssh** y no es una limitación del
+  agente: el túnel de atlas es *remotely-managed* —`borde_tunel` corre como
+  `tunnel --no-autoupdate run`, sin `config.yml` local— así que el Public
+  Hostname y la política de Access viven en el dashboard de Cloudflare Zero
+  Trust. Lo hace una persona con la cuenta. Los valores exactos, campo por
+  campo y en orden, están en `docs/despliegue-en-atlas.md`, parte B. **El
+  orden importa**: entre que existe el Public Hostname y que existe la política
+  de Access, el sitio está abierto a internet.
 
 ## Hilos abiertos
 
