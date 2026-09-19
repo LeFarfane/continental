@@ -8,7 +8,7 @@
 --
 -- Correr con credenciales de dueño (usuario `farmacia`), DESPUÉS de
 -- `sql/crear_tablas.sql` y `sql/crear_rol.sql`. Desde
--- `~/proyectos/Farmacia/Continental` en atlas:
+-- `~/proyectos/Continental` en atlas:
 --
 --   docker exec -i farmacia_warehouse psql -U farmacia -d farmacia \
 --       -v ON_ERROR_STOP=1 < sql/verificar_rol.sql ; echo "salida: $?"

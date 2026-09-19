@@ -15,7 +15,7 @@
 --                                una tabla que todavía no existe.
 --   3. sql/verificar_rol.sql  <- dice si quedó bien o mal, caso por caso.
 --
--- Desde `~/proyectos/Farmacia/Continental` en atlas:
+-- Desde `~/proyectos/Continental` en atlas:
 --
 --   docker exec -i farmacia_warehouse psql -U farmacia -d farmacia \
 --       -v ON_ERROR_STOP=1 < sql/crear_tablas.sql

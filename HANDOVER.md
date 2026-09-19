@@ -76,7 +76,9 @@ más barato y se le pidió a otro.**
   decisión. **Nadie lo ha corrido todavía**: el almacén vive en Docker en
   atlas y desde la torre no hay Postgres alcanzable (verificado el
   2026-09-19). Los tres pasos, en orden, con credenciales de dueño y desde
-  `~/proyectos/Farmacia/Continental` en atlas:
+  `~/proyectos/Continental` en atlas —**plano, no anidado**: en atlas los
+  repos son hermanos (`~/proyectos/Marlowe`, y `~/proyectos/Farmacia`, que es
+  farmacia-data), al revés que en la torre—:
 
   ```bash
   docker exec -i farmacia_warehouse psql -U farmacia -d farmacia \

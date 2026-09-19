@@ -8,7 +8,7 @@
 -- sus tablas -- y con ALTER puede quitar un CHECK, que es la mitad de las
 -- garantías de este esquema.
 --
--- Desde `~/proyectos/Farmacia/Continental` en atlas:
+-- Desde `~/proyectos/Continental` en atlas:
 --
 --   docker exec -i farmacia_warehouse psql -U farmacia -d farmacia \
 --       -v ON_ERROR_STOP=1 < sql/migraciones/0001-renglon-quien-descarto-y-cuando.sql
