@@ -75,7 +75,7 @@
 -- se corren a mano con credenciales de dueño (ADR 0003) y ninguno de los dos
 -- lo toca el código de arranque.
 --
--- Hoy hay cuatro, y se corren en orden:
+-- Hoy hay cinco, y se corren en orden:
 --
 --   1. `sql/migraciones/0001-renglon-quien-descarto-y-cuando.sql` (ticket 10),
 --      que agrega `descartado_por` y `descartado_en`.
@@ -87,8 +87,13 @@
 --   4. `sql/migraciones/0004-la-corrida-del-lote-en-una-fila.sql` (ticket 19),
 --      que crea la QUINTA, `pedidos.corrida_del_lote`: una fila por noche con
 --      cómo le fue al lote (ADR 0007).
+--   5. `sql/migraciones/0005-elegir-proveedor-y-partir.sql` (ticket 20), que
+--      le da a `pedido` su `proveedor` y su `estado`, deja `proveedor_id`
+--      admitir nulos, le da a `renglon` la elección firmada, y aprieta dos
+--      restricciones que ya existían. NO crea ninguna tabla: siguen siendo
+--      cinco.
 --
--- Las cuatro son idempotentes, así que correrlas sobre una base que ya las
+-- Las cinco son idempotentes, así que correrlas sobre una base que ya las
 -- tiene -o sobre una recién creada con este archivo- no rompe nada.
 --
 -- **La 0003 y la 0004 son distintas de las dos primeras y hay que decirlo**:
@@ -255,9 +260,17 @@ CREATE TABLE IF NOT EXISTS pedidos.pedido (
     pedido_id           bigint        GENERATED ALWAYS AS IDENTITY,
     negocio             text          NOT NULL,
     pedido_sugerido_id  bigint        NOT NULL,
-    proveedor_id        bigint        NOT NULL,
+    proveedor_id        bigint,
     armado_en           timestamptz   NOT NULL DEFAULT now(),
     total_sin_iva       numeric(12,2),
+
+    -- LAS COLUMNAS NUEVAS VAN AL FINAL, igual que en `renglon` y por lo mismo:
+    -- una base migrada las recibe por `ALTER TABLE ... ADD COLUMN`, que las
+    -- pone al final, y si aquí se declararan en otro lugar la base desde cero y
+    -- la migrada tendrían distinto orden de columnas. `proveedor` se leería
+    -- mejor pegado a `proveedor_id` y aun así va aquí.
+    proveedor           text          NOT NULL,
+    estado              text          NOT NULL DEFAULT 'borrador',
 
     CONSTRAINT pk_pedido
         PRIMARY KEY (pedido_id),
@@ -265,14 +278,70 @@ CREATE TABLE IF NOT EXISTS pedidos.pedido (
     -- "Un pedido sugerido puede repartirse en varios pedidos, UNO POR
     -- PROVEEDOR" (CONTEXT.md). Dos pedidos al mismo proveedor desde la misma
     -- lista serían dos veces la misma mercancía.
+    --
+    -- DESDE EL TICKET 20 ES SOBRE `proveedor` Y NO SOBRE `proveedor_id`, y ese
+    -- cambio es la mitad visible de la decisión del ADR 0008. Con la columna de
+    -- SICAR admitiendo nulos, un UNIQUE sobre ella DEJA DE IMPEDIR LO QUE
+    -- EXISTE PARA IMPEDIR: en Postgres dos nulos no se consideran iguales, así
+    -- que dos pedidos a QuePharma -que no tiene `pro_id`- pasarían los dos sin
+    -- un solo error. La garantía tiene que estar sobre la columna que siempre
+    -- vale algo, que es la clave de Doyle.
+    --
+    -- Es además la restricción que `_ABRIR_EL_PEDIDO` nombra en su
+    -- `ON CONFLICT ON CONSTRAINT`: partir dos veces reencuentra el pedido que
+    -- ya estaba en vez de duplicarlo.
     CONSTRAINT ux_pedido_proveedor
-        UNIQUE (pedido_sugerido_id, proveedor_id),
+        UNIQUE (pedido_sugerido_id, proveedor),
 
+    -- SIN UNIQUE sobre `proveedor_id`, y es deliberado. Dos claves de Doyle
+    -- apuntando al mismo `pro_id` sería un error del mapa de
+    -- `config/continental.yml`, y la manera de atenderlo es el aviso que
+    -- `proveedores.leer_el_puente` escribe al arrancar -- no un pedido que
+    -- rebota con una violación de restricción a media mañana, que es en lo que
+    -- se convertiría (y que por la regla 5 de CLAUDE.md el encargado vería como
+    -- "algo falló").
     CONSTRAINT ux_pedido_negocio
         UNIQUE (pedido_id, negocio),
 
+    -- Existe para que `renglon` pueda apuntar aquí con una llave foránea que
+    -- incluya la LISTA. Es lo que impide que un renglón de la lista del martes
+    -- cuelgue de un pedido de la del lunes: sin ella, "un renglón pertenece a
+    -- un solo pedido" sería cierto y aun así el total de ese pedido no se
+    -- podría explicar, porque contaría mercancía de otro día.
+    CONSTRAINT ux_pedido_de_la_lista
+        UNIQUE (pedido_id, pedido_sugerido_id, negocio),
+
     CONSTRAINT ck_pedido_negocio
         CHECK (negocio <> ''),
+
+    -- Sin saber a quién se le pide, el pedido no sirve para nada. La cadena
+    -- vacía no existe en ninguna columna de texto de este esquema, por la misma
+    -- razón que en `ck_renglon_clave`: se compara igual que un dato y empareja
+    -- con cualquier otra vacía.
+    CONSTRAINT ck_pedido_proveedor
+        CHECK (proveedor <> ''),
+
+    -- NULL es "SICAR no conoce a este proveedor" y se puede pedir igual; UN
+    -- CERO ES UN ID INVENTADO. Cabe en un `bigint` sin protestar y a partir de
+    -- ahí todo `join` contra `dim_proveedor` sale vacío sin error -- la falla
+    -- silenciosa que la regla 4 de CLAUDE.md prohíbe, y el mismo daño que hace
+    -- un precio en cero en la comparación.
+    CONSTRAINT ck_pedido_proveedor_id
+        CHECK (proveedor_id > 0),
+
+    -- UN SOLO ESTADO, y eso es una decisión y no una lista a medio escribir.
+    -- `borrador` es lo que el ticket 20 estrena: "los pedidos nacen en borrador
+    -- y se pueden modificar mientras estén así". El de "enviado" -y quizá uno
+    -- de cancelado- los estrena el ticket 21, y CÓMO SE LLAMEN ES SU DECISIÓN:
+    -- `CONTEXT.md` no los tiene todavía y el glosario manda sobre el nombre de
+    -- cualquier cosa.
+    --
+    -- Se podría haber adelantado, como el ticket 12 adelantó el motivo
+    -- `no empareja` un día antes de que nadie lo escribiera. La diferencia es
+    -- que aquel significado YA ESTABA DECIDIDO en el ADR 0002; éstos no. Lo que
+    -- cuesta, dicho: el ticket 21 paga una migración para ampliar este CHECK.
+    CONSTRAINT ck_pedido_estado
+        CHECK (estado IN ('borrador')),
 
     CONSTRAINT ck_pedido_total
         CHECK (total_sin_iva >= 0),
@@ -286,6 +355,26 @@ COMMENT ON TABLE pedidos.pedido IS
     'Lo que se le pide a UN proveedor, nacido de renglones de un pedido '
     'sugerido. Uno por proveedor dentro de la misma lista.';
 
+-- LA IDENTIDAD DEL PEDIDO ES LA CLAVE DE DOYLE, Y ÉSA ES LA DECISIÓN DEL
+-- TICKET 20 (ADR 0008). Hasta aquí, la comparación entera hablaba en claves
+-- -`nadro`, `levic`, `vicma`, `quepharma`, que es lo que guarda
+-- `precio_de_proveedor.proveedor`- y esta tabla hablaba en `pro_id` de SICAR.
+-- **Nada las cruzaba**: ni el YAML, ni el código, ni este archivo.
+--
+-- Se le pide a quien se le preguntó el precio. Si la identidad fuera el
+-- `proveedor_id`, un proveedor sin fila en SICAR no se podría pedir -- y eso no
+-- es una hipótesis: QUEPHARMA NO ESTÁ en `marts.dim_proveedor` (22 filas,
+-- medido en atlas el 2026-09-19; NADRO es el 1, VICMA el 8 y LEVIC el 10). La
+-- farmacia nunca le ha comprado, que es exactamente por lo que el ADR 0002 ya
+-- daba por probable que quedara fuera de la comparación.
+--
+-- El mapa clave -> pro_id vive en `config/continental.yml`
+-- (`pedido.proveedores_en_sicar`) y se lee en `src/continental/proveedores.py`.
+COMMENT ON COLUMN pedidos.pedido.proveedor IS
+    'La clave de Doyle: nadro, levic, vicma, quepharma. Es la IDENTIDAD del '
+    'pedido -- a quién se le preguntó el precio y a quién se le pide--, la '
+    'misma que precio_de_proveedor.proveedor.';
+
 -- SIN llave foránea contra `marts.dim_proveedor`, y es deliberado: `dbt build`
 -- **borra y vuelve a crear** los modelos de `marts` cada noche. Una FK contra
 -- una tabla que se recrea o bien impide el DROP -- y entonces la cadena
@@ -293,9 +382,41 @@ COMMENT ON TABLE pedidos.pedido IS
 -- peor porque nadie se entera. La integridad de este id se sostiene con la
 -- lectura de `marts.dim_proveedor` que hace el código, no con una restricción
 -- que la cadena de la noche va a borrar.
+--
+-- ADMITE NULOS DESDE EL TICKET 20, y es la otra mitad del ADR 0008: el puente
+-- puede faltar y el pedido se arma igual. NULL aquí quiere decir *"SICAR no
+-- conoce a este proveedor"*, que es un hecho del catálogo de la farmacia y no
+-- un dato que falte por capturar.
+--
+-- QUÉ PASA SI SICAR RENOMBRA UNO: nada. El `pro_id` no cambia al renombrar, y
+-- por eso el puente del YAML guarda el ID y no el nombre -- un puente por
+-- nombre se rompería con el primer acento corregido. El nombre se lee de
+-- `dim_proveedor` cada vez, y solo para pintarlo.
+--
+-- QUÉ PASA SI SICAR DA UNO DE BAJA: este id se queda apuntando a una fila que
+-- ya no está, y el `join` no devuelve nombre. Eso NO borra el pedido ni lo
+-- esconde: la pantalla escribe la clave de Doyle, que es la identidad, y dice
+-- que SICAR ya no lo conoce. Un pedido que desapareciera de la vista porque
+-- alguien editó un catálogo ajeno sería la peor de las fallas silenciosas.
 COMMENT ON COLUMN pedidos.pedido.proveedor_id IS
-    'marts.dim_proveedor.proveedor_id (pro_id de SICAR). Sin FK a propósito: '
-    'dbt recrea marts en cada corrida y se llevaría la restricción por delante.';
+    'marts.dim_proveedor.proveedor_id (pro_id de SICAR). NULL = SICAR no lo '
+    'conoce, y se le puede pedir igual; NUNCA cero. Sin FK a propósito: dbt '
+    'recrea marts en cada corrida y se llevaría la restricción por delante.';
+
+-- NACE EN `borrador` Y SE PUEDE MODIFICAR MIENTRAS ESTÉ ASÍ (ticket 20). El
+-- DEFAULT está y aun así `columnas_del_pedido` lo escribe explícito, por la
+-- misma razón que `columnas_de_la_lista` escribe el suyo: lo que se escribe se
+-- lee.
+--
+-- UN BORRADOR TODAVÍA NO SE LE PIDIÓ A NADIE, y de ahí sale algo que conviene
+-- no redescubrir: repartir un renglón **no** lo pone `en tránsito`. El glosario
+-- define ese estado como "ya se le pidió a un proveedor y todavía no llega", y
+-- eso pasa cuando el pedido se envía (ticket 21), no cuando se arma. El renglón
+-- se queda `abierto` con su `pedido_id` puesto -- que es justo lo que lo deja
+-- seguir siendo modificable, como la casilla pide.
+COMMENT ON COLUMN pedidos.pedido.estado IS
+    'borrador. Nace así y se puede modificar mientras esté así. El estado de '
+    '"enviado" lo estrena el ticket 21, con su migración del CHECK.';
 
 -- EL DINERO ES DECIMAL EXPLÍCITO, NUNCA COMA FLOTANTE. `numeric(12,2)`, igual
 -- que `raw.precio_competencia.precio` en Marlowe, y por la misma lección
@@ -349,6 +470,9 @@ CREATE TABLE IF NOT EXISTS pedidos.renglon (
     cantidad_final       integer,
     ajustada_por         text,
     ajustada_en          timestamptz,
+    proveedor_elegido    text,
+    elegido_por          text,
+    elegido_en           timestamptz,
 
     CONSTRAINT pk_renglon
         PRIMARY KEY (renglon_id),
@@ -466,17 +590,64 @@ CREATE TABLE IF NOT EXISTS pedidos.renglon (
         CHECK ((cantidad_final IS NOT NULL)
                = (ajustada_por IS NOT NULL AND ajustada_en IS NOT NULL)),
 
+    -- La clave de proveedor vacía no existe, por la misma razón que la clave
+    -- del producto y las dos firmas: una cadena vacía se compara igual que un
+    -- dato y empareja con cualquier otra vacía.
+    CONSTRAINT ck_renglon_proveedor_elegido
+        CHECK (proveedor_elegido <> ''),
+
+    CONSTRAINT ck_renglon_elegido_por
+        CHECK (elegido_por <> ''),
+
+    -- Proveedor elegido si y solo si hay firma Y hora, el mismo par que
+    -- `ck_renglon_descarte` y `ck_renglon_ajuste`.
+    --
+    -- AQUÍ SOLO SE GUARDA LO QUE UNA PERSONA DECIDIÓ, y ésa es la decisión del
+    -- ticket 20. **No hay columna para lo que el sistema sugiere**, y no es un
+    -- olvido: la sugerencia -el más barato con existencia- se recalcula de
+    -- `comparacion.elegir_ganador`, que es una función pura sobre
+    -- `precio_de_proveedor`, que SOLO CRECE (ADR 0004). Guardarla sería una
+    -- segunda copia del mismo hecho, y una que además envejece sin avisar: si a
+    -- las 8 la sugerencia era NADRO y a las 9 llega un LEVIC más barato, la
+    -- columna seguiría diciendo NADRO y nadie podría distinguir esa cifra vieja
+    -- de una decisión que alguien tomó.
+    --
+    -- Se aparta A PROPÓSITO del ticket 11, que sí guarda las dos cifras:
+    -- `cantidad_propuesta` NO se puede recalcular -- sale de las ventas de una
+    -- ventana que ya pasó, con un catálogo que ya cambió-- y por eso se
+    -- congela. La forma es la misma -- columna nullable, sin DEFAULT, con su
+    -- firma pareada--; lo que cambia es de cuál de las dos cifras se guarda.
+    --
+    -- Sin la mitad de ida, una elección quedaría sin decir quién ni cuándo, y
+    -- la pregunta "¿por qué le compraste a LEVIC habiendo NADRO más barato?"
+    -- -- que es la pregunta entera de este ticket-- no tendría a quién
+    -- hacérsele. Sin la de vuelta, una firma colgada diría que alguien eligió
+    -- lo que nadie eligió.
+    CONSTRAINT ck_renglon_eleccion
+        CHECK ((proveedor_elegido IS NOT NULL)
+               = (elegido_por IS NOT NULL AND elegido_en IS NOT NULL)),
+
     CONSTRAINT fk_renglon_sugerido
         FOREIGN KEY (pedido_sugerido_id, negocio)
         REFERENCES pedidos.pedido_sugerido (pedido_sugerido_id, negocio),
 
-    -- Compuesta con `negocio` igual que la anterior. Como `pedido_id` es
-    -- nullable y la coincidencia por omisión es MATCH SIMPLE, la restricción
-    -- no se revisa mientras el renglón no tenga pedido -- que es justo lo que
-    -- queremos: un renglón nace sin proveedor.
+    -- "UN RENGLÓN PERTENECE A UN SOLO PEDIDO", defendido en la tabla y no en el
+    -- código: es UNA columna con UNA llave foránea, no una tabla de cruce. Un
+    -- `SET pedido_id = ...` no puede dejarlo en dos sitios, así que moverlo de
+    -- pedido es exactamente eso y no "agregarlo a otro".
+    --
+    -- DESDE EL TICKET 20 LLEVA TAMBIÉN `pedido_sugerido_id`, y eso es lo que le
+    -- faltaba. Con la pareja `(pedido_id, negocio)` de antes, un renglón de la
+    -- lista del martes podía colgar de un pedido de la del lunes: la
+    -- restricción se cumplía y el total de ese pedido contaba mercancía de otro
+    -- día, sin un solo error que ver. Apunta a `ux_pedido_de_la_lista`.
+    --
+    -- Como `pedido_id` es nullable y la coincidencia por omisión es MATCH
+    -- SIMPLE, la restricción no se revisa mientras el renglón no tenga pedido
+    -- -- que es justo lo que queremos: un renglón nace sin pedido.
     CONSTRAINT fk_renglon_pedido
-        FOREIGN KEY (pedido_id, negocio)
-        REFERENCES pedidos.pedido (pedido_id, negocio)
+        FOREIGN KEY (pedido_id, pedido_sugerido_id, negocio)
+        REFERENCES pedidos.pedido (pedido_id, pedido_sugerido_id, negocio)
 );
 
 COMMENT ON TABLE pedidos.renglon IS
@@ -584,6 +755,27 @@ COMMENT ON COLUMN pedidos.renglon.ajustada_por IS
 -- podrían ordenar y no habría forma de saber cuál quedó.
 COMMENT ON COLUMN pedidos.renglon.ajustada_en IS
     'Cuándo se cambió la cantidad, instante con zona. NULL si nadie la cambió.';
+
+-- A QUIÉN DECIDIÓ UNA PERSONA PEDÍRSELO (ticket 20). La clave de Doyle, la
+-- misma de `precio_de_proveedor.proveedor` y la misma que acaba en
+-- `pedido.proveedor`: una sola identidad de proveedor en todo el esquema.
+--
+-- NULL = nadie eligió, y entonces manda la sugerencia del sistema, que se
+-- calcula al leer y no se guarda. Ver el porqué en `ck_renglon_eleccion`.
+COMMENT ON COLUMN pedidos.renglon.proveedor_elegido IS
+    'A quién decidió una PERSONA pedírselo, con la clave de Doyle. NULL = '
+    'nadie eligió; lo que el sistema sugiere no se guarda, se recalcula.';
+
+-- FIRMA, NO PERMISO (regla 3 de CLAUDE.md), igual que `descartado_por` y
+-- `ajustada_por`. Sirve para saber a quién preguntarle por qué se le compró a
+-- LEVIC habiendo NADRO más barato -- que es una pregunta legítima con una
+-- respuesta legítima: mínimo de pedido, días de entrega, crédito.
+COMMENT ON COLUMN pedidos.renglon.elegido_por IS
+    'Quién eligió el proveedor, según Cf-Access-Authenticated-User-Email. Es '
+    'una FIRMA, no un permiso. NULL si nadie eligió.';
+
+COMMENT ON COLUMN pedidos.renglon.elegido_en IS
+    'Cuándo se eligió, instante con zona. NULL si nadie eligió.';
 
 
 -- --------------------------------------------------------------------------

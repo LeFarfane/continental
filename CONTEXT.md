@@ -60,6 +60,14 @@ sistema a partir de lo que se vendió. No se le envía a nadie.
 pedido sugerido. Un pedido sugerido puede repartirse en varios pedidos, uno por
 proveedor.
 
+- `borrador` — se está armando. Todavía **no se le pidió a nadie**, así que se
+  puede cambiar: mover un renglón a otro proveedor, corregir una cantidad,
+  volver a repartir.
+
+> Un renglón que entra en un pedido en `borrador` **sigue `abierto`**, no pasa
+> a `en tránsito`. `en tránsito` quiere decir "ya se le pidió a un proveedor", y
+> un borrador no se le ha pedido a nadie.
+
 **Probablemente recibido** — apareció una compra que encaja con un renglón en
 tránsito, pero los datos no alcanzan para afirmar que sea la misma mercancía.
 Es una sugerencia que espera confirmación de una persona, nunca un hecho.

@@ -55,14 +55,21 @@ import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import sqlalchemy
 from sqlalchemy import text
 
 from continental.clasificacion import ABARROTE, MEDICAMENTO, SIN_CLASIFICAR
-from continental.precios import MOTIVOS, LecturaDePrecio
+from continental.precios import MOTIVOS, LecturaDePrecio, nombre_del_proveedor
 from continental.sugerido import Renglon
+
+if TYPE_CHECKING:  # pragma: no cover - solo para el tipo
+    # `particion` importa ESTE módulo (necesita `RenglonGuardado` y
+    # `PrecioDeProveedor`), así que importarlo aquí de verdad sería un ciclo. La
+    # dirección correcta es ésta: el almacenamiento no sabe nada de la regla con
+    # la que se parte, solo escribe lo que le den.
+    from continental.particion import PedidoPorArmar
 
 log = logging.getLogger("continental")
 
@@ -99,6 +106,31 @@ ESTADOS_DEL_RENGLON: tuple[str, ...] = (
 )
 
 CLASIFICACIONES = (MEDICAMENTO, ABARROTE, SIN_CLASIFICAR)
+
+# ------------------------------------------------ el estado de un pedido (20)
+#
+# `CONTEXT.md` define los estados del pedido sugerido y los del renglón, y NO
+# los del pedido: hasta el ticket 20 un pedido no tenía estado porque no había
+# nada que hacerle. `borrador` es vocabulario nuevo y por eso entró también al
+# glosario, que manda sobre el nombre de cualquier cosa.
+
+#: Nace así y se puede modificar mientras siga así (tercera casilla del ticket
+#: 20). Un borrador todavía **no se le ha pedido a nadie**: por eso repartir un
+#: renglón no lo pone `en tránsito` —el glosario dice que eso es "ya se le pidió
+#: a un proveedor"— y quien lo pondrá es el ticket 21, al enviar.
+BORRADOR = "borrador"
+
+#: Uno solo, y eso es deliberado. El ticket 21 va a estrenar el estado de
+#: "enviado" —y quizá uno de cancelado—, y **cómo se llamen es su decisión, no
+#: la de éste**: el glosario no los tiene todavía. Escribirlos aquí hoy sería
+#: fijar el vocabulario de un ticket que nadie ha escrito, y este repositorio ya
+#: pagó por lo contrario una vez (el motivo `no empareja` del ticket 12 se
+#: adelantó un día porque su significado **ya estaba decidido** en el ADR 0002;
+#: éstos no lo están).
+#:
+#: Lo que cuesta, dicho: el ticket 21 paga una migración para ampliar
+#: `ck_pedido_estado`. Es el precio conocido de no inventar nombres ajenos.
+ESTADOS_DEL_PEDIDO: tuple[str, ...] = (BORRADOR,)
 
 # ------------------------------------------- cómo acaba una corrida del lote
 #
@@ -376,6 +408,24 @@ class RenglonGuardado:
     criterio que `descartado_por` / `descartado_en` y su mismo CHECK pareado
     (`ck_renglon_ajuste`): o están las dos con la cantidad, o no está ninguna.
     Firma y no permiso (regla 3 de `CLAUDE.md`).
+
+    `proveedor_elegido` es **a quién decidió una persona pedírselo** (ticket
+    20), con su firma pareada en `elegido_por` / `elegido_en`. `None` quiere
+    decir *nadie eligió*, igual que `cantidad_final`.
+
+    **Lo que el sistema sugiere NO está aquí y no se guarda**, y esa es la
+    diferencia consciente con el ticket 11: la sugerencia se recalcula de
+    `comparacion.elegir_ganador`, que es pura sobre una tabla de precios que
+    solo crece, así que una copia guardada sería un segundo hecho que envejece
+    sin avisar. `cantidad_propuesta` sí se guarda porque **no** se puede
+    recalcular: las ventas de su ventana ya pasaron. El porqué completo está en
+    el encabezado de `particion.py`.
+
+    `pedido_id` es el pedido al que quedó repartido (ticket 20). Nace `None` y
+    lo escribe `guardar_la_particion`. Es UNA columna y no una tabla de cruce:
+    "un renglón pertenece a un solo pedido" se defiende en la tabla y no en un
+    `if` — ver `sql/crear_tablas.sql`, donde `fk_renglon_pedido` además lleva
+    `pedido_sugerido_id` para que el pedido sea de **esta** lista.
     """
 
     renglon_id: int
@@ -386,6 +436,10 @@ class RenglonGuardado:
     cantidad_final: int | None = None
     ajustada_por: str | None = None
     ajustada_en: dt.datetime | None = None
+    pedido_id: int | None = None
+    proveedor_elegido: str | None = None
+    elegido_por: str | None = None
+    elegido_en: dt.datetime | None = None
 
     @property
     def cantidad_a_pedir(self) -> int:
@@ -435,6 +489,63 @@ class RenglonGuardado:
         veces se cambia una sola.
         """
         return self.estado == RENGLON_DESCARTADO
+
+    @property
+    def fue_elegido(self) -> bool:
+        """Si una persona decidió a quién pedírselo.
+
+        Es el par de `fue_ajustada` y existe por lo mismo: distingue "nadie lo
+        revisó" de "alguien lo revisó", **aunque haya elegido lo que el sistema
+        sugería**. Confirmar la sugerencia es una decisión, y deducirla
+        comparando con el ganador de hoy la borraría — el ganador de hoy puede
+        no ser el de ayer, porque la tabla del precio solo crece.
+        """
+        return self.proveedor_elegido is not None
+
+    @property
+    def esta_repartido(self) -> bool:
+        """Si ya quedó dentro de un pedido."""
+        return self.pedido_id is not None
+
+
+@dataclass(frozen=True, slots=True)
+class PedidoGuardado:
+    """Un pedido con fila: a quién se le pide, en qué estado y cuánto cuesta.
+
+    **La identidad es `proveedor`, la clave de Doyle**, y `proveedor_id` es la
+    correspondencia con SICAR — que puede faltar—. El porqué entero está en
+    `docs/decisiones/0008-*` y en `proveedores.py`; en corto: se le pide a quien
+    se le preguntó el precio, y que la farmacia nunca le haya comprado a
+    QuePharma no es una razón para no empezar hoy.
+
+    `total_sin_iva` es `None` cuando **no se puede saber** —alguna línea va sin
+    precio, o el pedido se quedó sin renglones—, y jamás la suma de lo que sí se
+    sabe. Ver `particion.PedidoPorArmar.total_sin_iva`.
+    """
+
+    pedido_id: int
+    negocio: str
+    pedido_sugerido_id: int
+    proveedor: str
+    proveedor_id: int | None
+    estado: str
+    armado_en: dt.datetime
+    total_sin_iva: Decimal | None = None
+
+    @property
+    def tiene_puente(self) -> bool:
+        """Si a este proveedor le corresponde un `pro_id` de SICAR."""
+        return self.proveedor_id is not None
+
+    @property
+    def es_borrador(self) -> bool:
+        """Si todavía se puede modificar (tercera casilla del ticket 20)."""
+        return self.estado == BORRADOR
+
+    @property
+    def nombre(self) -> str:
+        """Cómo se escribe el proveedor, según el glosario."""
+        return nombre_del_proveedor(self.proveedor)
 
 
 @dataclass(frozen=True, slots=True)
@@ -580,6 +691,13 @@ def columnas_del_renglon(
     tres, y escribirlos juntos deja ver que se respeta. Un renglón nace
     `abierto` y nadie lo ha descartado.
 
+    `proveedor_elegido`, `elegido_por` y `elegido_en` van igual y en `None`:
+    **un renglón nace sin que nadie haya decidido a quién pedírselo** (ticket
+    20). Copiar aquí la sugerencia del sistema sería el mismo error que copiar
+    la propuesta en `cantidad_final`, y uno peor encima: la sugerencia cambia
+    sola cuando llega un precio nuevo, así que la columna envejecería sin que
+    nadie pudiera distinguirla de una decisión.
+
     `cantidad_final`, `ajustada_por` y `ajustada_en` van igual, y las tres en
     `None`: **un renglón nace sin que nadie haya corregido su cantidad**. Poner
     aquí `cantidad_final = renglon.cantidad_propuesta` sería cómodo —la pantalla
@@ -608,6 +726,15 @@ def columnas_del_renglon(
         "cantidad_final": None,
         "ajustada_por": None,
         "ajustada_en": None,
+        # Un renglón nace SIN pedido y SIN proveedor elegido, y las cuatro van
+        # explícitas en `None` por la misma razón que las de arriba:
+        # `ck_renglon_eleccion` relaciona a tres de ellas y escribirlas juntas
+        # deja ver que se respeta. `pedido_id` nulo es "nadie lo ha repartido"
+        # (lo dice el COMMENT de la columna desde el ticket 07).
+        "pedido_id": None,
+        "proveedor_elegido": None,
+        "elegido_por": None,
+        "elegido_en": None,
     }
 
 
@@ -740,6 +867,122 @@ def revisar_el_renglon(columnas: dict) -> None:
             "preguntar a nadie; con la firma suelta, diría que alguien corrigió "
             "un renglón que nadie tocó."
         )
+    # Las tres del ticket 20. Se leen con `.get` y no con `[...]` a propósito:
+    # una fila leída de una base a la que todavía no se le corrió la migración
+    # 0005 no las trae, y lo que tiene que pasar entonces es "nadie eligió" y no
+    # un `KeyError` que tumbe la pantalla entera por una columna que falta.
+    if columnas.get("proveedor_elegido") == "":
+        raise ValueError(
+            "Proveedor elegido vacío. La columna tiene CHECK "
+            "(proveedor_elegido <> ''): o hay clave de proveedor o es NULL, "
+            "igual que la clave y las dos firmas. Una cadena vacía se compara "
+            "igual que un dato y empareja con cualquier otra vacía."
+        )
+    if columnas.get("elegido_por") == "":
+        raise ValueError(
+            "Firma vacía. La columna tiene CHECK (elegido_por <> ''): o hay "
+            "correo o es NULL, igual que en el descarte y en el ajuste."
+        )
+    if (columnas.get("proveedor_elegido") is not None) != (
+        columnas.get("elegido_por") is not None
+        and columnas.get("elegido_en") is not None
+    ):
+        raise ValueError(
+            "Proveedor elegido sin decir quién ni cuándo, o firma de elección "
+            "sin proveedor. Lo rechaza ck_renglon_eleccion. Sin la firma no hay "
+            "a quién preguntarle por qué se le compró a LEVIC habiendo NADRO "
+            "más barato, que es la pregunta entera del ticket 20; con la firma "
+            "suelta, diría que alguien eligió lo que nadie eligió."
+        )
+
+
+
+# ------------------------------------------- el pedido por proveedor (20)
+
+
+def columnas_del_pedido(
+    negocio: str,
+    pedido_sugerido_id: int,
+    proveedor: str,
+    proveedor_id: int | None,
+    total_sin_iva: Decimal | None,
+) -> dict:
+    """Las columnas de `pedidos.pedido` al armarlo: en `borrador` y sin enviar.
+
+    `estado` va explícito aunque el DDL tenga `DEFAULT 'borrador'`, por la misma
+    razón que `columnas_de_la_lista` escribe el suyo: lo que se escribe se lee.
+
+    `proveedor_id` puede ser `None` y **eso no impide armar el pedido**. Es el
+    estado de QuePharma hoy (`proveedores.py`). Nunca un cero: un cero es un id
+    que no existe y que aun así cabe en un `bigint`, y a partir de ahí todo
+    `join` contra `dim_proveedor` sale vacío sin error.
+    """
+    return {
+        "negocio": negocio,
+        "pedido_sugerido_id": pedido_sugerido_id,
+        "proveedor": proveedor,
+        "proveedor_id": proveedor_id,
+        "estado": BORRADOR,
+        "total_sin_iva": total_sin_iva,
+    }
+
+
+def revisar_el_pedido(columnas: dict) -> None:
+    """Los CHECK de `pedidos.pedido`, escritos en Python.
+
+    Lo mismo que hacen `revisar_la_lista` y `revisar_el_renglon`, y por lo
+    mismo: sin esto el doble aceptaría en la torre lo que en atlas rebota.
+    """
+    if not columnas["negocio"]:
+        raise ValueError("negocio vacío: lo rechaza ck_pedido_negocio.")
+    if not columnas["proveedor"]:
+        raise ValueError(
+            "Proveedor vacío: lo rechaza ck_pedido_proveedor. Sin saber a quién "
+            "se le pide, el pedido no sirve para nada — y la clave de Doyle es "
+            "la identidad del pedido, no el proveedor_id de SICAR (ADR 0008)."
+        )
+    if columnas["estado"] not in ESTADOS_DEL_PEDIDO:
+        raise ValueError(
+            f"Estado {columnas['estado']!r} fuera de ck_pedido_estado, que hoy "
+            f"solo conoce {ESTADOS_DEL_PEDIDO}. El de 'enviado' lo estrena el "
+            f"ticket 21, con su migración."
+        )
+    if columnas["proveedor_id"] is not None and columnas["proveedor_id"] <= 0:
+        raise ValueError(
+            "proveedor_id de cero o negativo: lo rechaza ck_pedido_proveedor_id. "
+            "NULL es 'SICAR no conoce a este proveedor' y se puede pedir igual; "
+            "un cero es un id inventado que hace que todo join contra "
+            "dim_proveedor salga vacío sin error."
+        )
+    if columnas["total_sin_iva"] is not None and columnas["total_sin_iva"] < 0:
+        raise ValueError("total_sin_iva negativo: lo rechaza ck_pedido_total.")
+
+
+def pedido_desde_columnas(fila) -> PedidoGuardado:
+    """Una fila de `pedidos.pedido` → el pedido guardado.
+
+    El total llega como `Decimal` desde Postgres y **así se queda**: convertirlo
+    a `float` en el borde sería meter dinero en coma flotante justo donde
+    `numeric(12,2)` acaba de sacarlo. Es lo contrario de lo que hace
+    `renglon_desde_columnas` con las piezas, y la diferencia es que esto es
+    dinero.
+    """
+    return PedidoGuardado(
+        pedido_id=int(fila["pedido_id"]),
+        negocio=fila["negocio"],
+        pedido_sugerido_id=int(fila["pedido_sugerido_id"]),
+        proveedor=fila["proveedor"],
+        proveedor_id=(
+            None if fila["proveedor_id"] is None else int(fila["proveedor_id"])
+        ),
+        estado=fila["estado"],
+        armado_en=fila["armado_en"],
+        total_sin_iva=(
+            None
+            if fila["total_sin_iva"] is None
+            else Decimal(str(fila["total_sin_iva"]))
+        ),
+    )
 
 
 # ------------------------------------ el precio congelado (ticket 12)
@@ -1463,6 +1706,101 @@ class AlmacenamientoDelPedido(Protocol):
         """
         ...
 
+    def elegir_proveedor(
+        self, negocio: str, renglon_id: int, proveedor: str, quien: str
+    ) -> PedidoSugeridoGuardado | None:
+        """Guarda a quién decidió una persona pedirle este renglón, firmado (20).
+
+        **Solo se guarda la decisión.** Lo que el sistema sugiere —el más barato
+        con existencia— no se escribe en ninguna columna: se recalcula de
+        `comparacion.elegir_ganador` sobre los precios congelados, que solo
+        crecen. Guardarlo sería una segunda copia del mismo hecho, y una que
+        además envejece sin avisar: si a las 8 la sugerencia era NADRO y a las 9
+        llega un LEVIC más barato, la columna seguiría diciendo NADRO y nadie
+        podría distinguir esa cifra vieja de una decisión que alguien tomó.
+
+        Se aparta a propósito del ticket 11, que sí guarda las dos cifras
+        (`cantidad_propuesta` y `cantidad_final`): aquella propuesta **no se
+        puede recalcular**, porque sale de las ventas de una ventana que ya
+        pasó. El porqué entero está en el encabezado de `particion.py`.
+
+        `None` es "no había ningún renglón al que se le pudiera elegir
+        proveedor", y quien llame lo dice en vez de fingir. Son **dos**
+        condiciones y las dos viven en el `WHERE`, las mismas de
+        `ajustar_la_cantidad`:
+
+        - el renglón sigue `abierto` — uno `en tránsito` ya se le pidió a un
+          proveedor, y cambiarle el destinatario aquí haría que el renglón
+          dijera una cosa y el proveedor otra;
+        - **y su lista sigue `abierta`** — una lista `cerrada` quiere decir "ya
+          se pidió lo que se iba a pedir" (`CONTEXT.md`).
+
+        **La elección NO se revisa contra la comparación**, y eso es el ticket:
+        se puede elegir a un proveedor que no dio precio, o al que nadie le
+        preguntó. Hay razones que el sistema no ve —mínimo de pedido, días de
+        entrega, crédito—. El renglón entra al pedido con `precio desconocido`,
+        que es la quinta casilla.
+
+        `quien` es una **firma, no un permiso** (regla 3 de `CLAUDE.md`): sirve
+        para saber a quién preguntarle por qué se le compró a LEVIC habiendo
+        NADRO más barato.
+
+        Devuelve la **lista entera**, por la misma razón que `descartar` y
+        `ajustar_la_cantidad`: los conteos que la pantalla pinta salen de lo
+        guardado y no de una cuenta que el navegador lleve a mano.
+        """
+        ...
+
+    def pedidos_de_la_lista(
+        self, negocio: str, pedido_sugerido_id: int
+    ) -> tuple[PedidoGuardado, ...]:
+        """Los pedidos en que ya se partió esa lista. Vacío si no se ha partido.
+
+        Ordenados por proveedor y no por id: el orden de creación depende de en
+        qué orden alguien apretó el botón, y dos cargas de la misma pantalla no
+        deben enseñar las columnas cambiadas de sitio. Es el mismo criterio que
+        `comparacion.ORDEN_DE_LA_FILA`.
+        """
+        ...
+
+    def guardar_la_particion(
+        self,
+        negocio: str,
+        pedido_sugerido_id: int,
+        pedidos: Sequence[PedidoPorArmar],
+    ) -> tuple[PedidoGuardado, ...] | None:
+        """Parte la lista: un pedido por proveedor, con sus renglones dentro.
+
+        Recibe la partición **ya calculada** (`particion.partir`) y solo la
+        escribe. La regla de a quién se le pide cada renglón y cuánto suma cada
+        pedido vive en un módulo puro, probado sin Postgres, por la misma razón
+        que `comparacion.py`: una regla dentro de un `SELECT` solo se puede
+        probar levantando una base.
+
+        `None` es "esa lista no existe en este negocio, o ya no está abierta", y
+        quien llame lo dice. La condición vive en el `INSERT ... SELECT` contra
+        `pedido_sugerido`, no en un `if` de Python: comprobar y escribir después
+        tiene una carrera en medio.
+
+        **Se puede partir dos veces, y no duplica nada.** El `ON CONFLICT ON
+        CONSTRAINT ux_pedido_proveedor DO UPDATE` reencuentra el pedido que ya
+        existía para ese proveedor —la restricción es de la tabla desde el
+        ticket 07— y le reescribe el total. Si entre las dos particiones alguien
+        cambió una elección, el renglón cambia de `pedido_id` (una columna, un
+        solo pedido) y el pedido que se quedó vacío sigue ahí con total `NULL`:
+        el rol no tiene `DELETE` y un pedido sin renglones no cuesta `0.00`,
+        cuesta "no se sabe".
+
+        **Lo que ya no es borrador no se toca**: el `WHERE` del `DO UPDATE` y el
+        `EXISTS` de `_SOLTAR_RENGLONES` lo protegen. Hoy no hay otro estado; el
+        día que el ticket 21 lo estrene, volver a partir dejará intacto lo
+        enviado en vez de pisarlo.
+
+        Todo en **una transacción**: una partición a medias dejaría renglones
+        repartidos entre pedidos cuyos totales no cuentan.
+        """
+        ...
+
     def guardar_la_corrida(self, negocio: str, corrida: CorridaDelLote) -> int:
         """Deja escrito cómo le fue al lote esta noche. Devuelve el id.
 
@@ -1526,7 +1864,8 @@ _LEER_RENGLONES = text(
            cantidad_propuesta, esta_en_el_catalogo, existencia,
            dias_de_cobertura, clasificacion, estado,
            descartado_por, descartado_en,
-           cantidad_final, ajustada_por, ajustada_en
+           cantidad_final, ajustada_por, ajustada_en,
+           pedido_id, proveedor_elegido, elegido_por, elegido_en
     from pedidos.renglon
     where negocio = :negocio and pedido_sugerido_id = :pedido_sugerido_id
     order by renglon_id
@@ -1543,7 +1882,8 @@ _LEER_RENGLON_POR_ID = text(
            piezas_vendidas, cantidad_propuesta, esta_en_el_catalogo, existencia,
            dias_de_cobertura, clasificacion, estado,
            descartado_por, descartado_en,
-           cantidad_final, ajustada_por, ajustada_en
+           cantidad_final, ajustada_por, ajustada_en,
+           pedido_id, proveedor_elegido, elegido_por, elegido_en
     from pedidos.renglon
     where negocio = :negocio and renglon_id = :renglon_id
     """
@@ -1782,6 +2122,222 @@ _LEER_PRECIOS_DEL_RENGLON = text(
      where p.negocio = :negocio
        and p.renglon_id = :renglon_id
      order by p.proveedor, p.consultado_en desc, p.precio_de_proveedor_id desc
+    """
+)
+
+# Elegir a quién se le pide un renglón (ticket 20).
+#
+# **La misma forma que `_AJUSTAR_LA_CANTIDAD`, y no es copia perezosa**: las dos
+# son la decisión de una persona sobre un renglón, y las dos tienen las MISMAS
+# dos condiciones de transición en el `WHERE` —el renglón `abierto` y su lista
+# `abierta`—. Un renglón `en tránsito` ya se le pidió a un proveedor y cambiarle
+# el destinatario aquí haría que el renglón dijera una cosa y el proveedor otra;
+# una lista `cerrada` quiere decir "ya se pidió lo que se iba a pedir".
+#
+# OJO CON LA INCOHERENCIA QUE ESTE REPO ARRASTRA, y que esto NO empeora:
+# `_DESCARTAR` deja descartar aunque la lista esté cerrada, porque el ticket 10
+# solo le puso el estado del RENGLÓN al `WHERE`. Aquí se sigue al ajuste —la
+# opción estricta— porque elegir proveedor es lo que arma un pedido, y armar un
+# pedido dentro de una lista que ya se pidió es exactamente lo que `cerrado`
+# significa que no debe pasar. Queda anotado para que el arreglo del descarte se
+# haga a propósito y no de paso.
+#
+# Las tres columnas se escriben juntas porque `ck_renglon_eleccion` las exige
+# juntas, igual que `ck_renglon_ajuste` con las suyas. `now()` y no una hora de
+# Python, por la misma razón que el descarte y el cierre.
+_ELEGIR_PROVEEDOR = text(
+    """
+    update pedidos.renglon as r
+       set proveedor_elegido = :proveedor,
+           elegido_por = :quien,
+           elegido_en = now()
+      from pedidos.pedido_sugerido as p
+     where r.negocio = :negocio
+       and r.renglon_id = :renglon_id
+       and r.estado = 'abierto'
+       and p.pedido_sugerido_id = r.pedido_sugerido_id
+       and p.negocio = r.negocio
+       and p.estado = 'abierto'
+    returning r.renglon_id, r.pedido_sugerido_id
+    """
+)
+
+# Los pedidos de una lista, para pintarlos y para saber cuáles siguen en
+# borrador. Ordenados por proveedor y no por id: el orden de creación depende de
+# en qué orden alguien apretó el botón, y dos cargas de la misma pantalla no
+# deben enseñar las columnas cambiadas de sitio.
+_LEER_PEDIDOS = text(
+    """
+    select pedido_id, negocio, pedido_sugerido_id, proveedor, proveedor_id,
+           estado, armado_en, total_sin_iva
+      from pedidos.pedido
+     where negocio = :negocio and pedido_sugerido_id = :pedido_sugerido_id
+     order by proveedor
+    """
+)
+
+# Abrir —o volver a abrir— el pedido de UN proveedor dentro de una lista.
+#
+# `INSERT ... SELECT` contra `pedido_sugerido` y no `INSERT ... VALUES`, igual
+# que `_GUARDAR_PRECIO`: **la lista y su estado se comprueban DENTRO de la
+# sentencia**. Cero filas es "esa lista no existe en este negocio, o ya no está
+# abierta", y quien llama lo dice en vez de fingir. Un `SELECT` previo en Python
+# y un `INSERT` después tienen una carrera en medio: una pestaña cierra la lista
+# mientras la otra parte.
+#
+# `ON CONFLICT ON CONSTRAINT ux_pedido_proveedor DO UPDATE` es la respuesta a
+# "¿qué pasa si se parte dos veces?": **no se duplica nada**. La restricción ya
+# existía desde el ticket 07 —"uno por proveedor dentro de la misma lista"— y
+# aquí se usa para reencontrar el pedido que ya estaba en vez de chocar contra
+# ella. Se nombra la RESTRICCIÓN y no las columnas: si alguien la renombra en el
+# DDL, esto falla ruidoso en lugar de seguir funcionando contra otra parecida.
+#
+# `where pedido.estado = 'borrador'` es la tercera casilla del ticket metida en
+# el `WHERE` y no en un `if`: **solo se modifica lo que sigue en borrador**. El
+# día que el ticket 21 ponga un pedido en "enviado", volver a partir lo dejará
+# intacto y devolverá cero filas — que es lo que hay que decir, no lo que hay
+# que pisar.
+#
+# Se reescriben `proveedor_id` y `total_sin_iva` porque las dos pueden haber
+# cambiado entre dos particiones: el puente se pudo configurar, y una cantidad
+# corregida cambia el total. `armado_en = now()` deja ver **de cuándo es** ese
+# total, que es lo único que permite notar que envejeció.
+_ABRIR_EL_PEDIDO = text(
+    """
+    insert into pedidos.pedido
+        (negocio, pedido_sugerido_id, proveedor, proveedor_id, estado,
+         total_sin_iva)
+    select s.negocio, s.pedido_sugerido_id, :proveedor, :proveedor_id,
+           :estado, :total_sin_iva
+      from pedidos.pedido_sugerido as s
+     where s.negocio = :negocio
+       and s.pedido_sugerido_id = :pedido_sugerido_id
+       and s.estado = 'abierto'
+    on conflict on constraint ux_pedido_proveedor do update
+       set proveedor_id = excluded.proveedor_id,
+           total_sin_iva = excluded.total_sin_iva,
+           armado_en = now()
+     where pedido.estado = 'borrador'
+    returning pedido_id, negocio, pedido_sugerido_id, proveedor, proveedor_id,
+              estado, armado_en, total_sin_iva
+    """
+)
+
+# Meter renglones en un pedido. **Un renglón pertenece a un solo pedido**: es un
+# `SET pedido_id = ...` sobre una columna, no una fila en una tabla de cruce, y
+# por eso moverlo de pedido no puede dejarlo en dos.
+#
+# `= any(:renglon_ids)` y no un `IN` armado con cadenas: los ids viajan como un
+# parámetro, así que no hay SQL construido a mano en ningún punto.
+#
+# Las condiciones del `WHERE`, y cada una defiende algo distinto:
+#
+#   - `r.pedido_sugerido_id` — el renglón es de ESTA lista. Sin esto, un id
+#     equivocado metería en el pedido un renglón de la lista de otro día, y el
+#     total del pedido dejaría de poder explicarse.
+#   - `r.estado = 'abierto'` — un renglón `en tránsito` ya se le pidió a alguien
+#     y uno `descartado` ya se atendió. Es la transición en el `WHERE`.
+#   - `s.estado = 'abierto'` — la lista sigue abierta, igual que en el ajuste.
+#   - **y el renglón no cuelga ya de un pedido que dejó de ser borrador.** Es la
+#     misma condición que `_SOLTAR_RENGLONES` lleva, y aquí hacía más falta:
+#     sin ella, volver a partir **sacaría** un renglón de un pedido ya enviado
+#     para meterlo en otro, y el pedido enviado quedaría diciendo un total que
+#     ya no corresponde a lo que tiene dentro. El ticket 21 lo va a proteger
+#     además por el otro lado —sus renglones pasan a `en tránsito` al enviar, y
+#     eso ya no es `abierto`—, pero esa garantía es suya y no de aquí: una
+#     restricción que depende de que otro ticket haga su parte no es una
+#     restricción.
+_ASIGNAR_RENGLONES = text(
+    """
+    update pedidos.renglon as r
+       set pedido_id = :pedido_id
+      from pedidos.pedido_sugerido as s
+     where r.negocio = :negocio
+       and r.pedido_sugerido_id = :pedido_sugerido_id
+       and r.renglon_id = any(:renglon_ids)
+       and r.estado = 'abierto'
+       and s.pedido_sugerido_id = r.pedido_sugerido_id
+       and s.negocio = r.negocio
+       and s.estado = 'abierto'
+       and (r.pedido_id is null
+            or exists (select 1
+                         from pedidos.pedido as p
+                        where p.pedido_id = r.pedido_id
+                          and p.negocio = r.negocio
+                          and p.estado = 'borrador'))
+    returning r.renglon_id
+    """
+)
+
+# Sacar de su pedido a los renglones que esta partición ya no reparte.
+#
+# Es la otra mitad de "¿y si se parte, se cambia una elección, y se vuelve a
+# partir?". Mover un renglón de un pedido a otro lo hace `_ASIGNAR_RENGLONES`
+# solo —le pisa el `pedido_id`—; lo que esta sentencia atiende es el caso en
+# que un renglón deja de tener a quién pedírsele: llegó un precio nuevo y ahora
+# ninguno lo tiene, o alguien lo descartó. Dejarlo colgando de su pedido viejo
+# haría que el pedido tuviera un renglón más de los que su total cuenta.
+#
+# `exists (... p.estado = 'borrador')` protege lo que ya no es borrador: un
+# renglón que cuelgue de un pedido enviado (ticket 21) no se suelta por volver a
+# partir. Sin esa condición, repartir de nuevo vaciaría un pedido que ya está en
+# el portal del proveedor.
+_SOLTAR_RENGLONES = text(
+    """
+    update pedidos.renglon as r
+       set pedido_id = null
+      from pedidos.pedido_sugerido as s
+     where r.negocio = :negocio
+       and r.pedido_sugerido_id = :pedido_sugerido_id
+       and r.pedido_id is not null
+       and r.estado = 'abierto'
+       and not (r.renglon_id = any(:renglon_ids))
+       and s.pedido_sugerido_id = r.pedido_sugerido_id
+       and s.negocio = r.negocio
+       and s.estado = 'abierto'
+       and exists (select 1
+                     from pedidos.pedido as p
+                    where p.pedido_id = r.pedido_id
+                      and p.negocio = r.negocio
+                      and p.estado = 'borrador')
+    returning r.renglon_id
+    """
+)
+
+# Un pedido que se quedó sin renglones deja de tener total.
+#
+# Es la esquina del "¿y si se parte, se cambia una elección, y se vuelve a
+# partir?" que se hace mal sola: el pedido que perdió todos sus renglones **ya
+# no está en la partición**, así que `_ABRIR_EL_PEDIDO` no lo toca y se quedaría
+# enseñando el total de la partición anterior — treinta pesos de mercancía que
+# ahora se le pide a otro. Nadie lo vería como un error: es una cifra con dos
+# decimales al lado de un pedido que existe.
+#
+# El total se va a NULL y NO a cero, que es la misma regla que en todo este
+# esquema: un pedido vacío no cuesta nada porque no tiene nada, no porque sea
+# gratis, y un `0.00` en una lista de totales pasa desapercibido. La columna es
+# nullable a propósito y su COMMENT ya lo dice: "NULL = todavía no se sabe,
+# nunca cero".
+#
+# El pedido **no se borra**: el rol no tiene DELETE (ADR 0003) y descartar,
+# cerrar y cancelar son cambios de estado. Se queda, vacío y visible, que
+# además es lo honesto — alguien armó ese pedido y después lo deshizo.
+#
+# `p.estado = 'borrador'` por lo mismo que en las otras dos: lo que ya se envió
+# (ticket 21) no se toca.
+_VACIAR_LOS_PEDIDOS_SIN_RENGLONES = text(
+    """
+    update pedidos.pedido as p
+       set total_sin_iva = null
+     where p.negocio = :negocio
+       and p.pedido_sugerido_id = :pedido_sugerido_id
+       and p.estado = 'borrador'
+       and p.total_sin_iva is not null
+       and not exists (select 1
+                         from pedidos.renglon as r
+                        where r.pedido_id = p.pedido_id
+                          and r.negocio = p.negocio)
+    returning p.pedido_id
     """
 )
 
@@ -2154,6 +2710,128 @@ class AlmacenamientoPostgres:
                 for fila in filas
             )
 
+    def pedidos_de_la_lista(
+        self, negocio: str, pedido_sugerido_id: int
+    ) -> tuple[PedidoGuardado, ...]:
+        with self._motor().connect() as conexion:
+            filas = (
+                conexion.execute(
+                    _LEER_PEDIDOS,
+                    {
+                        "negocio": negocio,
+                        "pedido_sugerido_id": pedido_sugerido_id,
+                    },
+                )
+                .mappings()
+                .all()
+            )
+        return tuple(pedido_desde_columnas(f) for f in filas)
+
+    def elegir_proveedor(
+        self, negocio: str, renglon_id: int, proveedor: str, quien: str
+    ) -> PedidoSugeridoGuardado | None:
+        return self._mover_el_renglon(
+            _ELEGIR_PROVEEDOR,
+            {
+                "negocio": negocio,
+                "renglon_id": renglon_id,
+                "proveedor": proveedor,
+                "quien": quien,
+            },
+        )
+
+    def guardar_la_particion(
+        self,
+        negocio: str,
+        pedido_sugerido_id: int,
+        pedidos: Sequence[PedidoPorArmar],
+    ) -> tuple[PedidoGuardado, ...] | None:
+        # `begin()` y no `connect()`: todo lo de aquí abajo es UNA transacción.
+        # Una partición a medias dejaría renglones colgando de pedidos cuyos
+        # totales no los cuentan, y el rol no tiene DELETE para deshacerlo.
+        with self._motor().begin() as conexion:
+            guardados: list[PedidoGuardado] = []
+            asignados: list[int] = []
+            alguna_lista = False
+
+            for pedido in pedidos:
+                columnas = columnas_del_pedido(
+                    negocio,
+                    pedido_sugerido_id,
+                    pedido.proveedor,
+                    pedido.proveedor_id,
+                    pedido.total_sin_iva,
+                )
+                # El mismo validador que llama el doble. Si esto se negara solo
+                # de un lado, el suite quedaría en verde y el INSERT rebotaría
+                # en atlas contra una restricción que nadie sabría explicar.
+                revisar_el_pedido(columnas)
+                fila = (
+                    conexion.execute(_ABRIR_EL_PEDIDO, columnas).mappings().first()
+                )
+                if fila is None:
+                    # Cero filas quiere decir una de dos, y las dos son "no se
+                    # escribió": la lista no está abierta, o ese pedido ya no es
+                    # borrador. No se distinguen desde fuera a propósito, igual
+                    # que en el descarte.
+                    continue
+                alguna_lista = True
+                guardados.append(pedido_desde_columnas(fila))
+
+                ids = [linea.renglon_id for linea in pedido.lineas]
+                if not ids:
+                    continue
+                movidos = conexion.execute(
+                    _ASIGNAR_RENGLONES,
+                    {
+                        "negocio": negocio,
+                        "pedido_sugerido_id": pedido_sugerido_id,
+                        "pedido_id": fila["pedido_id"],
+                        "renglon_ids": ids,
+                    },
+                ).all()
+                asignados.extend(int(f[0]) for f in movidos)
+
+            if not alguna_lista and pedidos:
+                return None
+
+            # Los que esta partición ya no reparte se sueltan. Si no hubiera
+            # ningún asignado, `any(array[])` seguiría siendo la comparación
+            # correcta: `NOT (x = ANY('{}'))` es cierto para todo x, que es
+            # exactamente "suéltalos todos".
+            conexion.execute(
+                _SOLTAR_RENGLONES,
+                {
+                    "negocio": negocio,
+                    "pedido_sugerido_id": pedido_sugerido_id,
+                    "renglon_ids": asignados,
+                },
+            )
+
+            # Y el que se quedó sin ninguno pierde su total. Va DESPUÉS de las
+            # dos sentencias anteriores porque es su consecuencia: un pedido se
+            # vacía cuando sus renglones se van a otro.
+            conexion.execute(
+                _VACIAR_LOS_PEDIDOS_SIN_RENGLONES,
+                {
+                    "negocio": negocio,
+                    "pedido_sugerido_id": pedido_sugerido_id,
+                },
+            )
+
+            filas = (
+                conexion.execute(
+                    _LEER_PEDIDOS,
+                    {
+                        "negocio": negocio,
+                        "pedido_sugerido_id": pedido_sugerido_id,
+                    },
+                )
+                .mappings()
+                .all()
+            )
+        return tuple(pedido_desde_columnas(f) for f in filas)
+
     def guardar_la_corrida(self, negocio: str, corrida: CorridaDelLote) -> int:
         columnas = columnas_de_la_corrida(corrida, negocio)
         # Se revisa antes de escribir, igual que el precio: el `final` decide
@@ -2268,4 +2946,16 @@ def renglon_guardado_desde_columnas(fila) -> RenglonGuardado:
         ),
         ajustada_por=fila["ajustada_por"],
         ajustada_en=fila["ajustada_en"],
+        # Las cuatro del ticket 20, con `.get` y no `[...]`: una base a la que
+        # todavía no se le corrió la migración 0005 no las trae, y lo correcto
+        # entonces es "nadie eligió y nadie repartió" en vez de un KeyError que
+        # tumbe la lista entera por una columna que falta. Es el mismo criterio
+        # con el que `verificar.py` lee `select *` de `pedidos.pedido` en vez de
+        # nombrar columnas que quizá no existan.
+        pedido_id=(
+            None if fila.get("pedido_id") is None else int(fila["pedido_id"])
+        ),
+        proveedor_elegido=fila.get("proveedor_elegido"),
+        elegido_por=fila.get("elegido_por"),
+        elegido_en=fila.get("elegido_en"),
     )

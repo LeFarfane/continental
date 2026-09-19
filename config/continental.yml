@@ -84,6 +84,36 @@ pedido:
     # que tarda menos de un milisegundo.
     cada_seg: 1
 
+  # EL PUENTE ENTRE LAS CLAVES DE DOYLE Y LOS PROVEEDORES DE SICAR (ticket 20,
+  # ADR 0008). A la izquierda la clave con la que habla toda la comparación
+  # -la misma de `precio_de_proveedor.proveedor` y la de
+  # `config/proveedores.yml` de Doyle-; a la derecha el `pro_id` de SICAR, que
+  # es `marts.dim_proveedor.proveedor_id`.
+  #
+  # Hasta el ticket 20 este cruce NO EXISTÍA EN NINGUNA PARTE, y hacía falta
+  # para poder escribir una fila de `pedidos.pedido`.
+  #
+  # SE GUARDA EL ID Y NO EL NOMBRE, y ésa es la decisión: el `pro_id` no cambia
+  # cuando SICAR renombra a un proveedor, y un puente por nombre se rompería
+  # con el primer acento corregido. El nombre se lee de `dim_proveedor` cada
+  # vez, y solo para pintarlo.
+  #
+  # Medido contra `marts.dim_proveedor` en atlas el 2026-09-19: 22 filas.
+  #
+  # **QuePharma NO ESTÁ, y no es un olvido de este archivo**: la farmacia nunca
+  # le ha comprado, así que SICAR no tiene una fila suya -y el ADR 0002 ya daba
+  # por probable que QuePharma quedara fuera de la comparación-. Se le puede
+  # pedir igual: el pedido se arma con `proveedor_id` en NULL y la pantalla
+  # dice que SICAR no lo conoce. Nunca un cero inventado (regla 4).
+  #
+  # El día que la farmacia le compre a QuePharma, SICAR le va a dar un `pro_id`
+  # y lo único que hay que hacer es agregar la línea aquí. Nada de código.
+  proveedores_en_sicar:
+    nadro: 1
+    vicma: 8
+    levic: 10
+    # quepharma: <sin pro_id todavía>
+
   # Anaqueles que cuentan como "medicamento" para el toggle. Es una lista
   # blanca a propósito: lo que no está aquí y tampoco es abarrote se muestra
   # como `sin clasificar`, nunca se esconde. Ver CONTEXT.md.

@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from continental.almacen import LineaDeCompra, LineaDeVenta, Producto
 from continental.almacenamiento import (
     ABIERTO,
+    BORRADOR,
     CERRADO,
     RENGLON_ABIERTO,
     RENGLON_DESCARTADO,
@@ -35,11 +36,15 @@ from continental.almacenamiento import (
     armar_guardado,
     columnas_de_la_corrida,
     columnas_de_la_lista,
+    PedidoGuardado,
+    columnas_del_pedido,
     columnas_del_precio,
     columnas_del_renglon,
     corrida_desde_columnas,
     precio_desde_columnas,
     renglon_guardado_desde_columnas,
+    pedido_desde_columnas,
+    revisar_el_pedido,
     revisar_el_precio,
     revisar_el_renglon,
     revisar_la_corrida,
@@ -362,12 +367,18 @@ class AlmacenamientoFalso:
     #: se escribieron. También una LISTA: esa tabla solo crece igual que la del
     #: precio, y `ultima_corrida` elige la más reciente al leer, no al escribir.
     corridas: list[dict] = field(default_factory=list)
+    #: Las filas de `pedidos.pedido` (ticket 20). Un diccionario por fila, con
+    #: los nombres de las columnas de verdad, igual que las listas y los
+    #: renglones: una prueba tiene que poder afirmar sobre lo que **quedó
+    #: escrito** —que `proveedor_id` es `None` y no un cero, por ejemplo—.
+    pedidos: list[dict] = field(default_factory=list)
     falla: Exception | None = None
     antes_de_insertar: Callable[[], object] | None = None
     _siguiente_lista: int = 1
     _siguiente_renglon: int = 1
     _siguiente_precio: int = 1
     _siguiente_corrida: int = 1
+    _siguiente_pedido: int = 1
 
     def _revisar(self) -> None:
         if self.falla is not None:
@@ -723,6 +734,230 @@ class AlmacenamientoFalso:
             ajustada_por=quien,
             ajustada_en=dt.datetime.now(dt.UTC),
         )
+
+    # ------------------------------------- elegir proveedor y partir (20)
+
+    def poner_el_proveedor(
+        self,
+        renglon_id: int,
+        proveedor_elegido: str | None,
+        elegido_por: str | None = None,
+        elegido_en: dt.datetime | None = None,
+    ) -> PedidoSugeridoGuardado | None:
+        """El `UPDATE` pelado de la elección, revisado contra los CHECK.
+
+        Aparte de `elegir_proveedor` por la misma razón que `poner_la_cantidad`
+        lo está de `ajustar_la_cantidad`: es donde se ve que el doble **se
+        niega** igual que Postgres —una clave vacía, una elección sin firma, una
+        firma sin elección—. Si el rechazo estuviera escondido dentro del camino
+        que lo evita, nadie podría verlo.
+
+        **No escribe ninguna sugerencia por ninguna parte**, igual que el
+        `UPDATE` real: lo único que se guarda es lo que una persona decidió.
+        """
+        self._revisar()
+        encontrado = self._renglon_por_id(renglon_id)
+        if encontrado is None:
+            return None
+        fila, lista = encontrado
+
+        propuesta = {
+            **fila,
+            "proveedor_elegido": proveedor_elegido,
+            "elegido_por": elegido_por,
+            "elegido_en": elegido_en,
+        }
+        revisar_el_renglon(propuesta)
+
+        fila.update(
+            proveedor_elegido=proveedor_elegido,
+            elegido_por=elegido_por,
+            elegido_en=elegido_en,
+        )
+        return armar_guardado(lista, lista["renglones"])
+
+    def elegir_proveedor(
+        self, negocio: str, renglon_id: int, proveedor: str, quien: str
+    ) -> PedidoSugeridoGuardado | None:
+        self._revisar()
+        encontrado = self._renglon_por_id(renglon_id)
+        if encontrado is None:
+            return None
+        fila, lista = encontrado
+        # Las CUATRO condiciones son el `WHERE` de `_ELEGIR_PROVEEDOR`, en el
+        # mismo orden y las mismas que el ajuste: el negocio, el renglón
+        # abierto y **la lista abierta**. Sin la última, se armaría un pedido
+        # dentro de una lista que ya se pidió.
+        if fila["negocio"] != negocio or fila["estado"] != RENGLON_ABIERTO:
+            return None
+        if lista["estado"] != ABIERTO:
+            return None
+        # El instante real con zona que en la tabla pone `now()`.
+        return self.poner_el_proveedor(
+            renglon_id,
+            proveedor,
+            elegido_por=quien,
+            elegido_en=dt.datetime.now(dt.UTC),
+        )
+
+    def pedidos_de_la_lista(
+        self, negocio: str, pedido_sugerido_id: int
+    ) -> tuple[PedidoGuardado, ...]:
+        self._revisar()
+        # El `order by proveedor` de `_LEER_PEDIDOS`, y no el orden de
+        # escritura: dos cargas de la misma pantalla no deben enseñar las
+        # columnas cambiadas de sitio.
+        filas = [
+            f
+            for f in self.pedidos
+            if f["negocio"] == negocio
+            and f["pedido_sugerido_id"] == pedido_sugerido_id
+        ]
+        return tuple(
+            pedido_desde_columnas(f) for f in sorted(filas, key=lambda f: f["proveedor"])
+        )
+
+    def _pedido_de(self, negocio: str, pedido_sugerido_id: int, proveedor: str):
+        """El `ux_pedido_proveedor` del DDL: uno por proveedor dentro de la lista."""
+        for fila in self.pedidos:
+            if (
+                fila["negocio"] == negocio
+                and fila["pedido_sugerido_id"] == pedido_sugerido_id
+                and fila["proveedor"] == proveedor
+            ):
+                return fila
+        return None
+
+    def guardar_la_particion(
+        self,
+        negocio: str,
+        pedido_sugerido_id: int,
+        pedidos,
+    ) -> tuple[PedidoGuardado, ...] | None:
+        """El `INSERT ... ON CONFLICT DO UPDATE` y los dos `UPDATE`, en memoria.
+
+        Cuatro cosas se copian del lado real y las cuatro tienen una prueba:
+
+        - **La lista y su estado son el `WHERE` del `INSERT ... SELECT`.** Si no
+          existe en ese negocio, o ya no está `abierta`, no se escribe nada y se
+          devuelve `None`.
+        - **Uno por proveedor.** Volver a partir reencuentra el pedido que ya
+          estaba y le reescribe el total, en vez de duplicarlo: es
+          `ux_pedido_proveedor`, que está en la tabla desde el ticket 07.
+        - **Solo lo que sigue en borrador se modifica**, que es el `WHERE` del
+          `DO UPDATE`.
+        - **Todo o nada**: se validan todos los pedidos antes de escribir el
+          primero, igual que la transacción del lado real.
+        """
+        self._revisar()
+        lista = self._por_id(pedido_sugerido_id)
+        if lista is None or lista["negocio"] != negocio or lista["estado"] != ABIERTO:
+            return None
+
+        columnas_por_pedido = []
+        for pedido in pedidos:
+            columnas = columnas_del_pedido(
+                negocio,
+                pedido_sugerido_id,
+                pedido.proveedor,
+                pedido.proveedor_id,
+                pedido.total_sin_iva,
+            )
+            revisar_el_pedido(columnas)
+            columnas_por_pedido.append((pedido, columnas))
+
+        # Los pedidos de esta lista que siguen en borrador. Se mira ANTES de
+        # escribir nada, igual que el `EXISTS` de las dos sentencias reales:
+        # lo que ya no es borrador no se toca, ni para reescribirlo, ni para
+        # soltar sus renglones, ni para movérselos a otro pedido.
+        borradores_antes = {
+            f["pedido_id"]
+            for f in self.pedidos
+            if f["negocio"] == negocio and f["estado"] == BORRADOR
+        }
+
+        asignados: list[int] = []
+        for pedido, columnas in columnas_por_pedido:
+            fila = self._pedido_de(negocio, pedido_sugerido_id, pedido.proveedor)
+            if fila is None:
+                fila = {
+                    **columnas,
+                    "pedido_id": self._siguiente_pedido,
+                    "armado_en": dt.datetime.now(dt.UTC),
+                }
+                self._siguiente_pedido += 1
+                self.pedidos.append(fila)
+            elif fila["estado"] == BORRADOR:
+                # El `SET` del `DO UPDATE`: el estado NO se toca y el proveedor
+                # tampoco —es la identidad—; lo que se reescribe es el puente,
+                # el total y la hora de armado.
+                fila.update(
+                    proveedor_id=columnas["proveedor_id"],
+                    total_sin_iva=columnas["total_sin_iva"],
+                    armado_en=dt.datetime.now(dt.UTC),
+                )
+            else:
+                # El `WHERE pedido.estado = 'borrador'` que no se cumplió: cero
+                # filas, y sus renglones tampoco se mueven.
+                continue
+
+            for linea in pedido.lineas:
+                renglon = next(
+                    (
+                        r
+                        for r in lista["renglones"]
+                        if r["renglon_id"] == linea.renglon_id
+                    ),
+                    None,
+                )
+                # El `WHERE` de `_ASIGNAR_RENGLONES`: de esta lista, abierto, y
+                # sin colgar de un pedido que dejó de ser borrador.
+                if renglon is None or renglon["estado"] != RENGLON_ABIERTO:
+                    continue
+                if (
+                    renglon.get("pedido_id") is not None
+                    and renglon["pedido_id"] not in borradores_antes
+                ):
+                    continue
+                renglon["pedido_id"] = fila["pedido_id"]
+                asignados.append(renglon["renglon_id"])
+
+        # `_SOLTAR_RENGLONES`: lo que esta partición ya no reparte sale de su
+        # pedido, salvo lo que cuelgue de un pedido que ya no es borrador.
+        borradores = {
+            f["pedido_id"]
+            for f in self.pedidos
+            if f["negocio"] == negocio and f["estado"] == BORRADOR
+        }
+        for renglon in lista["renglones"]:
+            if (
+                renglon.get("pedido_id") is not None
+                and renglon["estado"] == RENGLON_ABIERTO
+                and renglon["renglon_id"] not in asignados
+                and renglon["pedido_id"] in borradores
+            ):
+                renglon["pedido_id"] = None
+
+        # `_VACIAR_LOS_PEDIDOS_SIN_RENGLONES`: el pedido que se quedó sin
+        # ninguno pierde su total. A NULL y no a cero — un pedido vacío no
+        # cuesta nada porque no tiene nada. Sin esto, el pedido de la partición
+        # anterior seguiría enseñando su total con la mercancía ya movida a
+        # otro proveedor, y nadie lo vería como un error.
+        con_renglones = {
+            r.get("pedido_id")
+            for r in lista["renglones"]
+            if r.get("pedido_id") is not None
+        }
+        for fila in self.pedidos:
+            if (
+                fila["negocio"] == negocio
+                and fila["pedido_sugerido_id"] == pedido_sugerido_id
+                and fila["estado"] == BORRADOR
+                and fila["pedido_id"] not in con_renglones
+            ):
+                fila["total_sin_iva"] = None
+
+        return self.pedidos_de_la_lista(negocio, pedido_sugerido_id)
 
     def devolver_a_abierto(
         self, negocio: str, renglon_id: int

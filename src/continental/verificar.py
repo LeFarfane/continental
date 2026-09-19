@@ -313,10 +313,11 @@ class FilaRenglon:
 class FilaPedido:
     """`estado` y `enviado_por` son `None` mientras las columnas no existan.
 
-    Hoy `pedidos.pedido` no tiene ninguna de las dos (ver
-    `revisar_pedidos_enviados`), así que la recolección las rellena con `None` y
-    quien decide qué hacer con eso es la mitad pura, mirando la lista de
-    columnas de verdad.
+    **Desde el ticket 20, `estado` sí existe** —`pedidos.pedido` nace en
+    `borrador`— y llega con su valor. `enviado_por` sigue sin existir: la
+    estrena el ticket 21. La recolección rellena con `None` lo que la tabla no
+    tenga, y quien decide qué hacer con eso es la mitad pura, mirando la lista
+    de columnas de verdad (ver `revisar_pedidos_enviados`).
     """
 
     pedido_id: int
@@ -545,6 +546,14 @@ def revisar_transito_con_pedido(renglones: Sequence[FilaRenglon]) -> Informe:
 #: revisar. **No incluye `enviado_en`**: la fecha no hace falta para preguntar
 #: "¿quién lo envió?", y cada columna que se nombre de más es una apuesta sobre
 #: un ticket que todavía no se escribió.
+#:
+#: **El ticket 20 cumplió la mitad de la condición de disparo del hilo abierto
+#: 4 de `HANDOVER.md`, y esta tupla NO cambia**: le puso a `pedidos.pedido` la
+#: columna `estado` con el nombre que aquí ya estaba escrito, así que el
+#: invariante sigue `PENDIENTE` por `enviado_por` y por nada más. Que no haya
+#: que tocar este archivo es exactamente lo que se quería: el pendiente se
+#: imprime en cada despliegue diciendo **una** cosa que falta en vez de dos, y
+#: se enciende solo el día que el ticket 21 escriba la otra.
 COLUMNAS_QUE_EXIGE_EL_ENVIO = ("estado", "enviado_por")
 
 
@@ -553,22 +562,34 @@ def revisar_pedidos_enviados(
 ) -> Informe:
     """Invariante 3: ningún pedido enviado sin quién lo envió.
 
-    **Hoy este invariante no se puede revisar, y eso se dice en vez de
-    fingirse.** `pedidos.pedido` tiene seis columnas (`sql/crear_tablas.sql`) y
-    ninguna es `estado` ni `enviado_por`: un pedido todavía no se puede marcar
-    como enviado. Las dos llegan con los tickets 20 (`borrador`) y 21
-    (`borrador` -> `enviado`, firmado con el correo que verificó Access).
+    **Hoy este invariante sigue sin poder revisarse, pero le falta la mitad de
+    lo que le faltaba.** El ticket 20 le puso a `pedidos.pedido` la columna
+    `estado` —un pedido nace en `borrador`—, así que lo único que queda por
+    llegar es `enviado_por`, con el ticket 21 (`borrador` -> `enviado`, firmado
+    con el correo que verificó Access).
 
-    Escribir hoy el `SELECT ... WHERE estado = 'enviado'` sería inventarse dos
-    columnas y dejar el despliegue rojo en atlas con "column does not exist" —
-    por algo que nadie prometió—. Y quitar el invariante sería perderlo: quien
-    escriba el ticket 21 no tiene por qué acordarse de volver aquí.
+    Que `COLUMNAS_QUE_EXIGE_EL_ENVIO` no haya tenido que cambiar es la prueba
+    de que esto quedó bien planteado: el ticket 20 usó el nombre que aquí ya
+    estaba escrito, y el pendiente pasó de nombrar dos columnas a nombrar una
+    **sin que nadie tocara este archivo**.
+
+    Escribir hoy el `SELECT ... WHERE estado = 'enviado'` contra una columna
+    `enviado_por` que no existe dejaría el despliegue rojo en atlas con "column
+    does not exist", por algo que nadie prometió. Y quitar el invariante sería
+    perderlo: quien escriba el ticket 21 no tiene por qué acordarse de volver
+    aquí.
 
     Así que la recolección trae las columnas **que la tabla tiene de verdad** y
     esta función decide: si faltan, resultado `PENDIENTE`, que se ve en la
     salida y no tumba el despliegue; si están, el invariante empieza a revisar
-    solo, sin que nadie toque este archivo. Si los tickets 20 y 21 les ponen
-    otro nombre, lo que cambia es `COLUMNAS_QUE_EXIGE_EL_ENVIO` y nada más.
+    solo. Si el ticket 21 le pone otro nombre, lo que cambia es
+    `COLUMNAS_QUE_EXIGE_EL_ENVIO` y nada más.
+
+    Ojo con una tentación que el ticket 20 deja servida: **`estado = 'borrador'`
+    no es "no enviado" en un sentido que este invariante pueda usar**. Lo que se
+    revisa es lo que dice `enviado`, y mientras ese valor no exista en el CHECK
+    no hay nada que contar — contar cero borradores como cero fallas sería dar
+    por bueno un invariante que nadie está sosteniendo.
     """
     nombre = "ningún pedido enviado sin quién lo envió"
     faltantes = [c for c in COLUMNAS_QUE_EXIGE_EL_ENVIO if c not in columnas]
@@ -581,8 +602,9 @@ def revisar_pedidos_enviados(
                 [
                     f"`pedidos.pedido` todavía no tiene {_enumerar(faltantes)}, así que",
                     "hoy un pedido no se puede marcar como enviado y no hay nada que",
-                    "revisar. Las columnas llegan con los tickets 20 (borrador) y 21",
-                    "(borrador -> enviado, con quién lo envió y cuándo).",
+                    "revisar. `estado` ya llegó con el ticket 20 (un pedido nace en",
+                    "'borrador'); lo que falta llega con el 21 (borrador -> enviado,",
+                    "con quién lo envió y cuándo).",
                     "No se inventan aquí: el rol `continental` no puede crear ni alterar",
                     "columnas (ADR 0003), y un SELECT sobre una columna que no existe",
                     "dejaría el despliegue rojo por algo que nadie prometió.",

@@ -212,6 +212,52 @@
      frecuente pero secundaria —lo que se lee es la cantidad a pedir—, así que
      el botón no compite con ella por atención. */
   td.acciones, th.acciones { width: 6.5rem; text-align: right; }
+  /* A QUIÉN SE LE PIDE (ticket 20). Columna propia y no una línea más dentro
+     de la celda de precios: la comparación dice cuánto cuesta cada uno y esto
+     dice a quién se le compra, que es una DECISIÓN y no un dato. Mezclarlas
+     haría que la elección se leyera como una conclusión aritmética, y el
+     ticket dice lo contrario — hay razones que el sistema no ve. */
+  td.proveedor, th.proveedor { width: 10.5rem; }
+  .eleccion-campo {
+    width: 100%; font: inherit; font-size: .85rem; padding: .2rem .25rem;
+    border: 1px solid var(--linea); border-radius: 4px; background: var(--fondo);
+    color: inherit;
+  }
+  .eleccion-campo:hover { border-color: var(--tinta); }
+  .eleccion-campo:focus { outline: 2px solid var(--tinta); outline-offset: 1px; }
+  .eleccion-campo:disabled { cursor: default; opacity: .6; }
+  /* QUIÉN LO DECIDIÓ. Sugerencia y decisión se ven distinto a propósito: son
+     la misma pregunta que el ticket 11 resolvió con dos cantidades, y si las
+     dos se vieran igual nadie podría saber si un renglón lo miró una persona.
+     Lo sugerido va en gris y en cursiva —es una propuesta—; lo decidido va en
+     tinta normal con su firma debajo. */
+  .eleccion-de { color: var(--tenue); font-size: .75rem; display: block; margin-top: .2rem; }
+  .eleccion-de.sugerida { font-style: italic; }
+  /* Cuando la persona eligió DISTINTO de lo que el sistema sugería, se dicen
+     las dos. Es el par de cifras que vuelve auditable la elección, igual que
+     "el sistema propuso 3" al lado de un 10. */
+  .eleccion-de.distinta { color: var(--aviso); font-style: normal; }
+  /* Sin a quién pedirle: un empate, o ningún precio. NO es un error y no se
+     pinta como tal — es un renglón que espera a que una persona decida. */
+  .eleccion-sin { color: var(--tenue); font-size: .75rem; display: block; font-style: italic; }
+  /* EN QUÉ SE PARTE LA LISTA. Va DEBAJO de la tabla y no arriba: primero se
+     decide renglón por renglón y después se mira el total. */
+  .particion { border: 1px solid var(--linea); border-radius: 6px; padding: .7rem .9rem; margin-top: 1rem; }
+  .particion > b { display: block; margin-bottom: .35rem; }
+  .particion .detalle { color: var(--tenue); font-size: .82rem; margin-bottom: .5rem; }
+  .particion .pedido {
+    display: grid; grid-template-columns: 7rem 1fr auto; gap: 0 .5rem;
+    align-items: baseline; padding: .3rem 0; border-top: 1px solid var(--linea);
+  }
+  .particion .pedido .quien { font-weight: 600; }
+  .particion .pedido .cuanto { font-variant-numeric: tabular-nums; text-align: right; font-weight: 600; }
+  /* UN TOTAL QUE NO SE SABE NO SE PINTA COMO UNA CIFRA, por lo mismo que un
+     precio sin dato: en gris y en cursiva, nunca alineado como un número y
+     nunca "$0.00". Un cero ahí se leería "este pedido no cuesta nada". */
+  .particion .pedido .cuanto.nose { color: var(--tenue); font-style: italic; font-weight: 400; }
+  .particion .pedido .marca { color: var(--aviso); font-size: .75rem; grid-column: 2 / -1; }
+  .particion .pedido .marca.tenue { color: var(--tenue); }
+  .particion .fila { margin-top: .6rem; }
   /* Los cuatro proveedores, uno por renglón dentro de la celda. En columna y
      no en una línea: son cuatro cifras que se comparan entre sí, y comparar
      hacia abajo es lo que un ojo hace sin pensar. 13rem cabe
@@ -356,7 +402,10 @@
          padding: .55rem .4rem; border-bottom: 1px solid var(--linea); }
     td { display: block; border: 0; padding: 0; }
     td.clave, td.producto { flex: 0 0 100%; width: auto; }
-    td.numero, td.cantidad, td.acciones, td.precios { width: auto; text-align: left; }
+    td.numero, td.cantidad, td.acciones, td.precios, td.proveedor { width: auto; text-align: left; }
+    td.proveedor { flex: 0 0 100%; margin-top: .45rem; }
+    td.proveedor::before { content: "Se le pide a "; color: var(--tenue); font-size: .78rem; }
+    .particion .pedido { grid-template-columns: 1fr auto; }
     /* El botón se va a su propio renglón, pegado a la izquierda: a 375 px
        compartir línea con la cantidad dejaba las dos cosas apretadas contra
        los bordes y el objetivo táctil a menos de 2.2 rem. */
@@ -433,11 +482,17 @@
           <th class="numero">Días de cobertura</th>
           <th class="cantidad">Cantidad a pedir</th>
           <th class="precios">Precio de proveedor</th>
+          <th class="proveedor">Se le pide a</th>
           <th class="acciones">Quitar</th>
         </tr>
       </thead>
       <tbody id="pedido-renglones"></tbody>
     </table>
+    <!-- EN QUÉ SE PARTE LA LISTA (ticket 20). Debajo de la tabla y no arriba:
+         primero se decide a quién se le pide cada renglón y después se mira en
+         cuántos pedidos queda y cuánto suma cada uno. Lo de dentro se pinta
+         entero desde el servidor: ni un total se calcula aquí. -->
+    <div class="particion" id="particion" hidden></div>
     <details class="descartados" id="descartados" hidden>
       <summary id="descartados-resumen"></summary>
       <ul id="descartados-lista"></ul>
@@ -1064,8 +1119,99 @@ const renglon = (r, acciones) => {
   celdaAcciones.append(quitar);
 
   tr.append(clave, producto, existencia, cobertura, cantidad,
-            celdaDePrecios(r, acciones), celdaAcciones);
+            celdaDePrecios(r, acciones),
+            celdaDeProveedor(r, acciones.editable, acciones.elegirProveedor),
+            celdaAcciones);
   return tr;
+};
+
+// A QUIÉN SE LE PIDE ESTE RENGLÓN (ticket 20).
+//
+// Un desplegable con los cuatro y **ninguna opción vacía**: siempre hay algo
+// seleccionado, o no hay a quién pedirle y entonces no hay desplegable que
+// tocar. La opción que viene marcada es la elección —la de la persona si la
+// hubo, y si no la sugerencia del sistema— y **cuál de las dos es se dice con
+// todas sus letras debajo**, porque son dos cosas distintas: el ticket 11 ya
+// pagó por distinguir "nadie la tocó" de "alguien la confirmó" en la cantidad,
+// y aquí vale lo mismo.
+//
+// Ninguna regla vive en este archivo. Qué proveedor va marcado, si eso es una
+// decisión, si difiere de lo sugerido y qué frase le toca llegan resueltos en
+// `r.eleccion`, de `particion.elegir` — que es una función pura con su tabla de
+// casos. Elegir aquí el "más barato" habría metido la regla que decide a quién
+// se le compra en el único archivo que ninguna prueba de Python mira.
+const celdaDeProveedor = (r, editable, alElegir) => {
+  const td = document.createElement('td');
+  td.className = 'proveedor';
+  td.dataset.etiqueta = 'Se le pide a';
+
+  const e = r.eleccion || null;
+  if (!e) return td;
+
+  if (!e.hay) {
+    // Sin a quién pedirle. NO es un error: o hay empate —y el sistema no
+    // desempata, porque elegir por orden alfabético sería una decisión que
+    // nadie tomó— o todavía no hay precios con los que sugerir. El renglón se
+    // ve entero y espera.
+    const sin = document.createElement('span');
+    sin.className = 'eleccion-sin';
+    sin.textContent = e.motivo || 'sin proveedor';
+    td.append(sin);
+    if (e.nombres_empatados && e.nombres_empatados.length) {
+      const empate = document.createElement('span');
+      empate.className = 'eleccion-de';
+      empate.textContent = 'Igual de baratos: ' + e.nombres_empatados.join(' y ') + '.';
+      td.append(empate);
+    }
+    // Y aun así se puede elegir: la elección no se revisa contra el precio.
+    // Es lo que permite pedirle a quien no contestó hoy (quinta casilla).
+  }
+
+  const campo = document.createElement('select');
+  campo.className = 'eleccion-campo';
+  campo.disabled = !editable;
+  campo.setAttribute('aria-label', 'A quién se le pide ' + r.descripcion);
+  PROVEEDORES.forEach(p => {
+    const opcion = document.createElement('option');
+    opcion.value = p.proveedor;
+    opcion.textContent = p.nombre;
+    if (p.proveedor === e.proveedor) opcion.selected = true;
+    campo.append(opcion);
+  });
+  if (!e.hay) {
+    // Con "sin proveedor" no se puede dejar el desplegable enseñando el
+    // primero de la lista como si estuviera elegido: eso sería exactamente
+    // inventar una decisión. Se antepone una opción que dice lo que pasa.
+    const ninguno = document.createElement('option');
+    ninguno.value = '';
+    ninguno.textContent = '— elige —';
+    ninguno.selected = true;
+    campo.prepend(ninguno);
+  }
+  campo.addEventListener('change', () => alElegir(r, campo));
+  td.append(campo);
+
+  if (e.hay) {
+    const quien = document.createElement('span');
+    if (e.es_decision) {
+      quien.className = 'eleccion-de' + (e.difiere_de_la_sugerencia ? ' distinta' : '');
+      quien.textContent = 'Lo eligió ' + (e.elegido_por || 'sin-identificar')
+        + (e.difiere_de_la_sugerencia
+            ? '. El sistema sugería ' + e.nombre_sugerido + '.'
+            : '.');
+    } else {
+      // SUGERENCIA, no decisión. La certeza viene hecha del servidor —"el más
+      // barato con existencia", "el único que contestó"— y se escribe tal
+      // cual: es lo que dice QUÉ se está afirmando de ese proveedor, y el
+      // ticket 15 ya pagó por que esa frase no se elija aquí.
+      quien.className = 'eleccion-de sugerida';
+      quien.textContent = 'Lo sugiere el sistema'
+        + (e.certeza ? ': ' + e.certeza + '.' : '.');
+    }
+    td.append(quien);
+  }
+
+  return td;
 };
 
 // Un renglón ya descartado, en el bloque de abajo. Es una lista y no una tabla
@@ -1298,6 +1444,12 @@ async function cargarPedido() {
     return;
   }
 
+  // Quiénes son los cuatro y cómo se escribe cada nombre, del SERVIDOR. No
+  // escritos a mano aquí: el glosario manda sobre el nombre de cualquier cosa
+  // y `precios.NOMBRES_DE_PROVEEDOR` es donde vive. De paso viene cuál tiene
+  // `pro_id` de SICAR y cuál no (ticket 20).
+  if (Array.isArray(datos.puente)) PROVEEDORES = datos.puente;
+
   corte.innerHTML = '';
   corte.append('Ventas ');
   const cuando = document.createElement('strong');
@@ -1383,6 +1535,7 @@ async function cargarPedido() {
       editable: datos.estado === 'abierto',
       descartar: descartar,
       ajustar: ajustar,
+      elegirProveedor: elegirProveedor,
       consultarPrecio: consultarPrecio,
       completar: completarLoQueFalta,
       abrirSesion: abrirSesion,
@@ -1422,6 +1575,12 @@ async function cargarPedido() {
     // molestar a cuatro portales por mercancía que alguien ya decidió no pedir.
     pintarCorrida(datos.corrida);
     pintarCompletar(datos.faltantes, datos.sesiones_caducadas, acciones);
+    // En qué se parte la lista, en cada repintado y por lo mismo que el
+    // conteo: elegir proveedor la cambia de la manera obvia, y descartar y
+    // ajustar también — uno saca un renglón de un pedido y el otro le cambia
+    // el importe. Una vista previa vieja mandaría a apretar "Partir" sobre
+    // números que ya no son.
+    pintarParticion(datos.particion, datos.pedidos, acciones.editable, partir);
     tabla.hidden = false;
   };
 
@@ -1451,11 +1610,34 @@ async function cargarPedido() {
     // botón de completar y devolver lo mete. `null` cuando el servidor no pudo
     // releer los precios — ahí se conserva el anterior, viejo pero verdadero.
     if (respuesta.faltantes) datos.faltantes = respuesta.faltantes;
+    // Y la partición, por lo mismo: `null` cuando el servidor no pudo releer
+    // los precios, y entonces se conserva la anterior — vieja pero verdadera.
+    if (respuesta.particion) datos.particion = respuesta.particion;
     repintar();
   };
 
   function descartar(r, boton) {
     moverRenglon(r.renglon_id, '/descartar', boton, aplicar);
+  }
+
+  // Elegir a quién se le pide un renglón. **La persona decide**, y por eso
+  // esto se manda aunque el proveedor elegido sea el que el sistema ya
+  // sugería: confirmar la sugerencia ES una decisión, igual que confirmar la
+  // cantidad propuesta en el ticket 11, y es lo único que después distingue un
+  // renglón que alguien miró de uno que nadie miró.
+  //
+  // No se comprueba nada del precio: se puede elegir a un proveedor que no
+  // contestó hoy. Hay razones que el sistema no ve — mínimo de pedido, días de
+  // entrega, crédito—, y el renglón entra al pedido con la marca de precio
+  // desconocido.
+  function elegirProveedor(r, campo) {
+    const proveedor = campo.value;
+    if (!proveedor) return;
+    moverRenglon(r.renglon_id, '/proveedor', campo, aplicar, { proveedor },
+      () => {
+        const antes = (r.eleccion && r.eleccion.proveedor) || '';
+        campo.value = antes;
+      });
   }
 
   function devolver(r, boton) {
@@ -1491,6 +1673,50 @@ async function cargarPedido() {
     if (r.fue_ajustada && cantidad === r.cantidad_a_pedir) return;
     moverRenglon(r.renglon_id, '/cantidad', campo, aplicar, { cantidad },
       () => { campo.value = r.cantidad_a_pedir; });
+  }
+
+  // PARTIR LA LISTA EN PEDIDOS (ticket 20).
+  //
+  // Se puede apretar cuantas veces haga falta: la garantía de que no se
+  // dupliquen es de la BASE —`ux_pedido_proveedor`, uno por proveedor dentro
+  // de la misma lista— y no de deshabilitar el botón. Deshabilitarlo mientras
+  // viaja es solo para no invitar a un segundo clic que no hace falta.
+  //
+  // La respuesta trae la lista ENTERA, no un renglón: partir mueve el
+  // `pedido_id` de muchos a la vez y los totales de todos los pedidos. Es la
+  // única operación de esta pantalla que lo hace, y por eso no pasa por
+  // `moverRenglon`.
+  async function partir(boton) {
+    boton.disabled = true;
+    nota('pedido-accion', '');
+
+    let respuesta;
+    try {
+      respuesta = await (await fetch(
+        '/api/pedido-sugerido/' + datos.pedido_sugerido_id + '/partir',
+        { method: 'POST' })).json();
+    } catch (e) {
+      boton.disabled = false;
+      nota('pedido-accion',
+        'Continental no contestó. La lista se quedó como estaba; inténtalo otra vez.', 'mal');
+      return;
+    }
+
+    if (!respuesta.ok) {
+      boton.disabled = false;
+      // Genérico a propósito (regla 5 de CLAUDE.md): el detalle está en la
+      // bitácora del servidor.
+      nota('pedido-accion', respuesta.detalle || 'No se pudo partir la lista.', 'aviso');
+      return;
+    }
+
+    datos = respuesta;
+    if (Array.isArray(datos.puente)) PROVEEDORES = datos.puente;
+    conteoEnvejecido = false;
+    repintar();
+    nota('pedido-accion',
+      'Lista partida en ' + plural((datos.pedidos || []).length, 'pedido', 'pedidos')
+      + '. Siguen en borrador: se pueden cambiar y volver a partir.', 'todo');
   }
 
   // Consultar el precio en los cuatro proveedores (ticket 12).
@@ -2006,6 +2232,133 @@ const pintarCompletar = (faltantes, sesiones, acciones) => {
       bloque.append(fila);
     });
     caja.append(bloque);
+  }
+
+  caja.hidden = false;
+};
+
+// Los cuatro proveedores tal como el servidor los nombra, para el desplegable
+// de cada renglón. Se llena en la carga desde `datos.puente` y **no está
+// escrito a mano aquí**: la lista de quiénes son, cómo se escribe cada nombre y
+// cuál tiene `pro_id` de SICAR vive en Python, en un solo lugar.
+let PROVEEDORES = [];
+
+// EN QUÉ SE PARTE LA LISTA (ticket 20).
+//
+// Dos cosas distintas en el mismo bloque, y se dicen por separado:
+//
+//   - la PARTICIÓN, que es el cálculo de ahora mismo: en cuántos pedidos
+//     quedaría y cuánto sumaría cada uno si se apretara el botón;
+//   - los PEDIDOS, que son las filas que ya existen, con su estado.
+//
+// Ningún número se calcula aquí. Los totales, el parcial, cuántas líneas van
+// sin precio y cuáles proveedores no tiene SICAR llegan de `particion.partir`,
+// que es puro y tiene su tabla de casos.
+const pintarParticion = (particion, pedidos, editable, alPartir) => {
+  const caja = document.getElementById('particion');
+  if (!particion) { caja.hidden = true; caja.replaceChildren(); return; }
+
+  caja.replaceChildren();
+
+  const titular = document.createElement('b');
+  titular.textContent = particion.hay
+    ? 'Esta lista se parte en ' + plural(particion.pedidos.length, 'pedido', 'pedidos')
+      + ', uno por proveedor'
+    : 'Todavía no hay en qué partir esta lista';
+  caja.append(titular);
+
+  const detalle = document.createElement('span');
+  detalle.className = 'detalle';
+  detalle.textContent = particion.hay
+    ? plural(particion.renglones_repartidos, 'renglón repartido', 'renglones repartidos')
+      + '. Cada pedido se puede volver a armar mientras siga en borrador: '
+      + 'cambia el proveedor de un renglón y vuelve a partir.'
+    : 'Elige a quién se le pide cada renglón, o consulta los precios para que '
+      + 'el sistema pueda sugerirlo.';
+  caja.append(detalle);
+
+  // Un pedido por proveedor, con su total. El estado sale del pedido GUARDADO
+  // cuando lo hay: "borrador" es un hecho de la tabla, no de este cálculo.
+  const guardados = new Map((pedidos || []).map(p => [p.proveedor, p]));
+  particion.pedidos.forEach(p => {
+    const fila = document.createElement('div');
+    fila.className = 'pedido';
+
+    const quien = document.createElement('span');
+    quien.className = 'quien';
+    quien.textContent = p.nombre;
+
+    const que = document.createElement('span');
+    que.textContent = plural(p.renglones, 'renglón', 'renglones')
+      + ' · ' + plural(p.piezas, 'pieza', 'piezas');
+
+    // EL TOTAL, O POR QUÉ NO SE SABE. `null` no se pinta como una cifra y
+    // jamás como "$0.00": un cero ahí se leería "este pedido no cuesta nada",
+    // que es lo contrario de lo que pasa. El parcial sí se enseña, con el
+    // conteo de lo que le falta al lado — el dato que hay no se esconde.
+    const cuanto = document.createElement('span');
+    cuanto.className = 'cuanto' + (p.hay_total ? '' : ' nose');
+    cuanto.textContent = p.hay_total ? '$' + p.total_sin_iva : 'total sin saber';
+    fila.append(quien, que, cuanto);
+
+    if (!p.hay_total && p.renglones) {
+      const marca = document.createElement('span');
+      marca.className = 'marca';
+      marca.textContent = plural(p.sin_precio, 'renglón va sin precio', 'renglones van sin precio')
+        + ' de ' + p.nombre + ', así que el total no se puede sumar. Lo que sí '
+        + 'se sabe suma $' + p.parcial_sin_iva + '. Se pide igual.';
+      fila.append(marca);
+    }
+
+    // SICAR NO LO CONOCE. Se dice y no se esconde: el pedido se arma igual,
+    // con `proveedor_id` en NULL. Hoy es el caso de QuePharma, a quien la
+    // farmacia nunca le ha comprado.
+    if (!p.tiene_puente) {
+      const marca = document.createElement('span');
+      marca.className = 'marca tenue';
+      marca.textContent = p.nombre + ' ' + p.estado_del_puente
+        + ': se le puede pedir igual, pero la compra no se va a poder cruzar '
+        + 'sola con SICAR cuando llegue.';
+      fila.append(marca);
+    }
+
+    const guardado = guardados.get(p.proveedor);
+    if (guardado) {
+      const marca = document.createElement('span');
+      marca.className = 'marca tenue';
+      marca.textContent = 'Pedido ' + guardado.pedido_id + ', ' + guardado.estado
+        + ', armado ' + instanteEnPalabras(guardado.armado_en) + '.';
+      fila.append(marca);
+    }
+
+    caja.append(fila);
+  });
+
+  // LOS QUE NO SE REPARTEN A NADIE. Se cuentan y se dicen: un renglón que se
+  // cayera de la partición en silencio es mercancía que va a faltar sin que
+  // nadie se entere, que es lo mismo que CONTEXT.md prohíbe para los productos
+  // sin anaquel.
+  if (particion.cuantos_sin_proveedor) {
+    const sin = document.createElement('span');
+    sin.className = 'detalle';
+    sin.textContent = plural(particion.cuantos_sin_proveedor,
+      'renglón se queda fuera', 'renglones se quedan fuera')
+      + ': todavía no hay a quién pedírselos. No se pierden — siguen en la '
+      + 'lista y entran en cuanto alguien elija proveedor.';
+    caja.append(sin);
+  }
+
+  if (particion.hay) {
+    const fila = document.createElement('div');
+    fila.className = 'fila';
+    const boton = botonDeAccion(
+      pedidos && pedidos.length ? 'Volver a partir' : 'Partir en pedidos',
+      (b) => alPartir(b));
+    boton.disabled = !editable;
+    boton.title = 'Arma un pedido por proveedor con los renglones de arriba. '
+      + 'Se puede volver a hacer mientras los pedidos sigan en borrador.';
+    fila.append(boton);
+    caja.append(fila);
   }
 
   caja.hidden = false;

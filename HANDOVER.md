@@ -157,12 +157,66 @@ afuera—, lo dice en el journal con el **tipo** de la falla y nunca el texto (e
 texto de un error de `httpx` lleva la URL completa, y la URL completa **es** el
 token). Lo mismo vale para la fila de `corrida_del_lote`: va en su propio `try`.
 
+**Y desde el ticket 20 la comparación se vuelve una decisión: la lista se parte
+en pedidos, uno por proveedor.** Cada renglón dice a quién se le pide —por
+omisión el más barato con existencia, que es el ganador del ticket 14— y **una
+persona puede cambiarlo**, porque hay razones que el sistema no ve: mínimo de
+pedido, días de entrega, crédito con cada proveedor (ADR 0002). Un botón
+convierte la lista en un pedido por proveedor, con su total y sus renglones
+dentro; los pedidos **nacen en `borrador`** y se pueden volver a armar mientras
+sigan así.
+
+**Lo sugerido NO se guarda y lo decidido SÍ, y ésa es la decisión del ticket.**
+Es la misma pregunta que el 11 resolvió con `cantidad_propuesta` /
+`cantidad_final`, y **aquí la respuesta es distinta a propósito**: la sugerencia
+se recalcula de `comparacion.elegir_ganador`, que es pura sobre una tabla de
+precios que solo crece (ADR 0004), mientras que `cantidad_propuesta` **no se
+puede recalcular** —sale de las ventas de una ventana que ya pasó—. Una
+sugerencia guardada además envejece sin avisar: si a las 8 era NADRO y a las 9
+llega un LEVIC más barato, la columna seguiría diciendo NADRO y nadie podría
+distinguir esa cifra vieja de una decisión que alguien tomó. Así que
+`renglon.proveedor_elegido IS NULL` quiere decir exactamente *nadie eligió*, con
+su firma pareada (`elegido_por`, `elegido_en`) por `ck_renglon_eleccion`.
+
+**El puente entre las claves de Doyle y `proveedor_id` de SICAR no existía en
+ninguna parte, y el ADR 0008 lo resuelve.** La comparación entera habla en
+`nadro`/`levic`/`vicma`/`quepharma`; `pedidos.pedido` hablaba en `pro_id`. Ahora
+**la identidad del pedido es la clave de Doyle** (`pedido.proveedor`, `NOT
+NULL`) y `proveedor_id` es una **correspondencia que puede faltar**: admite
+nulos. Y no es un caso hipotético — **QuePharma no está en
+`marts.dim_proveedor`** (22 filas, leídas en atlas el 2026-09-19: NADRO es el 1,
+VICMA el 8, LEVIC el 10) porque la farmacia nunca le ha comprado. Se le puede
+pedir igual, con `proveedor_id` en `NULL` y la pantalla diciéndolo. El mapa vive
+en `config/continental.yml` (`pedido.proveedores_en_sicar`) y **guarda el id y
+no el nombre**: el `pro_id` no cambia cuando SICAR renombra.
+
+**Tres cosas del 20 que conviene no redescubrir.** (1) `ux_pedido_proveedor`
+**tuvo que moverse** de `proveedor_id` a `proveedor`: con la columna admitiendo
+nulos, un UNIQUE sobre ella deja de impedir nada —en Postgres dos nulos no son
+iguales— y dos pedidos a QuePharma entrarían los dos. (2) **Un renglón dentro de
+un pedido en borrador sigue `abierto`**, no pasa a `en tránsito`: el glosario
+define ese estado como "ya se le pidió a un proveedor" y un borrador no se le ha
+pedido a nadie; lo pone el ticket 21 al enviar. (3) **El total de un pedido es
+`NULL` en cuanto una línea va sin precio**, jamás la suma de las demás: un total
+parcial se compara contra la factura del proveedor, no cuadra, y nadie sabe si
+falta mercancía o falta un precio. El parcial viaja aparte con su conteo.
+
 ```bash
 python iniciar.py     # http://127.0.0.1:8585
 python -m continental.verificar   # los datos de producción, no el código (ticket 17)
 python -m continental.lote        # el lote nocturno, a mano (ticket 18)
 python -m continental.lote --tope-minutos 5   # ...con tope corto, para mirarlo
-pytest                # 749 pruebas, 0 saltadas, 3.55-4.46 s (2026-09-19, ticket 19)
+pytest                # 824 pruebas, 0 saltadas, 2.85-3.11 s (2026-09-19, ticket 20)
+                      # 749 en el 19. Las 76 nuevas son 35 de
+                      # `test_particion.py` (lo puro: elegir, partir,
+                      # totalizar, y el puente con SICAR), 38 de
+                      # `test_pedidos.py` (lo que se guarda, lo que se ve y lo
+                      # que dicen los .sql) y 3 que `test_compila.py` gana sola
+                      # —sus parametrizadas recorren los .py y los .sql, y hay
+                      # dos modulos y una migracion mas—. NINGUNA TOCA POSTGRES
+                      # y ninguna duerme.
+                      #
+                      # 749 pruebas, 0 saltadas, 3.55-4.46 s (2026-09-19, ticket 19)
                       # 628 en el 18. Las 121 nuevas son 83 de `test_motivos.py`,
                       # 34 de `test_latido.py`, 2 que `test_sql_del_pedido.py`
                       # gana solo —sus parametrizadas recorren TABLAS, que pasó
@@ -206,6 +260,7 @@ pytest                # 749 pruebas, 0 saltadas, 3.55-4.46 s (2026-09-19, ticket
 | `docs/decisiones/0005` | dónde escucha Continental: el gateway de la red `borde`, no loopback |
 | `docs/decisiones/0006` | el lote nocturno: la hora, el tope, qué pasa con lo que no alcanzó, y por qué la bitácora es el journal y no una tabla nueva |
 | `docs/decisiones/0007` | la corrida del lote en **una fila por noche**, y por qué la pantalla deduce de ahí "el lote no llegó a este renglón" en vez de escribir cuatro huecos por renglón. Reabre la opción β del 0006 por su condición de disparo |
+| `docs/decisiones/0008` | **el puente que no existía**: el pedido se identifica por la clave de Doyle y el `proveedor_id` de SICAR es una correspondencia que puede faltar. Por qué el mapa va en el YAML y guarda el id y no el nombre, y por qué el UNIQUE tuvo que moverse |
 | `sql/` | el DDL de las **cinco** tablas, el rol acotado y `verificar_rol.sql`, que mira la **forma** de la base. **Se corren a mano, en ese orden, con credenciales de dueño** — no confundirlo con `continental.verificar`, que mira los **datos** en cada despliegue (la cabecera de ese módulo tiene la tabla que los separa) |
 | `sql/migraciones/` | lo que le falta a una base donde las tablas YA existen: `crear_tablas.sql` usa `CREATE TABLE IF NOT EXISTS` y calla si la tabla ya está con otra forma. También a mano y con credenciales de dueño |
 | `config/continental.yml` | puertos de los módulos y los parámetros del pedido |
@@ -216,6 +271,8 @@ pytest                # 749 pruebas, 0 saltadas, 3.55-4.46 s (2026-09-19, ticket
 | `src/continental/lote.py` | el lote nocturno. Tres mitades: lo **puro** —el orden por clase ABC, el cronómetro del tope, el resumen de la corrida—, la **orquestación** (`correr_el_lote`, con los tres bordes por argumento) y el **arranque** (`main`, lo único que construye bordes de verdad). El reloj entra por argumento: una prueba de sesenta minutos cuesta microsegundos |
 | `src/continental/verificar.py` | los invariantes sobre los **datos** de producción, no sobre el código. Mitad pura (recibe listas, devuelve un `Informe`, se prueba) y mitad de recolección (lee de Postgres, no se prueba). Acumula todas las fallas, cada una con su comando de reparación, y sale distinto de cero. Es el paso 6 de `desplegar.sh` |
 | `src/continental/comparacion.py` | funciones puras: las cuatro lecturas congeladas + las piezas -> quién gana, con qué certeza, cuánto se ahorra contra NADRO y, para la lista entera, cuántos renglones quedaron sin comparar (`contar_la_lista`). No toca la red, la base ni el reloj |
+| `src/continental/proveedores.py` | funciones puras: el puente entre la clave de Doyle y el `proveedor_id` de SICAR (ADR 0008). Lee el mapa del YAML, se niega con un aviso a una entrada mal escrita —y deja a ese proveedor "sin puente", que es un estado que el módulo sabe decir— y **nunca devuelve un cero**: `None` es "SICAR no lo conoce" |
+| `src/continental/particion.py` | funciones puras: los renglones + sus comparaciones + el puente -> a quién se le pide cada uno, en cuántos pedidos se parte la lista y cuánto suma cada uno. Ahí vive la decisión del ticket 20 —la sugerencia se recalcula, la decisión se guarda— y la regla de que un total con una línea sin precio es `None` y no una suma parcial |
 | `src/continental/faltantes.py` | funciones puras: la corrida del lote + las comparaciones -> **por qué** le falta el precio a cada renglón, y **cuáles** va a consultar el botón de completar. Ahí vive la decisión cara del ticket 19: qué cuenta como "faltante", que son ~36 s de navegador por renglón de más si se estira |
 | `src/continental/latido.py` | el latido a Uptime Kuma, con monitor propio. `mandar_el_latido` **no levanta nunca** y el borde HTTP entra por argumento, así que ninguna prueba manda uno de verdad. El token vive en `KUMA_PUSH_URL_CONTINENTAL` del `.env`, jamás en el YAML |
 
@@ -510,13 +567,23 @@ más barato y se le pidió a otro.**
    de detalle colgada de `corrida_del_lote_id`, y la función pura ya tiene el
    sitio donde dejar de adivinar (ADR 0007).
 
-4. **El tercer invariante del ticket 17 está DECLARADO, no revisado.** "Ningún
-   pedido enviado sin quién lo envió" necesita dos columnas que `pedidos.pedido`
-   **todavía no tiene**: `estado` y `enviado_por`. Llegan con los tickets 20
-   (los pedidos nacen en `borrador`) y 21 (`borrador` -> `enviado`, firmado con
-   el correo que verificó Access). Inventarlas hoy habría sido escribir un
-   `SELECT` que rebota en atlas con "column does not exist" y dejar el paso 6
-   del despliegue rojo por algo que nadie prometió.
+4. **El tercer invariante del ticket 17 está DECLARADO, no revisado — y desde
+   el ticket 20 le falta UNA columna en vez de dos.** "Ningún pedido enviado sin
+   quién lo envió" necesitaba `estado` y `enviado_por`. **`estado` ya llegó**:
+   `pedidos.pedido` nace en `borrador`. Falta `enviado_por`, que trae el ticket
+   21 (`borrador` -> `enviado`, firmado con el correo que verificó Access).
+
+   **`COLUMNAS_QUE_EXIGE_EL_ENVIO` no cambió, y eso es exactamente lo que se
+   quería**: el ticket 20 usó el nombre que ya estaba escrito ahí, así que el
+   pendiente pasó de nombrar dos columnas a nombrar una **sin que nadie tocara
+   `verificar.py`**. Hay una prueba que lo fija
+   (`test_pedidos.test_el_invariante_del_envio_sigue_pendiente_por_una_sola_columna`).
+
+   Ojo con una tentación que el ticket 20 deja servida: **`estado = 'borrador'`
+   no es "no enviado" en un sentido que este invariante pueda usar**. Lo que se
+   revisa es lo que dice `enviado`, y mientras ese valor no exista en
+   `ck_pedido_estado` no hay nada que contar — contar cero borradores como cero
+   fallas sería dar por bueno un invariante que nadie está sosteniendo.
 
    Cómo quedó: la recolección lee `select * from pedidos.pedido` —que de paso
    es cómo se averigua la forma real de la tabla sin consultar el catálogo— y
@@ -621,7 +688,66 @@ más barato y se le pidió a otro.**
    sí se compran. Solo es seguro saltarse lo que dice `abarrote` con todas sus
    letras.
 
-12. **El día del corte se cierra a medias y ese pedacito se pierde.** El
+13. **El total de un pedido en borrador envejece si alguien corrige una
+   cantidad después de partir.** `pedido.total_sin_iva` se escribe al partir y
+   se vuelve a escribir en cada repartición; entre las dos, ajustar la cantidad
+   de un renglón que ya está dentro de un pedido **no lo recalcula**. La cifra
+   se queda enseñando lo que costaba hace un rato, con su `armado_en` al lado
+   —que es lo único que permite notarlo—.
+
+   **Está a medias a propósito y hay que decirlo así**: la tercera casilla del
+   ticket 20 pide que un borrador se pueda modificar, así que negar el ajuste
+   habría sido peor. Se consideró poner el total en `NULL` cuando se toca un
+   renglón repartido —lo honesto—, y se dejó fuera para no meterle una segunda
+   sentencia a la ruta del ticket 11 sin poder probarla contra Postgres.
+
+   **Condición de disparo, y le toca al ticket 21:** enviar un pedido tiene que
+   o recalcular el total al enviar, o negarse a enviar un borrador cuyo
+   `armado_en` sea anterior al último `ajustada_en` de sus renglones. Lo
+   primero es una línea —`particion.partir` ya devuelve el total— y es lo que
+   conviene: un pedido enviado con un total viejo es una cifra que alguien va a
+   comparar contra la factura.
+
+14. **Un pedido que se queda sin renglones no se puede borrar, y se queda a la
+   vista.** Pasa al cambiar una elección y volver a partir: los renglones se van
+   al pedido nuevo y el viejo queda vacío. **No se borra** —el rol no tiene
+   `DELETE` (ADR 0003)— y su total se pone en `NULL`, que es lo honesto: un
+   pedido vacío no cuesta `0.00`, no tiene nada. La pantalla lo enseña igual,
+   con cero renglones.
+
+   Es feo y es preferible a las dos alternativas: darle `DELETE` al rol abriría
+   la condición de revisión del ADR 0003 entera por un caso cosmético, y
+   esconderlo de la pantalla dejaría filas que existen y no se ven. **Condición
+   de disparo:** si el encargado se queja de pedidos fantasma, lo que hace falta
+   es un estado `cancelado` en `ck_pedido_estado` —que el ticket 21 va a tocar
+   de todas formas— y no un `DELETE`.
+
+15. **La incoherencia del descarte sigue puesta, y este ticket NO la empeoró.**
+   Descartar un renglón funciona aunque la lista esté `cerrada`: el ticket 10
+   solo le puso el estado del **renglón** a su `WHERE`. Ajustar la cantidad sí
+   exige lista abierta (ticket 11), y **elegir proveedor y partir se pusieron
+   del lado estricto** —los dos llevan `s.estado = 'abierto'` en su `WHERE`—,
+   porque armar un pedido dentro de una lista que ya se pidió es justo lo que
+   `cerrado` significa que no debe pasar.
+
+   Así que hoy conviven dos criterios sobre la misma lista cerrada: descartar
+   entra, y corregir / elegir / partir no. **No se arregló de paso**: mover el
+   descarte es cambiar el comportamiento de un ticket cerrado y necesita su
+   propia decisión —¿se puede descartar algo de una lista que ya se pidió? el
+   glosario dice que `descartado` es "una persona decidió no pedirlo", y sobre
+   una lista cerrada eso ya no tiene efecto—. **Condición de disparo:** cuando
+   alguien toque la ruta de descartar por cualquier otra razón, se arregla ahí,
+   con una prueba que lo fije.
+
+16. **Nadie lee todavía `marts.dim_proveedor`, y el GRANT sigue sin
+   ejercitarse.** El puente entero vive en `config/continental.yml`, así que el
+   nombre que SICAR le da a un proveedor no se muestra en ningún sitio. Eso
+   significa que un `dbt build` que se lleve ese permiso por delante **no se
+   notaría** hasta que alguien lo use. El paso 2 del final de `sql/crear_rol.sql`
+   —agregarle `grants` a `dim_proveedor.sql` en farmacia-data, que hoy **no tiene
+   ninguno**— sigue pendiente y ahora importa más que ayer.
+
+17. **El día del corte se cierra a medias y ese pedacito se pierde.** El
    respaldo de SICAR corta a las 18:51, así que el último día del almacén
    siempre está incompleto: lo que se venda después llega al día siguiente. El
    sugerido acumula desde el corte del último cerrado y **arranca al día

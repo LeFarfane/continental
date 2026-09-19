@@ -30,6 +30,7 @@ from continental.almacenamiento import (
     RENGLON_ABIERTO,
     AlmacenamientoDelPedido,
     CorridaDelLote,
+    PedidoGuardado,
     PedidoSugeridoGuardado,
     Ventana,
     dias_primera_vez_configurados,
@@ -62,7 +63,14 @@ from continental.faltantes import (
     por_que_no_hay_lectura,
     proveedores_con_sesion_caducada,
 )
-from continental.precios import nombre_del_proveedor
+from continental.particion import (
+    eleccion_como_json,
+    elegir,
+    particion_como_json,
+    partir,
+)
+from continental.precios import NOMBRES_DE_PROVEEDOR, nombre_del_proveedor
+from continental.proveedores import puente_como_json, puente_configurado
 from continental.sugerido import armar_la_lista
 from continental.vistas import VISTAS
 from continental.web.dependencias import (
@@ -341,8 +349,32 @@ def pedido_sugerido(
         )
         precios = {}
 
-    return _como_json(guardado, precios, _ultima_corrida(almacenamiento, negocio,
-                                                         guardado.pedido_sugerido_id))
+    # Los pedidos en que ya se partió esta lista (ticket 20). Una consulta más
+    # por carga, de un puñado de filas -- como mucho una por proveedor--, y
+    # viaja en la MISMA respuesta que la lista por la misma razón que los
+    # precios y la corrida: dos lecturas en dos momentos pueden no coincidir y
+    # nadie sabría cuál tiene razón.
+    #
+    # Su falla es un hueco y no tumba la lista: `None` quiere decir "no se
+    # pudo saber en qué está partida", que la pantalla escribe en vez de
+    # enseñar cero pedidos sobre una lista que sí está partida.
+    try:
+        pedidos = almacenamiento.pedidos_de_la_lista(
+            negocio, guardado.pedido_sugerido_id
+        )
+    except Exception:  # noqa: BLE001 — sin los pedidos la lista sigue sirviendo
+        log.exception(
+            "No se pudieron leer los pedidos de la lista %s",
+            guardado.pedido_sugerido_id,
+        )
+        pedidos = None
+
+    return _como_json(
+        guardado,
+        precios,
+        _ultima_corrida(almacenamiento, negocio, guardado.pedido_sugerido_id),
+        pedidos,
+    )
 
 
 @app.post("/api/pedido-sugerido/{pedido_sugerido_id}/cerrar")
@@ -544,6 +576,27 @@ class CantidadNueva(BaseModel):
     cantidad: int
 
 
+class ProveedorElegido(BaseModel):
+    """Lo único que el navegador manda al elegir: la clave del proveedor.
+
+    La **clave de Doyle** (`nadro`, `levic`, `vicma`, `quepharma`) y no el
+    `proveedor_id` de SICAR, y esa es la decisión del ADR 0008 asomando por la
+    interfaz: se le pide a quien se le preguntó el precio. Mandar el id de SICAR
+    haría imposible elegir a QuePharma, que no tiene fila en `dim_proveedor`.
+
+    Un cuerpo y no un parámetro en la ruta, por la misma razón que
+    `CantidadNueva`: es un dato y no la identidad de nada, y quedaría escrito
+    en la bitácora de accesos del túnel junto a todo lo demás.
+
+    `str` pelado, sin `Literal[...]` de pydantic, y por lo mismo que la
+    cantidad no lleva `ge=1`: FastAPI contestaría en inglés y sin decir cuáles
+    son los cuatro. La comprobación se hace abajo, a mano, con el texto que los
+    enumera.
+    """
+
+    proveedor: str
+
+
 @app.post("/api/renglon/{renglon_id}/cantidad")
 def ajustar_la_cantidad_del_renglon(
     renglon_id: int,
@@ -630,6 +683,202 @@ def ajustar_la_cantidad_del_renglon(
         ),
         nota=f"La cantidad a pedir queda en {cuerpo.cantidad}.",
         almacenamiento=almacenamiento,
+    )
+
+
+@app.post("/api/renglon/{renglon_id}/proveedor")
+def elegir_el_proveedor_del_renglon(
+    renglon_id: int,
+    cuerpo: ProveedorElegido,
+    request: Request,
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+):
+    """Marcar a quién se le pide este renglón. **La persona decide.**
+
+    El sistema sugiere el más barato con existencia y esa sugerencia ya viaja en
+    cada renglón, calculada. Lo que esta ruta guarda es **otra cosa**: que
+    alguien la miró y decidió, aunque haya decidido lo mismo. *Hay razones que
+    el sistema no ve —mínimo de pedido, días de entrega, crédito con cada
+    proveedor—* (ADR 0002), y ninguna de las tres está en ningún dato que
+    Continental tenga.
+
+    **Lo sugerido no se guarda y lo decidido sí.** Es la misma pregunta que el
+    ticket 11 resolvió con dos columnas y aquí la respuesta es distinta a
+    propósito: la sugerencia se recalcula de una función pura sobre precios que
+    solo crecen, así que una copia guardada sería un segundo hecho que envejece
+    sin avisar. El porqué entero está en el encabezado de `particion.py`.
+
+    **Se puede elegir a un proveedor que no dio precio**, y no es un descuido:
+    es la quinta casilla del ticket. El renglón entra al pedido con la marca de
+    *precio desconocido*, nunca con un cero. Por eso este `if` solo comprueba
+    que la clave sea una de las que Doyle conoce —una clave inventada no
+    cruzaría con ninguna lectura ni con el puente hacia SICAR— y no comprueba
+    nada sobre el precio.
+
+    Un 409 y no un 500 cuando no hay nada que elegir: el renglón no existe, es
+    de otro negocio, ya no está `abierto`, **o su lista ya no está abierta**.
+    Los cuatro casos se ven igual desde fuera, igual que en el descarte y en el
+    ajuste.
+
+    Es `def` y no `async def` a propósito: el borde es síncrono y así FastAPI lo
+    corre en su pool de hilos.
+    """
+    if cuerpo.proveedor not in NOMBRES_DE_PROVEEDOR:
+        log.info(
+            "%s intentó elegir el proveedor %r para el renglón %s. Se rechazó: "
+            "no es uno de los que Doyle consulta.",
+            quien(request),
+            cuerpo.proveedor,
+            renglon_id,
+        )
+        return JSONResponse(
+            status_code=422,
+            content={
+                "ok": False,
+                "detalle": (
+                    "Ese proveedor no es ninguno de los cuatro que se consultan: "
+                    + ", ".join(NOMBRES_DE_PROVEEDOR.values())
+                    + "."
+                ),
+            },
+        )
+
+    return _mover_el_renglon(
+        renglon_id,
+        request,
+        lambda negocio, firma: almacenamiento.elegir_proveedor(
+            negocio, renglon_id, cuerpo.proveedor, firma
+        ),
+        verbo="elegir el proveedor del renglón",
+        choque=(
+            "Ese renglón ya no se puede cambiar: o la lista dejó de estar "
+            "abierta, o el renglón ya no está abierto. Vuelve a cargar la "
+            "página para ver cómo quedó."
+        ),
+        nota=f"Se le pide a {nombre_del_proveedor(cuerpo.proveedor)}.",
+        almacenamiento=almacenamiento,
+    )
+
+
+@app.post("/api/pedido-sugerido/{pedido_sugerido_id}/partir")
+def partir_en_pedidos(
+    pedido_sugerido_id: int,
+    request: Request,
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+):
+    """Convertir la lista del día en pedidos, uno por proveedor (ticket 20).
+
+    **Se puede partir cuantas veces haga falta mientras los pedidos sigan en
+    `borrador`, y eso no es un descuido: es lo que los mantiene al día.** La
+    garantía la da la base y no este código: `ux_pedido_proveedor` es *uno por
+    proveedor dentro de la misma lista* y `_ABRIR_EL_PEDIDO` la nombra en su
+    `ON CONFLICT ON CONSTRAINT`, así que la segunda partición reencuentra el
+    pedido que ya estaba y le reescribe el total en vez de duplicarlo.
+
+    Qué pasa si entre las dos particiones alguien cambió una elección: el
+    renglón cambia de `pedido_id` —una columna, un solo pedido— y si el pedido
+    de antes se quedó sin renglones **se queda ahí, con total `NULL`**. No se
+    borra porque el rol no tiene `DELETE` (ADR 0003), y su total no es `0.00`
+    porque un pedido vacío no cuesta nada por no tener nada, no por ser gratis.
+
+    Qué pasa con lo que ya no sea `borrador` (ticket 21): no se toca. El `WHERE`
+    del `DO UPDATE` y el `EXISTS` de `_SOLTAR_RENGLONES` lo protegen, así que
+    volver a partir no puede vaciar un pedido que ya está en el portal del
+    proveedor.
+
+    **El cálculo es puro y viaja hecho.** `particion.partir` decide a quién se
+    le pide cada renglón y cuánto suma cada pedido, con su tabla de casos y sin
+    Postgres; esta ruta junta las tres lecturas que hacen falta y llama a
+    escribir. Es el mismo reparto que `comparacion.contar_la_lista`.
+
+    Un 409 cuando no había nada que partir: la lista no existe, es de otro
+    negocio, o **ya no está abierta**. Una lista `cerrada` quiere decir "ya se
+    pidió lo que se iba a pedir" (`CONTEXT.md`), y armar pedidos dentro de ella
+    sería exactamente lo que ese estado significa que no debe pasar.
+    """
+    negocio = cargar().negocio
+    firma = quien(request)
+
+    try:
+        guardado = almacenamiento.leer_por_id(negocio, pedido_sugerido_id)
+        if guardado is None:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "ok": False,
+                    "detalle": (
+                        "Esa lista ya no está: vuelve a cargar la página para "
+                        "ver cómo quedó."
+                    ),
+                },
+            )
+        precios = almacenamiento.precios_de_la_lista(negocio, pedido_sugerido_id)
+        comparaciones = {
+            r.renglon_id: comparar(precios.get(r.renglon_id, ()), r.cantidad_a_pedir)
+            for r in guardado.de_trabajo
+        }
+        particion = partir(
+            guardado.de_trabajo, comparaciones, precios, puente_configurado()
+        )
+        pedidos = almacenamiento.guardar_la_particion(
+            negocio, pedido_sugerido_id, particion.pedidos
+        )
+    except Exception as exc:  # noqa: BLE001 — el almacenamiento caído es un hueco
+        log.exception("No se pudo partir la lista %s", pedido_sugerido_id)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "detalle": f"no se pudo partir la lista ({type(exc).__name__})",
+            },
+        )
+
+    if pedidos is None:
+        log.info(
+            "%s quiso partir la lista %s de %s y no estaba abierta.",
+            firma,
+            pedido_sugerido_id,
+            negocio,
+        )
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "detalle": (
+                    "Esa lista ya no está abierta, así que no se puede partir en "
+                    "pedidos. Vuelve a cargar la página para ver cómo quedó."
+                ),
+            },
+        )
+
+    log.info(
+        "%s partió la lista %s de %s en %d pedido(s): %s. Quedaron %d renglón(es) "
+        "sin proveedor.%s",
+        firma,
+        pedido_sugerido_id,
+        negocio,
+        len(pedidos),
+        ", ".join(f"{p.nombre} ({p.estado})" for p in pedidos) or "ninguno",
+        len(particion.sin_proveedor),
+        (
+            " SICAR no conoce a "
+            + ", ".join(nombre_del_proveedor(p) for p in particion.sin_puente)
+            + ", así que su pedido va sin proveedor_id."
+            if particion.sin_puente
+            else ""
+        ),
+    )
+
+    # La lista entera se vuelve a leer para devolverla con los `pedido_id` ya
+    # puestos en sus renglones. Cuesta una consulta y evita que la pantalla
+    # tenga que adivinar cuál renglón quedó en cuál pedido — que es justo el
+    # tipo de cuenta que el navegador no debe llevar.
+    relectura = almacenamiento.leer_por_id(negocio, pedido_sugerido_id) or guardado
+    return _como_json(
+        relectura,
+        almacenamiento.precios_de_la_lista(negocio, pedido_sugerido_id),
+        _ultima_corrida(almacenamiento, negocio, pedido_sugerido_id),
+        pedidos,
     )
 
 
@@ -1401,6 +1650,33 @@ def _mover_el_renglon(
                 )
             )
         ),
+        # EN QUÉ SE PARTIRÍA LA LISTA AHORA MISMO, recalculada, por la misma
+        # razón que el conteo y los faltantes y con la misma lectura: las
+        # cuatro operaciones que pasan por aquí la mueven. Elegir proveedor la
+        # mueve de la manera más obvia -- el renglón cambia de pedido--, pero
+        # descartar y ajustar también: uno saca un renglón de un pedido y el
+        # otro le cambia el importe. Una vista previa que se quedara vieja
+        # mandaría a apretar "Partir" sobre números que ya no son.
+        #
+        #  cuando no se pudieron leer los precios: la pantalla se queda
+        # con la que tenía, vieja pero verdadera.
+        "particion": (
+            None
+            if por_renglon is None
+            else particion_como_json(
+                partir(
+                    guardado.de_trabajo,
+                    {
+                        r.renglon_id: comparar(
+                            por_renglon.get(r.renglon_id, ()), r.cantidad_a_pedir
+                        )
+                        for r in guardado.de_trabajo
+                    },
+                    por_renglon,
+                    puente_configurado(),
+                )
+            )
+        ),
     }
 
 
@@ -1427,6 +1703,7 @@ def _como_json(
     guardado: PedidoSugeridoGuardado,
     precios: dict | None = None,
     corrida: CorridaDelLote | None = None,
+    pedidos: tuple | None = None,
 ) -> dict:
     """La lista guardada, como la pantalla la lee.
 
@@ -1546,7 +1823,59 @@ def _como_json(
                 [comparaciones[r.renglon_id] for r in guardado.de_trabajo]
             )
         ],
+        # EN QUÉ SE PARTIRÍA LA LISTA SI SE PARTIERA AHORA (ticket 20), y en
+        # qué está partida ya. Son dos cosas distintas y las dos viajan:
+        #
+        # - `particion` es el cálculo, hecho con las elecciones y los precios
+        #   de este instante. Es lo que el botón va a escribir, enseñado antes
+        #   de apretarlo — nadie debería partir a ciegas.
+        # - `pedidos` son las filas que ya existen, con su estado y su total.
+        #   `null` mientras la lista no se haya partido nunca; `[]` cuando se
+        #   partió y no quedó ninguno, que no es lo mismo.
+        #
+        # `puente` va una vez arriba y no repetido en cada renglón: que SICAR
+        # no conozca a QuePharma es una propiedad de la instalación, no de un
+        # producto.
+        "particion": particion_como_json(
+            partir(
+                guardado.de_trabajo,
+                comparaciones,
+                precios or {},
+                puente_configurado(),
+            )
+        ),
+        "pedidos": None if pedidos is None else [_pedido_como_json(p) for p in pedidos],
+        "puente": puente_como_json(puente_configurado()),
         "vistas": _vistas(),
+    }
+
+
+def _pedido_como_json(pedido: PedidoGuardado) -> dict:
+    """Un pedido ya guardado, como la pantalla lo lee.
+
+    `total_sin_iva` viaja como **cadena** o como `null`, nunca como número de
+    JSON ni como cero: el JSON de JavaScript solo tiene `double` y meterlo ahí
+    sería tirar el `numeric(12,2)` justo al salir. `null` quiere decir "no se
+    puede saber" —alguna línea va sin precio, o el pedido se quedó sin
+    renglones— y la pantalla escribe eso, no un `$0.00`.
+
+    `tiene_puente` va resuelto para que el JavaScript no pregunte por un
+    `!== null`: es la misma razón de siempre, y aquí además decide qué frase se
+    escribe cuando SICAR no conoce al proveedor.
+    """
+    return {
+        "pedido_id": pedido.pedido_id,
+        "proveedor": pedido.proveedor,
+        "nombre": pedido.nombre,
+        "proveedor_id": pedido.proveedor_id,
+        "tiene_puente": pedido.tiene_puente,
+        "estado": pedido.estado,
+        "es_borrador": pedido.es_borrador,
+        "armado_en": pedido.armado_en.isoformat(),
+        "total_sin_iva": (
+            None if pedido.total_sin_iva is None else str(pedido.total_sin_iva)
+        ),
+        "hay_total": pedido.total_sin_iva is not None,
     }
 
 
@@ -1679,6 +2008,28 @@ def _renglon_como_json(
             if comparacion is None
             else comparacion
         ),
+        # A QUIÉN SE LE PIDE ESTE RENGLÓN (ticket 20): lo que una persona
+        # decidió, y si nadie decidió, lo que el sistema sugiere. Las dos
+        # viajan juntas y ya resueltas, con la bandera que dice cuál de las dos
+        # es — la pantalla escribe, no deduce.
+        #
+        # **Lo sugerido no está guardado en ninguna columna**: se calcula aquí,
+        # de la misma `Comparacion` que la fila de precios enseña. Es a
+        # propósito, y es la diferencia consciente con el ticket 11 — el porqué
+        # entero está en el encabezado de `particion.py`. La consecuencia buena
+        # está a la vista: el sugerido no puede decir otra cosa que el ganador
+        # que se está pintando al lado, porque es el mismo objeto.
+        "eleccion": eleccion_como_json(
+            elegir(
+                renglon,
+                comparar(precios, renglon.cantidad_a_pedir)
+                if comparacion is None
+                else comparacion,
+            )
+        ),
+        # En qué pedido quedó, o `null` si todavía no se ha partido. Es UNA
+        # columna: un renglón pertenece a un solo pedido.
+        "pedido_id": renglon.pedido_id,
         **_porque_no_hay_lectura_como_json(renglon, comparacion, precios, corrida),
     }
 

@@ -436,6 +436,92 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
                          'ck_corrida_lista')),
  NULL),
 
+-- ------------------------------------- el puente con SICAR y la elección (20)
+--
+-- El ticket 20 no estrena tabla: aprieta dos restricciones que ya existían y
+-- afloja una columna a propósito. Las tres cosas se pueden ver bien en el
+-- archivo y estar mal en la base, y las tres tienen una consecuencia concreta.
+
+-- LA IDENTIDAD DEL PEDIDO ES LA CLAVE DE DOYLE (ADR 0008), Y EL pro_id DE
+-- SICAR PUEDE FALTAR. Si `proveedor` no quedó NOT NULL, se podría guardar un
+-- pedido sin saber a quién se le pide; si `proveedor_id` se quedó NOT NULL, a
+-- QuePharma NO SE LE VA A PODER PEDIR -- no tiene fila en `marts.dim_proveedor`
+-- (22 filas, medido el 2026-09-19) y nunca la ha tenido, porque la farmacia no
+-- le ha comprado. Las dos mitades se miran juntas porque juntas son la
+-- decisión.
+(23,
+ 'El pedido se identifica por la clave de Doyle y el proveedor_id de SICAR puede faltar',
+ 'proveedor NOT NULL, proveedor_id admite nulos',
+ (SELECT coalesce(
+           string_agg(a.attname
+                      || CASE WHEN a.attnotnull THEN ' NOT NULL'
+                              ELSE ' admite nulos' END,
+                      ', ' ORDER BY a.attname DESC),
+           'NO EXISTEN esas columnas')
+    FROM pg_attribute a
+   WHERE a.attrelid = to_regclass('pedidos.pedido')
+     AND a.attname IN ('proveedor', 'proveedor_id')
+     AND NOT a.attisdropped),
+ NULL),
+
+-- "UNO POR PROVEEDOR DENTRO DE LA MISMA LISTA", Y TIENE QUE ESTAR SOBRE LA
+-- CLAVE DE DOYLE. Es la comprobación que caza el error más silencioso de esta
+-- migración: dejar el UNIQUE sobre `proveedor_id` después de permitirle nulos
+-- **no impide nada**, porque en Postgres dos nulos no se consideran iguales
+-- dentro de un UNIQUE. Dos pedidos a QuePharma entrarían los dos -- dos veces
+-- la misma mercancía-- sin un solo error que ver.
+--
+-- Y es además la restricción que `almacenamiento._ABRIR_EL_PEDIDO` nombra en su
+-- `ON CONFLICT ON CONSTRAINT`: con otra definición, partir dos veces dejaría
+-- de reencontrar el pedido que ya estaba.
+(24,
+ 'Uno por proveedor está sobre la CLAVE DE DOYLE y no sobre proveedor_id',
+ 'UNIQUE (pedido_sugerido_id, proveedor)',
+ coalesce(
+   (SELECT pg_get_constraintdef(con.oid)
+      FROM pg_constraint con
+     WHERE con.conrelid = to_regclass('pedidos.pedido')
+       AND con.conname = 'ux_pedido_proveedor'),
+   'NO EXISTE ux_pedido_proveedor'),
+ NULL),
+
+-- UN RENGLÓN PERTENECE A UN SOLO PEDIDO, **Y A UNO DE SU PROPIA LISTA**. Lo
+-- primero lo sostiene que `pedido_id` sea una columna y no una tabla de cruce;
+-- lo segundo es lo que el ticket 20 agregó a la llave. Con solo
+-- `(pedido_id, negocio)`, un renglón de la lista del martes podía colgar de un
+-- pedido de la del lunes: la restricción se cumplía y el total de ese pedido
+-- contaba mercancía de otro día.
+(25,
+ 'Un renglón solo puede colgar de un pedido de SU misma lista',
+ 'FOREIGN KEY (pedido_id, pedido_sugerido_id, negocio) REFERENCES pedidos.pedido(pedido_id, pedido_sugerido_id, negocio)',
+ coalesce(
+   (SELECT pg_get_constraintdef(con.oid)
+      FROM pg_constraint con
+     WHERE con.conrelid = to_regclass('pedidos.renglon')
+       AND con.conname = 'fk_renglon_pedido'),
+   'NO EXISTE fk_renglon_pedido'),
+ NULL),
+
+-- LAS DOS RESTRICCIONES QUE HACEN AUDITABLE LA ELECCIÓN. `ck_renglon_eleccion`
+-- es el par firma-y-hora, el mismo de `ck_renglon_descarte` y
+-- `ck_renglon_ajuste`: sin él, un renglón podría decir que se le compra a LEVIC
+-- sin decir quién lo decidió -- y ésa es la pregunta entera del ticket 20.
+-- `ck_pedido_estado` es lo que hace que "nacen en borrador" sea una garantía de
+-- la base y no una costumbre del código.
+(26,
+ 'La elección va firmada y el pedido nace en borrador',
+ 'están las dos',
+ (SELECT CASE count(*) WHEN 2 THEN 'están las dos'
+                       ELSE format('solo %s: %s', count(*),
+                                   coalesce(string_agg(con.conname, ', '), '--'))
+         END
+    FROM pg_constraint con
+   WHERE (con.conrelid = to_regclass('pedidos.renglon')
+          AND con.conname = 'ck_renglon_eleccion')
+      OR (con.conrelid = to_regclass('pedidos.pedido')
+          AND con.conname = 'ck_pedido_estado')),
+ NULL),
+
 -- AVISO y no MAL: una tabla temporal vive en la sesión, no puede leer nada que
 -- el rol no pueda leer ya, y desaparece al desconectarse. El permiso llega por
 -- el TEMPORARY que PUBLIC tiene sobre la base por omisión, y quitarlo sería
