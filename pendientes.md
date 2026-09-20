@@ -21,7 +21,7 @@ pegables. Si los dos no coinciden, manda Notion.
 
 ---
 
-## Dónde vamos — 10 de 16 casillas
+## Dónde vamos — 11 de 16 casillas
 
 | | Pendiente | Estado |
 |---|---|---|
@@ -35,7 +35,7 @@ pegables. Si los dos no coinciden, manda Notion.
 | 4 | La decisión del descarte | ✅ 2026-09-20 — decidida e implementada |
 | 5 | `clase_abc` en `dim_producto` | pendiente |
 | 6 | Doyle a atlas | pendiente *(lo más incierto, y ahora bloquea al 8)* |
-| 10 | El monitor de Uptime Kuma | pendiente *(antes que el lote del 8)* |
+| 10 | El monitor de Uptime Kuma | ✅ 2026-09-20 — y se arregló el del vecino |
 
 **Se levantó el freno de mano.** El 2 había puesto a farmacia-data en una
 posición en la que un `git pull` en atlas tumbaba su cadena nocturna; el 7 creó
@@ -415,9 +415,37 @@ contenedor. Es el 502 exacto que Marlowe midió el 2026-09-06. Ese gateway
 `sin-identificar`. Un `curl` desde atlas **no sirve** para esto: entra por el
 gateway, no por el túnel, así que siempre dirá `sin-identificar`.
 
-### 10. El monitor de Uptime Kuma
+### 10. El monitor de Uptime Kuma — ✅ **hecho el 2026-09-20**
 
-- [ ] Push monitor **propio**, su URL en el `.env`, y decidir el fin de semana
+- [x] Push monitor **propio**, su URL en el `.env`, y decidir el fin de semana
+
+`Continental - lote nocturno`, monitor Push propio: intervalo **93600 s** (26 h),
+reintentos **2** con retry de **3600 s**, resend **0**. Su token vive solo en
+`KUMA_PUSH_URL_CONTINENTAL` del `.env` de atlas — comprobado que no se coló a
+`config/continental.yml`, que es lo que vigila
+`tests/test_latido.py::test_el_nombre_de_la_variable_es_propio_y_esta_en_el_ejemplo`.
+
+**El fin de semana se decidió: ventana de mantenimiento**, cron `0 0 * * 6`,
+**4190 minutos**, zona `America/Mexico_City` elegida a mano. Cierra el **lunes a
+las 21:50**, diez minutos antes del disparo del timer — y ese detalle es todo el
+truco, porque en Kuma 1.23 un latido que llega *dentro* de una ventana se guarda
+como `MAINTENANCE` y **no levanta** un monitor Push. El razonamiento completo,
+con lo descartado, está en la parte D de `docs/despliegue-en-atlas.md`.
+
+> **De paso se arregló el monitor del vecino, que llevaba 99.95% del tiempo en
+> rojo.** `Cadena nocturna` tenía intervalo de **60 segundos** contra una cadena
+> que late una vez por noche: 10,073 latidos rojos contra 5 verdes en siete
+> días. Ahora va con los mismos 93600 s y su propia ventana de **4105 minutos**,
+> que cierra el lunes a las **20:25** porque late a las 20:33 — medido sobre 12
+> latidos reales, no calculado.
+>
+> Y quedó dicho que **no hay monitor de Marlowe**: son seis y ninguno es suyo.
+
+**Lo que este verde todavía no prueba.** Con Doyle fuera de atlas, una corrida
+de verdad termina con todos los renglones en *no se pudo*. Desde el arreglo del
+2026-09-20 eso late en **rojo** y no en verde, así que la primera corrida real
+va a pintar el monitor de rojo **con razón**. Es la prueba de que las dos cosas
+funcionan, no una falla.
 
 Kuma corre en atlas como `borde_kuma` en `127.0.0.1:3002` (medido 2026-09-19).
 **Monitor propio, distinto del de la cadena de ventas y del de Marlowe**: si
