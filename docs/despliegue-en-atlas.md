@@ -523,6 +523,39 @@ Medido en atlas el 2026-09-19, en solo lectura:
   farmacia-data y `KUMA_PUSH_URL_MARLOWE` en Marlowe. Tres nombres distintos
   son tres URLs con tres tokens, que es lo que los vuelve tres monitores.
 
+> ### ⚠️ No copies al vecino: está roto, y medido el 2026-09-20
+>
+> Aquí se llegó a escribir que los 26 h *"no es inventado: es lo que ya hay en
+> casa"*. **No lo hay.** Leyendo la base de Kuma en solo lectura —sin tocar
+> ningún token—, esto es lo que hay de verdad:
+>
+> | Monitor | Tipo | Intervalo | Reintentos | Resend |
+> |---|---|---|---|---|
+> | Metabase · Sarabia · Túnel ×2 | http | 60 s | 0 | 0 |
+> | **Cadena nocturna** | **push** | **60 s** | 0 | 0 |
+>
+> Ese último es el de farmacia-data, y su cadena late **una vez por noche**
+> contra un monitor que espera un latido **cada minuto**. El historial de los
+> últimos siete días: **10,073 latidos en rojo contra 5 en verde**, con el
+> mensaje *"No heartbeat in the time window"* repetido cada minuto. Lleva rojo
+> el **99.95%** del tiempo desde que se creó.
+>
+> Y en todo Kuma hay **cero ventanas de mantenimiento** definidas.
+>
+> Un monitor que siempre dice "roto" no dice nada: es el mismo daño que este
+> documento describe para el rojo de los sábados, pero permanente. **Copiar esa
+> configuración habría hecho nacer al de Continental igual de inútil**, y con
+> la apariencia de estar siguiendo lo que ya existe.
+>
+> **Tampoco hay monitor de Marlowe.** Son cinco en total y ninguno es suyo, así
+> que `KUMA_PUSH_URL_MARLOWE` apunta a algo que no existe o no está puesta.
+>
+> Los valores de abajo siguen siendo los correctos —salen del timer y de cómo
+> se comporta Kuma, no de imitar al vecino—. Lo que se cae es la justificación
+> por imitación. **Y de paso queda un arreglo pendiente en farmacia-data**:
+> su monitor necesita intervalo de 93600 s y su propia ventana, cerrando a las
+> **20:25** porque late a las 20:35.
+
 **Nada de esto lo hizo el agente del ticket 19, a propósito:** crear un monitor
 es escribir en la Kuma que Marlowe y la cadena de farmacia-data comparten, y un
 latido de prueba escribiría en el historial de un monitor que alguien mira.
