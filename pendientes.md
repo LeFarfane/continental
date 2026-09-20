@@ -54,23 +54,48 @@ permanente. Aquí solo el saldo:
 Lo que esto desbloquea son los pendientes 7 a 11: todos empiezan con "en
 `~/proyectos/Continental`", que hasta hoy no existía.
 
-### 2. Los `grants` de farmacia-data · *sin esto, los permisos se borran solos*
+### 2. Los `grants` de farmacia-data — ✅ **hecho el 2026-09-19**
 
-- [ ] `'continental'` en el `config(grants=...)` de `dim_fecha`, `dim_producto`,
+- [x] `'continental'` en el `config(grants=...)` de `dim_fecha`, `dim_producto`,
       `fct_ventas` y `fct_compras`
-- [ ] El bloque `grants` **entero** en `dim_proveedor.sql`, que hoy no tiene
-      ninguno
+- [x] El bloque `grants` **entero** en `dim_proveedor.sql`, que no tenía ninguno
 
-Recrear una tabla en Postgres borra sus permisos, y cada `dbt build` recrea los
-modelos de `marts`: **un GRANT dado a mano dura hasta las 20:30 de ese día.**
-Marlowe lo midió el 2026-09-06 y reventó con *permission denied*.
+Commit `8ddd91f` del repo `Farmacia`, rama `fase1-tableros`. Los cinco modelos
+otorgan `continental` desde su config, que es lo único que sobrevive a un
+`dbt build` —recrear una tabla en Postgres borra sus permisos, y un GRANT dado
+a mano dura hasta las 20:30 de ese día; Marlowe lo midió el 2026-09-06—.
+
+Va además una prueba nueva, `tests/test_permisos_de_marts.py`, con la tabla
+**exacta** de quién lee cada modelo. Vigila las dos direcciones: que no falte
+un rol y que no sobre. Quitar `'continental'` de un modelo no rompe nada en
+farmacia-data —ni sus pruebas ni su `dbt build`—; rompe **este** repo, de
+noche, sin dejar rastro que apunte al cambio.
+
+> ### ⚠️ Esto invirtió el orden: el pendiente 7 va **antes**
+>
+> Comprobado contra `pg_roles` el 2026-09-19: **el rol `continental` no existe
+> todavía.** Están `farmacia` y `marlowe`, no el tercero.
+>
+> Si ese cambio llega a un `dbt build` en atlas antes que el rol, Postgres
+> contesta `role "continental" does not exist`, el modelo falla y **se lleva lo
+> que cuelga de él**: tumba la cadena nocturna de farmacia-data, y a Marlowe con
+> ella, por un permiso para un módulo que ni siquiera está corriendo.
+>
+> **El margen, medido:** la cadena **no hace `git pull`** —corre `dbt build`
+> sobre el árbol que haya en `~/proyectos/Farmacia`—, así que empujar desde la
+> torre no arma la trampa. Se arma el día que alguien haga `pull` en atlas. El
+> timer `farmacia-diario.timer` dispara **lunes a viernes a las 20:30**.
+>
+> **Y no se arregla creando el rol a mano para adelantarse.** `crear_rol.sql`
+> es idempotente y, si encuentra el rol ya creado, **no le toca la contraseña**
+> a propósito. Un rol creado a mano deja a Continental sin poder entrar nunca,
+> y el script imprime que todo salió bien.
 
 `dim_proveedor` importa desde el ticket 20: ahí vive el `pro_id` de SICAR con
 el que se identifica el proveedor de un pedido. Medido el 2026-09-19 contra el
 almacén: 22 filas, **NADRO=1, VICMA=8, LEVIC=10, y QuePharma no está** — la
-farmacia nunca le ha comprado.
-
-El detalle está al final de `sql/crear_rol.sql`.
+farmacia nunca le ha comprado. Marlowe **no** lee ese modelo, así que es el
+único de los cinco que otorga solo a `continental`.
 
 ### 3. Las cuatro sesiones de Doyle · *desbloquea la evidencia que falta*
 
@@ -148,11 +173,18 @@ CPU de 2010, si VICMA abre ventana ahí, el captcha de LEVIC.
 
 ## Lo que depende de que el repo esté en atlas
 
-### 7. El DDL, el rol y el verificador · *nada de esto ha tocado una base real*
+### 7. El DDL, el rol y el verificador · *ahora también bloquea a farmacia-data*
 
 - [ ] `sql/crear_tablas.sql`
 - [ ] `sql/crear_rol.sql`
 - [ ] `sql/verificar_rol.sql` — **el que da el veredicto**
+
+> **Subió de prioridad el 2026-09-19 y no por gusto.** Desde que el pendiente 2
+> agregó `continental` al `grants` de los modelos de `marts`, un `dbt build` en
+> atlas **sin que este rol exista** tumba la cadena nocturna de farmacia-data y
+> a Marlowe con ella. Mientras nadie haga `git pull` de farmacia-data en atlas
+> no pasa nada; el día que alguien lo haga, esto tiene que estar hecho antes.
+> El detalle, en el pendiente 2.
 
 Cinco tablas escritas y cero creadas. Se corre **a mano, con credenciales de
 dueño**, desde `~/proyectos/Continental`. El rol `continental` no puede hacer

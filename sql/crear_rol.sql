@@ -241,31 +241,38 @@ GRANT SELECT ON marts.dim_proveedor TO continental;
 -- No es una hipótesis: Marlowe lo midió el 2026-09-06 -- se otorgó a mano,
 -- corrió el barrido, y la interfaz se cayó exactamente así.
 --
--- QUÉ HAY QUE HACER DEL LADO DE farmacia-data (repo `Farmacia`, carpeta
--- `dbt/models/marts/`), y sin esto lo de arriba se borra solo:
+-- LO DEL LADO DE farmacia-data YA ESTÁ HECHO (2026-09-19, commit `8ddd91f` de
+-- ese repo). Los cinco modelos que Continental lee otorgan `continental` desde
+-- su `config(grants=...)`, `dim_proveedor` incluido —no tenía ninguno—, y una
+-- prueba (`tests/test_permisos_de_marts.py`) vigila que nadie los quite: la
+-- tabla es exacta, así que también caza un permiso de más.
 --
---   1. Agregar `continental` al `grants` que ya tienen cuatro modelos:
+-- **ESO INVIERTE EL ORDEN, Y HAY QUE RESPETARLO.** Este archivo tiene que
+-- correr ANTES de que ese cambio llegue a un `dbt build` en atlas. Si llega
+-- primero, Postgres contesta `role "continental" does not exist`, el modelo
+-- falla y se lleva lo que cuelga de él: tumba la cadena nocturna de
+-- farmacia-data, y a Marlowe con ella, por un permiso para un módulo que ni
+-- siquiera está corriendo.
 --
---        dim_fecha.sql     {{ config(grants={'select': ['marlowe', 'continental']}) }}
---        dim_producto.sql  {{ config(grants={'select': ['marlowe', 'continental']}) }}
---        fct_ventas.sql    {{ config(grants={'select': ['marlowe', 'continental']}) }}
---        fct_compras.sql   {{ config(grants={'select': ['marlowe', 'continental']}) }}
+-- El margen no es infinito pero tampoco es de horas: la cadena **no hace
+-- `git pull`** —corre `dbt build` sobre el árbol que haya en
+-- `~/proyectos/Farmacia`—, así que la trampa se arma el día que alguien haga
+-- `pull` en atlas, no al empujar desde la torre.
 --
---   2. **`dim_proveedor.sql` hoy no tiene `grants` en absoluto** (revisado el
---      2026-09-19): hay que agregarle la línea entera.
+-- Y NO SE ARREGLA CREANDO EL ROL A MANO PARA ADELANTARSE: este script es
+-- idempotente y, si encuentra el rol ya creado, **no le toca la contraseña**
+-- (línea 96). Un rol creado a mano deja a Continental sin poder entrar nunca,
+-- y esta corrida imprime que todo salió bien.
 --
---        {{ config(grants={'select': ['continental']}) }}
---
---   3. Correr `cd dbt && ../.venv/bin/dbt build` una vez, y volver a correr
---      `sql/verificar_rol.sql`. La comprobación 9 compara la lista de tablas
---      de `marts` que el rol puede leer contra las cinco esperadas, así que
---      detecta tanto que falte una (dbt se la llevó) como que sobre otra
---      (alguien otorgó de más).
+-- Después de correr esto, `cd dbt && ../.venv/bin/dbt build` una vez, y volver
+-- a correr `sql/verificar_rol.sql`. La comprobación 9 compara la lista de
+-- tablas de `marts` que el rol puede leer contra las cinco esperadas, así que
+-- detecta tanto que falte una (dbt se la llevó) como que sobre otra (alguien
+-- otorgó de más).
 --
 -- dbt vuelve a aplicar el `grants` en cada construcción, y **eso** es lo que
--- de verdad sostiene estos permisos. Mientras el paso 1-2 no esté hecho, dar
--- por buena una corrida verde de `verificar_rol.sql` es darla por buena hasta
--- las 20:30 de hoy.
+-- de verdad sostiene estos permisos. Los GRANT de aquí arriba son el respaldo
+-- que hace que el módulo funcione hoy, no la garantía de que funcione mañana.
 
 
 \echo ''
