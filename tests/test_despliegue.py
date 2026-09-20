@@ -480,6 +480,41 @@ def test_el_script_existe_y_se_detiene_al_primer_fallo():
     assert "set -euo pipefail" in _desplegar()
 
 
+def test_el_paso_uno_avisa_si_otra_rama_remota_va_adelante():
+    """`Already up to date` puede ser cierto y engañar al mismo tiempo.
+
+    **Pasó el 2026-09-20.** Atlas estaba en `main` y todo el trabajo iba en
+    `pedido-sugerido`. `git pull` bajó los objetos, movió
+    `origin/pedido-sugerido`… y contestó *Already up to date*, que era cierto
+    para `main`. Los seis pasos salieron **verdes sobre código de antier**, el
+    servicio se reinició, el paso 5 contestó y el 6 pidió un cambio que ya
+    estaba hecho y empujado. Nada estaba roto y nada era verdad.
+
+    Lo único que lo delataba era el commit que el paso 1 imprime, que es
+    exactamente la línea que se lee de reojo.
+
+    Se avisa y **no se falla**, y esa parte también es la decisión: desplegar
+    `main` mientras una rama de trabajo va adelante es lo normal a media
+    semana. Lo que no puede pasar es que no se diga.
+    """
+    texto = _desplegar()
+
+    assert "rev-parse --abbrev-ref HEAD" in texto, (
+        "El paso 1 no dice en qué RAMA está. Con el commit solo, desplegar la "
+        "rama equivocada se ve idéntico a desplegar la correcta."
+    )
+    assert "refs/remotes/origin" in texto and "rev-list --count" in texto, (
+        "Falta el aviso de ramas remotas por delante de lo que se despliega. "
+        "Sin él, `git pull` puede contestar 'Already up to date' con razón y "
+        "el despliegue entero salir verde sobre código viejo."
+    )
+    assert "exit" not in texto[texto.index("refs/remotes/origin"):][:600], (
+        "El aviso de ramas adelantadas no puede detener el despliegue: "
+        "desplegar `main` mientras una rama de trabajo va adelante es "
+        "legítimo. Avisa y sigue."
+    )
+
+
 def test_el_script_esta_marcado_ejecutable_en_git():
     """El modo `100755`, que es de lo que git se acuerda y el disco de Windows no.
 

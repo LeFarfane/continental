@@ -115,7 +115,33 @@ if ! git remote | grep -q .; then
     exit 1
 fi
 git -c pull.rebase=true pull -q
+echo "    rama: $(git rev-parse --abbrev-ref HEAD)"
 git log --oneline -1
+
+# AVISO, NO FALLA: alguna rama remota va por delante de lo que se despliega.
+#
+# El 2026-09-20 atlas estaba en `main` mientras todo el trabajo iba en
+# `pedido-sugerido`. `git pull` bajó los objetos, movió `origin/pedido-sugerido`
+# y contestó **"Already up to date"** — que era cierto para `main` y falso para
+# lo que la persona quería desplegar. Los seis pasos salieron verdes sobre
+# código de antier y lo único que lo delataba era el commit de esta línea, que
+# es justo lo que se lee de reojo.
+#
+# No puede fallar duro: desplegar `main` mientras una rama de trabajo va
+# adelante es legítimo y es lo normal a media semana. Lo que no es legítimo es
+# que no se diga.
+adelantadas=""
+for rama in $(git for-each-ref --format='%(refname:short)' refs/remotes/origin | grep -v '/HEAD$' || true); do
+    cuantos="$(git rev-list --count "HEAD..$rama" 2>/dev/null || echo 0)"
+    if [[ "$cuantos" -gt 0 ]]; then
+        adelantadas="${adelantadas}       $rama va $cuantos commit(s) adelante"$'\n'
+    fi
+done
+if [[ -n "$adelantadas" ]]; then
+    echo "    !! hay ramas remotas por delante de lo que se está desplegando:"
+    printf '%s' "$adelantadas"
+    echo "       No detiene nada. Pero si esperabas esos cambios, NO están aquí."
+fi
 
 paso "2/6  compilan todos los módulos"
 "$PYTHON" - <<'PY'
