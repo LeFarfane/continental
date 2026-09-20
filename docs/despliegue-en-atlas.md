@@ -274,7 +274,7 @@ curl -s http://172.19.0.1:8585/api/salud
 
 > Si `ss` no muestra nada y el journal dice "Cannot assign requested address",
 > el gateway de `borde` cambió. Volver a medirlo y poner el valor nuevo en la
-> unidad **y** en el paso B.1:
+> unidad **y** en el Public Hostname del paso B.2:
 > ```bash
 > docker network inspect borde --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}'
 > ```
@@ -361,35 +361,29 @@ descarga al arrancar. No hay ningún archivo en atlas que editar, así que esto
 lo hace una persona con la cuenta, en el navegador. Es lo mismo que le pasó a
 Marlowe y está escrito en su unidad desde el 2026-09-06.
 
-**El orden importa: primero B.1 y luego B.2, sin publicar nada en medio.**
-Entre el momento en que existe el Public Hostname y el momento en que existe la
-política de Access, `farmacia.farfanlab.uk` está **abierto a internet**.
-Continental no tiene autenticación propia (regla 2 de `CLAUDE.md`) y el correo
-del encabezado es una firma, no un permiso (regla 3): quien llegue sin pasar
-por Access se lo inventa. Que la ventana entre los dos pasos dure un minuto y
-no una tarde.
+**EL ORDEN IMPORTA, Y ES ACCESS PRIMERO.** Si la ruta del túnel existe antes
+que la política, `farmacia.farfanlab.uk` queda **abierto a internet** en ese
+intervalo. Continental no tiene autenticación propia (regla 2 de `CLAUDE.md`) y
+el correo del encabezado es una firma, no un permiso (regla 3): quien llegue
+sin pasar por Access se lo inventa. Y esto **escribe** a Postgres; no es un
+tablero de solo lectura.
 
-### B.1 — La ruta del túnel
+> **Este orden estuvo al revés en este archivo hasta el 2026-09-20**, con la
+> instrucción de que la ventana "durara un minuto y no una tarde". No hace
+> falta que dure nada: la aplicación de Access se puede crear **antes** de que
+> el hostname enrute. Solo exige que el dominio esté activo en la cuenta, y
+> `farfanlab.uk` lo está desde que existe `stadistics.farfanlab.uk`. Es además
+> lo que recomienda Cloudflare: *"We recommend creating an Access application
+> before setting up the tunnel route. If you do not have an Access application
+> in place, the published application will be available to anyone on the
+> Internet."*
+> ([documentación de Cloudflare](https://developers.cloudflare.com/cloudflare-one/applications/configure-apps/self-hosted-public-app/))
+>
+> Si el panel se quejara de que no hay registro DNS todavía, es una advertencia
+> y no un impedimento. Si de verdad no dejara guardar, entonces sí: B.2 y B.1
+> pegados, en ese orden y sin nada en medio.
 
-- [ ] **Zero Trust → Networks → Tunnels →** el túnel de atlas (el mismo que ya
-      sirve `stadistics.farfanlab.uk`) **→ Public Hostname → Add a public
-      hostname**, con estos valores:
-
-| Campo | Valor |
-|---|---|
-| Subdomain | `farmacia` |
-| Domain | `farfanlab.uk` |
-| Path | *(vacío)* |
-| Type | `HTTP` |
-| URL | `172.19.0.1:8585` |
-
-- [ ] **`HTTP`, no `HTTPS`.** Continental habla HTTP plano; el TLS lo termina
-      Cloudflare. Poner `HTTPS` da un 502 que parece un problema del servicio.
-- [ ] **`172.19.0.1:8585`, no `localhost:8585`.** Para el contenedor del túnel
-      `localhost` es él mismo. Ese error exacto le costó a Marlowe un 502 el
-      2026-09-06, y el porqué está en `docs/decisiones/0005-*`.
-
-### B.2 — Access delante, inmediatamente después
+### B.1 — Access, antes de que haya nada que proteger
 
 - [ ] **Zero Trust → Access → Applications → Add an application →
       Self-hosted**:
@@ -407,6 +401,33 @@ no una tarde.
 - [ ] **No usar "Bypass"** ni dejar la aplicación sin política. Esto escribe a
       producción (pedidos y renglones en Postgres), no es un tablero de solo
       lectura: necesita Access igual que Metabase, no menos.
+
+Hasta aquí no hay nada publicado: la política existe y no hay tráfico que
+proteger todavía. Eso es justo lo que se busca.
+
+### B.2 — La ruta del túnel, ya con la puerta puesta
+
+- [ ] **Zero Trust → Networks → Tunnels →** el túnel de atlas (el mismo que ya
+      sirve `stadistics.farfanlab.uk`) **→ Public Hostname → Add a public
+      hostname**, con estos valores:
+
+| Campo | Valor |
+|---|---|
+| Subdomain | `farmacia` |
+| Domain | `farfanlab.uk` |
+| Path | *(vacío)* |
+| Type | `HTTP` |
+| URL | `172.19.0.1:8585` |
+
+- [ ] **`HTTP`, no `HTTPS`.** Continental habla HTTP plano; el TLS lo termina
+      Cloudflare. Poner `HTTPS` da un 502 que parece un problema del servicio.
+- [ ] **`172.19.0.1:8585`, no `localhost:8585`.** Para el contenedor del túnel
+      `localhost` es él mismo. Ese error exacto le costó a Marlowe un 502 el
+      2026-09-06, y el porqué está en `docs/decisiones/0005-*`. Medido otra vez
+      el 2026-09-20: el gateway de `borde` sigue siendo `172.19.0.1`.
+
+En cuanto este paso se guarda, el hostname empieza a resolver **y a exigir
+Access desde la primera petición**.
 
 ### B.3 — Comprobarlo de punta a punta
 

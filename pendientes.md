@@ -343,29 +343,42 @@ torre. En la web ya se corrió y calló.
 
 ### 9. El túnel y Access · *no se hace por ssh*
 
-- [ ] Public Hostname en el dashboard
-- [ ] Política de Access, inmediatamente después
+- [ ] Política de Access **primero**
+- [ ] Public Hostname después
 
 El túnel de atlas es *remotely-managed*: su enrutamiento vive en el dashboard
 de Cloudflare Zero Trust, no en un archivo local.
 
-**B.1** Zero Trust → Networks → Tunnels → el túnel de atlas → Public Hostname →
-Add: subdominio `farmacia`, dominio `farfanlab.uk`, path vacío, tipo **HTTP**
-(no HTTPS), URL **`172.19.0.1:8585`**.
+**B.1, primero:** Access → Applications → Add → Self-hosted, dominio
+`farmacia.farfanlab.uk`, política `Allow` con Include → Emails. **No Bypass.**
+
+**B.2, después:** Zero Trust → Networks → Tunnels → el túnel de atlas → Public
+Hostname → Add: subdominio `farmacia`, dominio `farfanlab.uk`, path vacío, tipo
+**HTTP** (no HTTPS), URL **`172.19.0.1:8585`**.
 
 **No `localhost`**: para el contenedor `borde_tunel`, `localhost` es su propio
 contenedor. Es el 502 exacto que Marlowe midió el 2026-09-06. Ese gateway
-**cambia si se recrea la red Docker `borde`**.
+**cambia si se recrea la red Docker `borde`**; remedido el 2026-09-20, sigue en
+`172.19.0.1`.
 
-**B.2, acto seguido:** Access → Applications → Add → Self-hosted, dominio
-`farmacia.farfanlab.uk`, política `Allow` con Include → Emails. **No Bypass.**
-
-> ⚠️ **Entre B.1 y B.2 el sitio está abierto a internet.** Que la ventana dure
-> un minuto. `172.19.0.1` es *no estar enrutado*, no *estar bloqueado*: la
-> garantía real es Access.
+> ### Este orden estaba al revés hasta el 2026-09-20
+>
+> Este archivo decía *Public Hostname primero, Access acto seguido*, y avisaba
+> de que en medio el sitio queda abierto a internet pidiendo que la ventana
+> "durara un minuto". **No tiene que durar nada.** La aplicación de Access se
+> puede crear antes de que el hostname enrute: solo exige que el dominio esté
+> activo en la cuenta, y `farfanlab.uk` lo está. Es además lo que recomienda
+> Cloudflare, con esta razón textual: *"If you do not have an Access
+> application in place, the published application will be available to anyone
+> on the Internet."*
+>
+> Importa más aquí que en Metabase: Continental **escribe** a Postgres, y
+> `172.19.0.1` es *no estar enrutado*, no *estar bloqueado*. La garantía real
+> es Access.
 
 **B.3** Entrar desde fuera y confirmar que la pantalla dice el correo y no
-`sin-identificar`.
+`sin-identificar`. Un `curl` desde atlas **no sirve** para esto: entra por el
+gateway, no por el túnel, así que siempre dirá `sin-identificar`.
 
 ### 10. El monitor de Uptime Kuma
 
