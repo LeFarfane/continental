@@ -662,3 +662,50 @@ def test_la_pantalla_avisa_cuando_la_lista_trae_mas_de_un_dia(cliente):
         "El aviso dejo de estar condicionado: una lista de un dia no tiene nada "
         "que advertir, y un aviso permanente se deja de leer."
     )
+
+
+def test_un_dia_sin_cerrar_no_se_pierde_aunque_despues_se_cierre_otro(
+    cliente, almacen, almacenamiento
+):
+    """**El hueco que se creia abierto, y no lo esta.** Escrito para medirlo.
+
+    Al acortar la ventana a un dia habil quedo anotado como hueco conocido que
+    "un dia sin cerrar anterior a un corte posterior se pierde igual". Esta
+    prueba recorre ese escenario exacto y comprueba que NO se pierde. Existe
+    para que la afirmacion deje de descansar en un razonamiento.
+
+    El recorrido: el jueves se cierra. El viernes se abre y **nadie la cierra**.
+    El lunes se abre -- y tiene que traer el viernes, porque el corte sigue
+    siendo el del jueves y la ventana arranca al dia siguiente de ese corte. La
+    acumulacion desde el corte ya cubre cualquier racha de dias sin cerrar: no
+    hace falta ni extender la ventana ni segmentarla por dia.
+
+    Lo que hace que esto se sostenga es que el corte es `max(...)` sobre las
+    CERRADAS. Una lista abierta o vencida no lo mueve, asi que el corte se
+    queda atras y la ventana la alcanza sola.
+    """
+    almacen.catalogo_en_memoria = [
+        _producto(1, "7501000000001", "AMOXICILINA"),
+        _producto(2, "7501000000002", "BENZAL"),
+    ]
+
+    # Jueves: se arma y SE CIERRA. El corte queda en el jueves.
+    almacen.ventas_en_memoria = [_venta(dt.date(2026, 9, 10), 1, 1)]
+    jueves = cliente.get(RUTA).json()["pedido_sugerido_id"]
+    cliente.post(f"{RUTA}/{jueves}/cerrar")
+
+    # Viernes: se arma y NADIE la cierra. Se quedara vencida.
+    almacen.ventas_en_memoria.append(_venta(dt.date(2026, 9, 11), 2, 5))
+    cliente.get(RUTA)
+
+    # Lunes.
+    almacen.ventas_en_memoria.append(_venta(dt.date(2026, 9, 14), 2, 2))
+    cuerpo = cliente.get(RUTA).json()
+
+    assert almacenamiento.leer(NEGOCIO, dt.date(2026, 9, 11)).estado == VENCIDO
+    assert cuerpo["ventas_consideradas_desde"] == "2026-09-11", (
+        "La ventana no retrocedio hasta el dia siguiente del corte: las ventas "
+        "del viernes que nadie cerro se cayeron al piso."
+    )
+    # Las cinco del viernes MAS las dos del lunes, en un solo renglon.
+    assert [r["cantidad_propuesta"] for r in cuerpo["renglones"]] == [7]

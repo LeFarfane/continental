@@ -323,11 +323,19 @@ def ventana_de_reposicion(
     que es exactamente lo que el ADR 0002 prohíbe. `Ventana` es un intervalo y
     no un conjunto de días, así que no puede saltarse el martes por dentro.
 
-    > **Lo que eso deja fuera, dicho y no disimulado:** un día sin cerrar que
-    > quedó **antes** de un corte posterior se pierde igual. No es una
-    > regresión —pasaba idéntico con la ventana de siete días, porque esa rama
-    > solo corre sin corte— pero tampoco está resuelto. Arreglarlo pide que la
-    > reposición deje de ser un intervalo, y eso es otra decisión.
+    > **Y no deja ningún día fuera, aunque al escribir esto se creyó que sí.**
+    > Aquí quedó anotado que "un día sin cerrar anterior a un corte posterior
+    > se pierde igual". **Es falso**, y lo mide
+    > `test_un_dia_sin_cerrar_no_se_pierde_aunque_despues_se_cierre_otro`. El
+    > corte es `max(...)` sobre las **cerradas**, así que una lista abierta o
+    > vencida no lo mueve: el corte se queda atrás y `corte + 1` alcanza sola
+    > cualquier racha de días sin cerrar, sea de uno o de diez.
+    >
+    > Las dos ramas juntas cubren el calendario entero sin huecos y sin
+    > traslapes: con corte, desde el día siguiente al corte; sin corte, desde
+    > lo más viejo que nadie pidió. Por eso **no hace falta ni una ventana más
+    > larga ni segmentar la lista por día** — las dos se consideraron el
+    > 2026-09-20 para tapar un hueco que no estaba abierto.
 
     Quien tiene que **decirlo en la pantalla** es quien la arma: una ventana de
     cinco días y una de uno se ven igual en los renglones, porque las piezas se
