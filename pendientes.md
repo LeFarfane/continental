@@ -271,14 +271,28 @@ después: las cinco tablas, `pedido.proveedor_id` admitiendo nulos con
 > `docs/despliegue-en-atlas.md`). Si las dos no coinciden, lo que se ve es un
 > *password authentication failed* que parece problema de red.
 
-**El lazo con el pendiente 2, a medias.** El `git pull` de farmacia-data en
-atlas ya se hizo —fast-forward de `742d062` a `8ddd91f`, sin novedad—. Falta
-correr `cd dbt && ../.venv/bin/dbt build` una vez y **volver a correr
-`verificar_rol.sql`**: su comprobación **7** compara las tablas de `marts` que
-el rol puede leer contra las cinco esperadas, así que detecta tanto que falte
-una —dbt se la llevó al recrearla— como que sobre otra. Hasta que eso corra, que
-los `grants` del config sobrevivan a una construcción está razonado pero no
-medido en esta base.
+**El lazo con el pendiente 2, cerrado el 2026-09-20.** Los tres pasos, en orden:
+`git pull` de farmacia-data en atlas —fast-forward de `742d062` a `8ddd91f`—,
+`dbt build` completo, y `verificar_rol.sql` otra vez. **Salió BIEN las dos
+veces, antes y después de la construcción.**
+
+Eso es lo que había que demostrar y no se podía dar por hecho: la comprobación
+**7** compara las tablas de `marts` que el rol puede leer contra las cinco
+esperadas, y las cinco siguen ahí **después** de que dbt las recreara. Recrear
+una tabla en Postgres borra sus permisos, así que un `GRANT` dado a mano habría
+desaparecido justo aquí. El del `config` no. Es la falla que mordió el
+2026-09-06 y otra vez el 09-07, ahora medida en esta base.
+
+> **El `dbt build` de esa corrida: `PASS=160 WARN=4 ERROR=0` de 164.** Dos de
+> los avisos son los conocidos —`fecha_caducidad` nulo en `stg_lote` y en
+> `fct_caducidad`, degradados a aviso el 2026-08-19, con 2 filas cada uno—. Los
+> otros dos son de `fct_precio_competencia`, que es de Marlowe y que este
+> cambio **no toca**: no salieron de aquí. Quedan anotados en el repo de
+> farmacia-data, no en éste.
+>
+> Y de paso: `CLAUDE.md` de farmacia-data dice **16 modelos y 124 pruebas**, y
+> en esa corrida fueron **19 y 164**. Si vas a citar esas cifras, mídelas —yo
+> las cité de ahí y salieron mal.
 
 ### 8. Las unidades de systemd
 
