@@ -815,3 +815,107 @@ def _renglon(producto_id: int, descripcion: str) -> Renglon:
         dias_de_cobertura=2.3,
         clasificacion="medicamento",
     )
+
+
+# --------------------------- pendiente 4: la lista cerrada cierra de verdad
+#
+# Decidido el 2026-09-20. Hasta ese dia convivian dos criterios sobre la misma
+# lista: ajustar la cantidad (11) y elegir proveedor (20) exigian la lista
+# `abierta`, y descartar (10) no. El ticket 10 nunca lo pidio, asi que no era un
+# incumplimiento -- era una incoherencia, y `_ELEGIR_PROVEEDOR` la dejo anotada
+# en su comentario pidiendo que el arreglo se hiciera "a proposito y no de
+# paso". Esto es ese arreglo.
+#
+# De cara al encargado, una lista cerrada que todavia se deja modificar es una
+# lista que no esta cerrada. `cerrado` significa "ya se pidio lo que se iba a
+# pedir" (CONTEXT.md): descartar despues separa el renglon de lo que de verdad
+# se le pidio al proveedor, y el ticket 26 recibiria mercancia contra un renglon
+# que dice que nadie la pidio.
+
+
+def test_con_la_lista_cerrada_ya_no_se_descarta(cliente, almacen, almacenamiento):
+    """La mitad que faltaba para que los tres criterios digan lo mismo."""
+    _poblar(almacen)
+    lista = cliente.get(RUTA).json()
+    renglon_id = lista["renglones"][0]["renglon_id"]
+    cliente.post(f"{RUTA}/{lista['pedido_sugerido_id']}/cerrar")
+
+    respuesta = _descartar(cliente, renglon_id)
+
+    assert respuesta.status_code == 409
+    assert respuesta.json()["ok"] is False
+
+
+def test_con_la_lista_cerrada_tampoco_se_devuelve_a_abierto(
+    cliente, almacen, almacenamiento
+):
+    """Las dos direcciones, porque deshacer tambien es modificar.
+
+    Dejar solo una mitad seria peor que no haber tocado nada: un renglon podria
+    salir de `descartado` dentro de una lista cerrada y no poder volver.
+    """
+    _poblar(almacen)
+    lista = cliente.get(RUTA).json()
+    renglon_id = lista["renglones"][0]["renglon_id"]
+    _descartar(cliente, renglon_id)
+    cliente.post(f"{RUTA}/{lista['pedido_sugerido_id']}/cerrar")
+
+    respuesta = _devolver(cliente, renglon_id)
+
+    assert respuesta.status_code == 409
+    assert respuesta.json()["ok"] is False
+
+
+def test_la_lista_abierta_viaja_en_el_where_del_descarte_y_de_la_devolucion():
+    """La condicion va en la sentencia, no en un `if` de Python.
+
+    Comprobar el estado de la lista y actualizar despues tiene una carrera en
+    medio: una pestana cierra mientras otra descarta. Es la misma razon por la
+    que la transicion del renglon ya viajaba ahi, y la misma forma que usan
+    `_AJUSTAR_LA_CANTIDAD` y `_ELEGIR_PROVEEDOR`.
+    """
+    sentencias = _sentencias()
+    descarte = next(s for n, s in sentencias.items() if "DESCARTAR" in n)
+    devolucion = next(s for n, s in sentencias.items() if "DEVOLVER" in n)
+
+    for nombre, sentencia in (("descarte", descarte), ("devolucion", devolucion)):
+        bajo = sentencia.lower()
+        assert "pedido_sugerido" in bajo, (
+            f"El UPDATE del {nombre} no nombra la tabla de la lista, asi que la "
+            "condicion de lista abierta no puede estar en su WHERE."
+        )
+        assert "p.estado = 'abierto'" in bajo, (
+            f"El UPDATE del {nombre} no exige que la LISTA este abierta. Sin "
+            "eso, una lista cerrada se sigue dejando modificar y deja de "
+            "significar 'ya se pidio lo que se iba a pedir'."
+        )
+
+
+def test_la_pantalla_no_ofrece_descartar_si_la_lista_no_esta_abierta(cliente):
+    """La mitad visible del pendiente 4, revisada sobre el HTML que se sirve.
+
+    El servidor lo vuelve a comprobar en el `WHERE` de su `UPDATE`, asi que
+    apagar el boton es comodidad y no la garantia. Pero descartar es **la
+    accion que mas se toca de esta pantalla** -la lista trae tantos renglones
+    como productos distintos se vendieron-, y un boton que se deja tocar para
+    contestar 409 enseña a ignorar los avisos justo donde mas caro sale.
+
+    Se apaga y no se esconde: la columna de acciones tiene ancho fijo y quitarlo
+    movería todas las filas al cerrar la lista.
+
+    Las dos direcciones, porque deshacer tambien es modificar. Dejar encendido
+    el de devolver seria lo peor de los dos mundos: prometeria rescatar un
+    renglon que alguien quito por error, y el servidor lo rechazaria.
+    """
+    pagina = cliente.get("/").text
+
+    assert "quitar.disabled = !acciones.editable" in pagina, (
+        "El boton de descartar no mira el estado de la lista."
+    )
+    assert "devolver.disabled = !editable" in pagina, (
+        "El boton de devolver a la lista no mira el estado de la lista."
+    )
+    assert pagina.count("La lista ya se cerró: lo que se iba a pedir ya se pidió.") == 2, (
+        "Los dos botones tienen que decir POR QUE estan apagados. Un boton gris "
+        "sin explicacion se lee como que la pantalla se rompio."
+    )

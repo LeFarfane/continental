@@ -649,15 +649,20 @@ class AlmacenamientoFalso:
     ) -> PedidoSugeridoGuardado | None:
         self._revisar()
         encontrado = self._renglon_por_id(renglon_id)
-        # Las tres condiciones son el `WHERE` del UPDATE real, en el mismo
-        # orden: el negocio, el id y que siga abierto. Sin la última, un
-        # renglón `en tránsito` —que ya se le pidió a un proveedor— se podría
-        # descartar, y el ticket 26 recibiría mercancía contra un renglón que
-        # dice que nadie la pidió.
+        # Las CUATRO condiciones son el `WHERE` del UPDATE real, en el mismo
+        # orden: el negocio, el id, que el renglón siga abierto y **que su lista
+        # lo esté**. Sin la tercera, un renglón `en tránsito` —que ya se le pidió
+        # a un proveedor— se podría descartar, y el ticket 26 recibiría
+        # mercancía contra un renglón que dice que nadie la pidió. Sin la
+        # cuarta, una lista cerrada se seguiría dejando modificar y dejaría de
+        # significar "ya se pidió lo que se iba a pedir" (pendiente 4, decidido
+        # el 2026-09-20).
         if encontrado is None:
             return None
-        fila, _ = encontrado
+        fila, lista = encontrado
         if fila["negocio"] != negocio or fila["estado"] != RENGLON_ABIERTO:
+            return None
+        if lista["estado"] != ABIERTO:
             return None
         # El instante real con zona que en la tabla pone `now()`. Es un
         # INSTANTE y no una fecha: lo que se ancla en `max(fecha)` son las
@@ -966,8 +971,13 @@ class AlmacenamientoFalso:
         encontrado = self._renglon_por_id(renglon_id)
         if encontrado is None:
             return None
-        fila, _ = encontrado
+        fila, lista = encontrado
         if fila["negocio"] != negocio or fila["estado"] != RENGLON_DESCARTADO:
+            return None
+        # La lista abierta también: deshacer es modificar. Ponerlo solo del lado
+        # del descarte dejaría renglones `descartado` dentro de una lista
+        # cerrada sin manera de volver.
+        if lista["estado"] != ABIERTO:
             return None
         # Las dos columnas se van a `None` juntas: lo exige ck_renglon_descarte
         # y lo comprueba `poner_estado_del_renglon`.

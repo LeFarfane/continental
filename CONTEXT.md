@@ -46,6 +46,20 @@ sistema a partir de lo que se vendió. No se le envía a nadie.
 - `cerrado` — ya se pidió lo que se iba a pedir.
 - `vencido` — pasó su día y quedaron renglones sin atender.
 
+> **Solo una lista `abierta` se deja modificar**, y eso vale para las cuatro
+> acciones que una persona hace sobre un renglón: descartarlo, devolverlo a la
+> lista, corregir su cantidad y elegir a quién se le pide. `cerrado` y `vencido`
+> significan que lo que se iba a pedir ya se pidió —o que su día pasó—, así que
+> un cambio posterior separaría el renglón de lo que de verdad se le pidió al
+> proveedor, y la recepción (ticket 26) se haría contra un renglón que dice otra
+> cosa.
+>
+> Unificado el **2026-09-20**. Hasta ese día descartar era la excepción: se
+> dejaba hacer con la lista cerrada porque el ticket 10 nunca pidió lo
+> contrario. No era un incumplimiento, era una incoherencia — y de cara al
+> encargado, una lista cerrada que todavía se deja modificar es una lista que no
+> está cerrada.
+
 **Renglón** — un producto con su cantidad dentro de un pedido sugerido.
 
 - `abierto` — está propuesto y nadie lo ha atendido.

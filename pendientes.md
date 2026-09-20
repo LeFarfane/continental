@@ -21,7 +21,7 @@ pegables. Si los dos no coinciden, manda Notion.
 
 ---
 
-## Dónde vamos — 9 de 16 casillas
+## Dónde vamos — 10 de 16 casillas
 
 | | Pendiente | Estado |
 |---|---|---|
@@ -32,7 +32,7 @@ pegables. Si los dos no coinciden, manda Notion.
 | 9 | El túnel y Access | ✅ 2026-09-20 — falta mirar B.3 |
 | **11** | **El recorrido en navegador del ticket 20** | ⏭️ **el siguiente, y por fin se puede** |
 | 3 | Las cuatro sesiones de Doyle | pendiente |
-| 4 | La decisión del descarte | pendiente *(es una decisión, no trabajo)* |
+| 4 | La decisión del descarte | ✅ 2026-09-20 — decidida e implementada |
 | 5 | `clase_abc` en `dim_producto` | pendiente |
 | 6 | Doyle a atlas | pendiente *(lo más incierto, y ahora bloquea al 8)* |
 | 10 | El monitor de Uptime Kuma | pendiente *(antes que el lote del 8)* |
@@ -159,23 +159,44 @@ Qué desbloquea, y no es poco:
 
 Exige navegador visible en la máquina donde corre Doyle (su ADR 0001).
 
-### 4. La decisión del descarte · *no es trabajo, es una decisión*
+### 4. La decisión del descarte — ✅ **decidido e implementado el 2026-09-20**
 
-- [ ] Decidir si descartar un renglón debe exigir la lista abierta
+- [x] Decidir si descartar un renglón debe exigir la lista abierta
 
-Hoy conviven dos criterios sobre la misma lista:
+**Sí la exige.** Las cuatro acciones que una persona hace sobre un renglón dicen
+ahora lo mismo:
 
 | Acción | ¿Exige lista abierta? | Ticket |
 |---|---|---|
-| Descartar / devolver a abierto | **No** | 10 |
+| Descartar / devolver a abierto | **Sí, desde hoy** | 10 |
 | Ajustar la cantidad | Sí | 11 |
 | Elegir proveedor / partir | Sí | 20 |
 
-El ticket 10 nunca pidió esa condición, así que no es un incumplimiento. Pero
-de cara al encargado, **una lista cerrada que todavía se deja modificar es una
-lista que no está cerrada**. Si decides que sí: `AND s.estado = 'abierto'` al
-`WHERE` de `_DESCARTAR` y `_DEVOLVER_A_ABIERTO` en `almacenamiento.py`, con sus
-pruebas.
+El ticket 10 nunca pidió esa condición, así que no era un incumplimiento: era
+una incoherencia, y el comentario de `_ELEGIR_PROVEEDOR` la tenía anotada
+pidiendo que el arreglo se hiciera *"a propósito y no de paso"*. De cara al
+encargado, **una lista cerrada que todavía se deja modificar es una lista que
+no está cerrada** — y un descarte posterior separa el renglón de lo que de
+verdad se le pidió al proveedor, así que el ticket 26 recibiría mercancía
+contra un renglón que dice que nadie la pidió.
+
+Qué se tocó:
+
+- `_DESCARTAR` y `_DEVOLVER_A_ABIERTO` en `almacenamiento.py`, con la misma
+  forma que `_AJUSTAR_LA_CANTIDAD`: la lista entra por `from
+  pedidos.pedido_sugerido` y su `estado` viaja en el `WHERE`. En la sentencia y
+  no en un `if` de Python, porque leer el estado y actualizar después tiene una
+  carrera en medio —una pestaña cierra mientras otra descarta—.
+- **Las dos direcciones.** Deshacer también es modificar: ponerlo solo en el
+  descarte habría dejado renglones `descartado` dentro de una lista cerrada sin
+  manera de volver.
+- Los dos botones de la pantalla se apagan con la lista cerrada, con su motivo
+  en el `title`. Apagados y no escondidos: la columna de acciones tiene ancho
+  fijo y quitarlos movería todas las filas al cerrar.
+- `CONTEXT.md` lo dice ahora en el glosario, que es donde manda.
+
+Cuatro pruebas nuevas —dos de comportamiento, una sobre el SQL y una sobre el
+HTML—, verificadas en rojo antes del cambio. **833 pasan.**
 
 ### 5. `clase_abc` en `dim_producto` (ADR 0018 de farmacia-data)
 

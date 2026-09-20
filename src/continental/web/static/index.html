@@ -1112,7 +1112,18 @@ const renglon = (r, acciones) => {
   const celdaAcciones = document.createElement('td');
   celdaAcciones.className = 'acciones';
   const quitar = botonDeAccion('Descartar', (boton) => acciones.descartar(r, boton));
-  quitar.title = 'No se pide. Se puede devolver a la lista.';
+  // Apagado con la lista cerrada o vencida, igual que el campo de la cantidad y
+  // el de proveedor. Desde el 2026-09-20 el servidor también lo rechaza -la
+  // condicion vive en el `WHERE` de `_DESCARTAR`-, asi que esto es comodidad y
+  // no la garantia. Pero un boton que se deja tocar para contestar 409 enseña a
+  // ignorar los avisos, y este es el que mas se toca de la pantalla.
+  //
+  // Apagado y no escondido: la columna de acciones tiene ancho fijo y quitarlo
+  // movería todas las filas al cerrar la lista.
+  quitar.disabled = !acciones.editable;
+  quitar.title = acciones.editable
+    ? 'No se pide. Se puede devolver a la lista.'
+    : 'La lista ya se cerró: lo que se iba a pedir ya se pidió.';
   // El nombre del producto va en el nombre accesible: con veinte botones
   // iguales, "Descartar" a secas no dice cuál se está tocando.
   quitar.setAttribute('aria-label', 'Descartar ' + r.descripcion);
@@ -1218,7 +1229,7 @@ const celdaDeProveedor = (r, editable, alElegir) => {
 // a propósito: de un renglón que no se va a pedir lo único que importa es cuál
 // era, quién lo quitó y poder devolverlo. Repetir las cinco columnas daría el
 // mismo peso visual a lo atendido que a lo pendiente.
-const renglonDescartado = (r, alDevolver) => {
+const renglonDescartado = (r, alDevolver, editable) => {
   const li = document.createElement('li');
 
   const nombre = document.createElement('span');
@@ -1226,6 +1237,14 @@ const renglonDescartado = (r, alDevolver) => {
 
   const devolver = botonDeAccion('Devolver a la lista', (boton) => alDevolver(r, boton));
   devolver.setAttribute('aria-label', 'Devolver ' + r.descripcion + ' a la lista');
+  // Deshacer también es modificar, así que sigue la misma regla que descartar.
+  // Apagarlo solo de un lado sería lo peor de los dos mundos: un renglón que
+  // alguien quitó por error se quedaría fuera de una lista cerrada sin manera
+  // de volver, y el botón estaría ahí prometiendo que sí.
+  devolver.disabled = !editable;
+  devolver.title = editable
+    ? 'Vuelve a la lista como estaba.'
+    : 'La lista ya se cerró: lo que se iba a pedir ya se pidió.';
 
   // Quién y cuándo, a la vista. Es una firma, no un permiso (regla 3 de
   // CLAUDE.md), y se muestra porque es lo que permite preguntar "¿por qué
@@ -1563,7 +1582,8 @@ async function cargarPedido() {
     pintarDescartados(
       datos.renglones.filter(r => r.estado === DESCARTADO),
       datos.descartados,
-      devolver);
+      devolver,
+      acciones.editable);
     // El conteo de huecos, arriba y en cada repintado: descartar, devolver y
     // consultar un precio lo cambian, y un número que envejece en la pantalla
     // se lee como verdad igual que uno al día.
@@ -2372,13 +2392,13 @@ const pintarParticion = (particion, pedidos, editable, alPartir) => {
 // lo mismo: es el número que el ADR 0002 va a mirar después de un mes, y un
 // conteo que el navegador lleve a mano se separa de la verdad en cuanto hay
 // dos pestañas abiertas en el mostrador.
-const pintarDescartados = (renglones, cuantos, alDevolver) => {
+const pintarDescartados = (renglones, cuantos, alDevolver, editable) => {
   const caja = document.getElementById('descartados');
   document.getElementById('descartados-resumen').textContent =
     plural(cuantos, 'renglón descartado', 'renglones descartados') +
     ' de esta lista. Queda guardado quién y cuándo.';
   document.getElementById('descartados-lista').replaceChildren(
-    ...renglones.map(r => renglonDescartado(r, alDevolver)));
+    ...renglones.map(r => renglonDescartado(r, alDevolver, editable)));
   caja.hidden = !cuantos;
 };
 

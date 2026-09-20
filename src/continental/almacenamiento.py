@@ -1955,10 +1955,26 @@ _INSERTAR_RENGLONES = text(
 # Descartar un renglón (ticket 10). Es un UPDATE y nunca un borrado: el rol no
 # tiene DELETE y descartar es un cambio de estado del glosario.
 #
-# `and estado = 'abierto'` es la transición metida en el WHERE, igual que en
+# `and r.estado = 'abierto'` es la transición metida en el WHERE, igual que en
 # `_CERRAR`. Solo se descarta lo abierto: `en tránsito` ya se le pidió a un
 # proveedor, y `recibido` / `recibido parcial` son hechos consumados. Cero filas
 # es "no había nada que descartar", y quien llama lo dice en vez de fingir.
+#
+# `and p.estado = 'abierto'` **es la segunda condición, y llegó el 2026-09-20.**
+# Hasta ese día esta sentencia miraba solo el renglón, y por eso una lista
+# cerrada se seguía dejando descartar mientras el ajuste (11) y la elección de
+# proveedor (20) ya no lo permitían. El ticket 10 nunca pidió la condición, así
+# que no era un incumplimiento: era una incoherencia, y `_ELEGIR_PROVEEDOR` la
+# dejó anotada pidiendo que se arreglara a propósito. De cara al encargado, una
+# lista cerrada que todavía se deja modificar es una lista que no está cerrada
+# —`cerrado` significa "ya se pidió lo que se iba a pedir" (`CONTEXT.md`)—, y un
+# descarte posterior separa el renglón de lo que de verdad se le pidió al
+# proveedor: el ticket 26 recibiría mercancía contra un renglón que dice que
+# nadie la pidió.
+#
+# Va en la sentencia y no en un `if` de Python, por lo mismo que la otra: leer
+# el estado de la lista y actualizar después tiene una carrera en medio —una
+# pestaña cierra mientras otra descarta—.
 #
 # `now()` y no una hora calculada en Python, por la misma razón que el cierre:
 # la pone el servidor que guarda la fila, así que dos procesos con relojes
@@ -1970,14 +1986,18 @@ _INSERTAR_RENGLONES = text(
 # juntas: descartado si y solo si hay firma Y hora.
 _DESCARTAR = text(
     """
-    update pedidos.renglon
+    update pedidos.renglon as r
        set estado = 'descartado',
            descartado_por = :quien,
            descartado_en = now()
-     where negocio = :negocio
-       and renglon_id = :renglon_id
-       and estado = 'abierto'
-    returning renglon_id, pedido_sugerido_id
+      from pedidos.pedido_sugerido as p
+     where r.negocio = :negocio
+       and r.renglon_id = :renglon_id
+       and r.estado = 'abierto'
+       and p.pedido_sugerido_id = r.pedido_sugerido_id
+       and p.negocio = r.negocio
+       and p.estado = 'abierto'
+    returning r.renglon_id, r.pedido_sugerido_id
     """
 )
 
@@ -1988,18 +2008,27 @@ _DESCARTAR = text(
 # la firma puesta haría que el conteo mensual del ADR 0002 sumara renglones que
 # alguien está trabajando.
 #
-# `and estado = 'descartado'` es la otra mitad de la transición: no se "abre"
+# `and r.estado = 'descartado'` es la otra mitad de la transición: no se "abre"
 # un renglón recibido ni uno en tránsito por esta puerta.
+#
+# **Y la lista abierta también, desde el 2026-09-20.** Deshacer es modificar, y
+# poner la condición solo en el descarte habría sido peor que no tocar nada: un
+# renglón podría quedar `descartado` dentro de una lista cerrada y no poder
+# volver. Las dos direcciones o ninguna.
 _DEVOLVER_A_ABIERTO = text(
     """
-    update pedidos.renglon
+    update pedidos.renglon as r
        set estado = 'abierto',
            descartado_por = null,
            descartado_en = null
-     where negocio = :negocio
-       and renglon_id = :renglon_id
-       and estado = 'descartado'
-    returning renglon_id, pedido_sugerido_id
+      from pedidos.pedido_sugerido as p
+     where r.negocio = :negocio
+       and r.renglon_id = :renglon_id
+       and r.estado = 'descartado'
+       and p.pedido_sugerido_id = r.pedido_sugerido_id
+       and p.negocio = r.negocio
+       and p.estado = 'abierto'
+    returning r.renglon_id, r.pedido_sugerido_id
     """
 )
 
@@ -2134,13 +2163,18 @@ _LEER_PRECIOS_DEL_RENGLON = text(
 # el destinatario aquí haría que el renglón dijera una cosa y el proveedor otra;
 # una lista `cerrada` quiere decir "ya se pidió lo que se iba a pedir".
 #
-# OJO CON LA INCOHERENCIA QUE ESTE REPO ARRASTRA, y que esto NO empeora:
-# `_DESCARTAR` deja descartar aunque la lista esté cerrada, porque el ticket 10
-# solo le puso el estado del RENGLÓN al `WHERE`. Aquí se sigue al ajuste —la
-# opción estricta— porque elegir proveedor es lo que arma un pedido, y armar un
-# pedido dentro de una lista que ya se pidió es exactamente lo que `cerrado`
-# significa que no debe pasar. Queda anotado para que el arreglo del descarte se
-# haga a propósito y no de paso.
+# LA INCOHERENCIA QUE ESTE COMENTARIO DENUNCIABA YA SE ARREGLÓ (2026-09-20).
+# Aquí decía que `_DESCARTAR` dejaba descartar aunque la lista estuviera
+# cerrada, porque el ticket 10 solo le había puesto el estado del RENGLÓN al
+# `WHERE`, y pedía que el arreglo se hiciera "a propósito y no de paso". Se
+# hizo: `_DESCARTAR` y `_DEVOLVER_A_ABIERTO` llevan ahora las mismas dos
+# condiciones que esta sentencia, así que **las tres acciones que una persona
+# hace sobre un renglón dicen lo mismo**: descartar, ajustar la cantidad y
+# elegir proveedor exigen el renglón `abierto` y su lista `abierta`.
+#
+# Se deja escrito porque la razón sigue valiendo para la siguiente acción que se
+# agregue: armar un pedido dentro de una lista que ya se pidió es exactamente lo
+# que `cerrado` significa que no debe pasar.
 #
 # Las tres columnas se escriben juntas porque `ck_renglon_eleccion` las exige
 # juntas, igual que `ck_renglon_ajuste` con las suyas. `now()` y no una hora de
