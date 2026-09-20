@@ -19,13 +19,37 @@ se quiere evitar es que este archivo siga aquí en diciembre diciendo mentiras.
 Aquí está lo mismo para tenerlo a la mano dentro del repo, con los comandos
 pegables. Si los dos no coinciden, manda Notion.
 
+---
+
+## Dónde vamos — 4 de 16 casillas
+
+| | Pendiente | Estado |
+|---|---|---|
+| 1 | El remoto y el clon en atlas | ✅ 2026-09-19 |
+| 2 | Los `grants` de farmacia-data | ✅ 2026-09-19 |
+| **7** | **El DDL, el rol y el verificador** | ⏭️ **el siguiente, y ahora urge** |
+| 3 | Las cuatro sesiones de Doyle | pendiente |
+| 4 | La decisión del descarte | pendiente *(es una decisión, no trabajo)* |
+| 5 | `clase_abc` en `dim_producto` | pendiente |
+| 6 | Doyle a atlas | pendiente *(lo más incierto)* |
+| 8 | Las unidades de systemd | pendiente |
+| 9 | El túnel y Access | pendiente |
+| 10 | El monitor de Uptime Kuma | pendiente |
+| 11 | El recorrido en navegador del ticket 20 | pendiente |
+
+**El 7 dejó de ser uno más.** Desde que el 2 entró, el rol `continental` no es
+solo lo que hace falta para que este módulo lea el almacén: es lo que impide
+que un `dbt build` en atlas tumbe la cadena nocturna de farmacia-data. Los
+números no se renumeran aunque cambie el orden —Notion y los commits los
+referencian—; lo que cambia es por dónde se sigue.
+
 **Por qué existe esto y no está en `HANDOVER.md`:** el HANDOVER describe **el
 estado actual** y no una lista de parches por aplicar —lo dice su primera
 línea—. Esto es justo una lista de parches por aplicar.
 
 ---
 
-## Lo que se puede empezar hoy
+## Los que no esperaban a nadie
 
 ### 1. El remoto de GitHub y el clon en atlas — ✅ **hecho el 2026-09-19**
 
@@ -45,11 +69,20 @@ permanente. Aquí solo el saldo:
   `--system-site-packages`. El plan B que este archivo proponía
   —`apt install python3-psycopg2`— no existía: ese paquete no está instalado en
   atlas, así que no había nada que heredar.
-- **Dos llaves, no una.** Atlas tiene deploy key de **lectura**; la torre, una
-  de escritura. Atlas despliega, no publica.
-- **La torre no puede empujar por HTTPS**, y eso todavía muerde en el próximo
-  repo: el almacén de credenciales de Windows truena, y aunque se arregle,
-  GitHub no acepta contraseñas desde 2021. El camino es ssh.
+- **Dos llaves, con alcances distintos a propósito.** Atlas tiene una *deploy
+  key* de **solo lectura**, amarrada a este repo: despliega, no publica. La
+  torre tiene una **llave de cuenta**, que alcanza todos los repos porque es
+  donde se escribe el código. Si atlas se ve comprometido, lo que se filtra es
+  lectura de un repo.
+- **Empujar por HTTPS desde la torre no funciona, y ya no hace falta.** Fallaba
+  dos veces seguidas: el almacén de credenciales de Windows no persiste
+  (`wincredman`), y aunque eso se arregle, GitHub no acepta contraseñas desde
+  2021. Se resolvió pasando la llave de la torre a llave de cuenta, así que el
+  problema está cerrado **para todos los repos**, no solo para este.
+
+  Lo que queda de eso: **Marlowe y Doyle siguen con sus remotos en HTTPS** y van
+  a chocar igual el día que les toque empujar. Ya tienen la llave que los
+  arregla; es un `git remote set-url` a `git@github.com:...` y nada más.
 
 Lo que esto desbloquea son los pendientes 7 a 11: todos empiezan con "en
 `~/proyectos/Continental`", que hasta hoy no existía.
@@ -158,8 +191,9 @@ cada despliegue.
 
 - [ ] La mudanza, con visor remoto sobre Xvfb
 
-Verificado el 2026-09-19: en `~/proyectos/` de atlas están `borde`, `Farmacia`,
-`Marlowe` y `Sarabia`. **Doyle no está ahí.**
+Verificado el 2026-09-19: en `~/proyectos/` de atlas están `borde`,
+`Continental` (desde hoy), `Farmacia`, `Marlowe` y `Sarabia`. **Doyle no está
+ahí.**
 
 Cierra dos casillas que hoy no se pueden cerrar: el lote reutilizando el
 navegador por proveedor (ticket 18) y el botón que abre una sesión caducada
@@ -171,7 +205,12 @@ CPU de 2010, si VICMA abre ventana ahí, el captcha de LEVIC.
 
 ---
 
-## Lo que depende de que el repo esté en atlas
+## Los que esperaban al repo en atlas — **la espera terminó**
+
+Esa condición se cumplió el 2026-09-19 con el pendiente 1:
+`~/proyectos/Continental` existe, con su venv y las 827 pruebas en verde. Los
+cinco de aquí abajo **ya se pueden empezar**; se quedan agrupados así porque
+explica por qué estuvieron detenidos, no porque sigan estándolo.
 
 ### 7. El DDL, el rol y el verificador · *ahora también bloquea a farmacia-data*
 
@@ -202,9 +241,33 @@ docker exec -i farmacia_warehouse psql -U farmacia -d farmacia \
 El tercero hace 26 comprobaciones y sale con código distinto de cero si algo
 quedó mal.
 
+Comprobado contra `pg_roles` el 2026-09-19: **el rol no existe todavía.** En la
+base están `farmacia` y `marlowe`, no el tercero — así que esta es la primera
+corrida de verdad, no una repetición.
+
+> **La contraseña se pone una sola vez, y el script no avisa de lo contrario.**
+> `crear_rol.sql` es idempotente, y si encuentra el rol ya creado **no le toca
+> la contraseña** a propósito (línea 96): imprime *"NO se le toca la
+> contraseña"* y sigue con los permisos. Eso está bien cuando se recorre para
+> reaplicar grants, y es una trampa cuando el rol se creó a mano o con otra
+> contraseña — Continental se queda sin poder entrar y la corrida termina en
+> verde. Si hay que cambiarla, es un `ALTER ROLE continental PASSWORD ...`
+> aparte, no otra pasada de este archivo.
+>
+> La misma contraseña va en `WAREHOUSE_URL` del `.env` de atlas (paso A.4 de
+> `docs/despliegue-en-atlas.md`). Si las dos no coinciden, lo que se ve es un
+> *password authentication failed* que parece problema de red.
+
 Si la base se creó **antes** del 2026-09-19, correr además las migraciones
 `0001` a `0005` de `sql/migraciones/`. Son idempotentes. Hacen falta porque
 `CREATE TABLE IF NOT EXISTS` **calla si la tabla ya existe con otra forma**.
+
+**Lo que sigue inmediatamente después**, y es lo que cierra el lazo con el
+pendiente 2: ya con el rol creado, hacer `git pull` de farmacia-data en atlas,
+correr `cd dbt && ../.venv/bin/dbt build` una vez, y **volver a correr
+`verificar_rol.sql`**. Su comprobación 9 compara las tablas de `marts` que el
+rol puede leer contra las cinco esperadas, así que detecta tanto que falte una
+—dbt se la llevó— como que sobre otra.
 
 ### 8. Las unidades de systemd
 
