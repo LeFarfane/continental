@@ -471,6 +471,27 @@ class AlmacenamientoFalso:
         ]
         return max(cortes) if cortes else None
 
+    def piso_sin_pedir(self, negocio: str, antes_de: dt.date) -> dt.date | None:
+        """El `min(ventas_consideradas_desde)` de las que NO cerraron.
+
+        Las tres condiciones son el `WHERE` de `_PISO_SIN_PEDIR`, en el mismo
+        orden. `estado != CERRADO` y no una lista de estados prohibidos, igual
+        que allá: el día que aparezca un cuarto estado, entra solo.
+
+        Y `min` y no `max`: si quedaron varias sin cerrar, el piso es el
+        principio de la más vieja. Cubrirlas a medias esconde el hueco entre
+        renglones que sí están.
+        """
+        self._revisar()
+        pisos = [
+            lista["ventas_consideradas_desde"]
+            for lista in self.listas
+            if lista["negocio"] == negocio
+            and lista["estado"] != CERRADO
+            and lista["fecha_del_pedido"] < antes_de
+        ]
+        return min(pisos) if pisos else None
+
     # ----------------------------------------------------------- escritura
 
     def abrir_el_dia(

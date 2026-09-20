@@ -300,6 +300,9 @@ def pedido_sugerido(
             corte=almacenamiento.corte_del_ultimo_cerrado(negocio, ultima),
             hasta=ultima,
             dias_primera_vez=dias_primera_vez_configurados(),
+            # El piso: días propuestos que nadie pidió. Sin esto, con la
+            # ventana de un día hábil, un día desatendido se cae al suelo.
+            piso_sin_pedir=almacenamiento.piso_sin_pedir(negocio, ultima),
         )
         guardado = almacenamiento.abrir_el_dia(
             negocio,

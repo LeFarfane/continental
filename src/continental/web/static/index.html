@@ -1484,7 +1484,20 @@ async function cargarPedido() {
   if (dias > 1) {
     const cuantos = document.createElement('span');
     cuantos.className = 'dias-acumulados';
-    cuantos.textContent = dias + ' días acumulados desde el último cierre';
+    // DECÍA "acumulados desde el último cierre" Y PODÍA MENTIR. Desde que la
+    // ventana se acortó a un día hábil (2026-09-20), una lista de varios días
+    // tiene dos causas posibles: el fin de semana, o que alguien dejó una
+    // lista sin cerrar y sus días se arrastran para que no se pierdan. En el
+    // segundo caso NO hay ningún cierre del cual acumular, así que la frase
+    // vieja nombraba algo que no existía.
+    //
+    // Se dice el número y no la causa porque el número es lo que cambia la
+    // decisión: esta lista trae más piezas que un día normal. La causa se lee
+    // en las fechas, que están al lado.
+    cuantos.textContent = dias + ' días de ventas en esta lista, no uno';
+    cuantos.title = 'La lista cubre un solo día hábil salvo que haya de por '
+      + 'medio un fin de semana o un día que nadie cerró. Esos días se '
+      + 'arrastran a propósito para que sus ventas no se pierdan.';
     corte.append(' ', cuantos);
   }
 

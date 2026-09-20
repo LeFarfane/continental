@@ -252,7 +252,10 @@ class Ventana:
 
 
 def ventana_de_reposicion(
-    corte: dt.date | None, hasta: dt.date, dias_primera_vez: int
+    corte: dt.date | None,
+    hasta: dt.date,
+    dias_primera_vez: int,
+    piso_sin_pedir: dt.date | None = None,
 ) -> Ventana:
     """Desde dónde repone el sugerido nuevo: **desde el corte del último cerrado**.
 
@@ -295,11 +298,46 @@ def ventana_de_reposicion(
     Sin corte —la primera vez— la ventana es de `dias_primera_vez` días
     contando los dos extremos, y ese número sale de
     `config/continental.yml`, nunca de aquí.
+
+    ## El piso, que llegó el 2026-09-20 con la ventana corta
+
+    `piso_sin_pedir` es el principio de la lista más vieja que se quedó
+    `abierta` o `vencida`: ventas que **se propusieron y nadie pidió**. La
+    ventana nunca empieza después de ese día.
+
+    Hasta esa fecha `dias_primera_vez` valía 7 y esto no hacía falta: una
+    ventana de una semana volvía a recoger, por accidente, lo que nadie había
+    cerrado. Al bajarla a **un día hábil** —para que la lista sea corta y
+    legible, que es lo que se pidió— esa red desapareció, y sin este piso las
+    ventas de un día desatendido **se caen al suelo sin un solo error que ver**.
+    Es la falla silenciosa que prohíbe la regla 4, y la alternativa —confiar en
+    que el encargado cierre su lista todos los días— es justo la clase de
+    garantía que este repo no acepta.
+
+    **SOLO SE APLICA CUANDO NO HAY CORTE, y esa restricción es la que impide
+    duplicar.** Con un corte ya existente, la ventana empieza en `corte + 1` y
+    ahí el piso sobra — peor, haría daño: si el lunes quedó `abierta` y el
+    martes se `cerró`, retroceder hasta el lunes volvería a proponer **también
+    el martes**, que ya se pidió. Las piezas de los dos días se sumarían en un
+    solo número por renglón y el pedido saldría del doble **sin que se vea**,
+    que es exactamente lo que el ADR 0002 prohíbe. `Ventana` es un intervalo y
+    no un conjunto de días, así que no puede saltarse el martes por dentro.
+
+    > **Lo que eso deja fuera, dicho y no disimulado:** un día sin cerrar que
+    > quedó **antes** de un corte posterior se pierde igual. No es una
+    > regresión —pasaba idéntico con la ventana de siete días, porque esa rama
+    > solo corre sin corte— pero tampoco está resuelto. Arreglarlo pide que la
+    > reposición deje de ser un intervalo, y eso es otra decisión.
+
+    Quien tiene que **decirlo en la pantalla** es quien la arma: una ventana de
+    cinco días y una de uno se ven igual en los renglones, porque las piezas se
+    suman en un solo número.
     """
     if corte is None:
-        return Ventana(
-            desde=hasta - dt.timedelta(days=dias_primera_vez - 1), hasta=hasta
-        )
+        desde = hasta - dt.timedelta(days=dias_primera_vez - 1)
+        if piso_sin_pedir is not None:
+            desde = min(desde, piso_sin_pedir)
+        return Ventana(desde=desde, hasta=hasta)
 
     desde = corte + dt.timedelta(days=1)
     if desde <= hasta:
@@ -1492,6 +1530,26 @@ class AlmacenamientoDelPedido(Protocol):
 
         `antes_de` acota a los días anteriores al que se está abriendo y viene
         del dato (`max(fecha)` del almacén), nunca del reloj.
+
+        Su espejo es `piso_sin_pedir`, que dice desde dónde hay días propuestos
+        que nadie pidió. Los dos juntos son la ventana; ninguno basta solo.
+        """
+        ...
+
+    def piso_sin_pedir(self, negocio: str, antes_de: dt.date) -> dt.date | None:
+        """Desde qué día hay ventas **propuestas y nunca pedidas**.
+
+        El principio de la lista más vieja que se quedó `abierta` o `vencida`.
+        `None` es "no quedó nada pendiente", que es el caso ordinario cuando el
+        encargado cierra su lista todos los días.
+
+        **Existe desde que la ventana se acortó a un día hábil (2026-09-20).**
+        Antes la primera ventana era de siete días y recogía por accidente lo
+        que nadie había cerrado; con un día, sin este piso, las ventas de un
+        día desatendido se caen al piso sin un solo error que ver.
+
+        `antes_de` acota igual que en `corte_del_ultimo_cerrado`, y sale del
+        dato (`max(fecha)`), nunca del reloj.
         """
         ...
 
@@ -1907,6 +1965,38 @@ _ULTIMO_CORTE = text(
     from pedidos.pedido_sugerido
     where negocio = :negocio
       and estado = 'cerrado'
+      and fecha_del_pedido < :antes_de
+    """
+)
+
+# El día más viejo que se propuso y **nadie pidió**: el piso de la ventana.
+#
+# ES EL ESPEJO DE `_ULTIMO_CORTE` Y LLEGÓ EL 2026-09-20, con la ventana corta.
+# Aquel dice hasta dónde llegó lo ya pedido; éste dice desde dónde hay ventas
+# propuestas que nunca se convirtieron en un pedido, porque su lista se quedó
+# `abierta` o se `venció`.
+#
+# **Por qué hizo falta, con su fecha:** hasta ese día la primera ventana era de
+# siete días, ancha por accidente, y casi siempre volvía a recoger lo que nadie
+# había cerrado. Al bajarla a un día hábil —decisión del dueño, para que la
+# lista sea corta y legible— esa red desapareció: sin un solo cierre en la base
+# no hay corte, la ventana se acota al último día, y **las ventas de un día que
+# nadie atendió se caen al piso sin un error que ver**. Es la falla silenciosa
+# de la regla 4 y por eso la ventana ahora tiene dos extremos, no uno.
+#
+# `min(ventas_consideradas_desde)` y no `max`: si hay varias sin cerrar, el
+# piso es el principio de la más vieja. Cubrirlas a medias sería peor que no
+# cubrirlas, porque el hueco quedaría escondido entre renglones que sí están.
+#
+# `estado <> 'cerrado'` en vez de nombrar `abierto` y `vencido`: el día que
+# aparezca un cuarto estado, entra solo. La lista de estados prohibidos es la
+# que se queda vieja.
+_PISO_SIN_PEDIR = text(
+    """
+    select min(ventas_consideradas_desde) as piso
+    from pedidos.pedido_sugerido
+    where negocio = :negocio
+      and estado <> 'cerrado'
       and fecha_del_pedido < :antes_de
     """
 )
@@ -2545,6 +2635,17 @@ class AlmacenamientoPostgres:
                 .first()
             )
         return None if fila is None else fila["corte"]
+
+    def piso_sin_pedir(self, negocio: str, antes_de: dt.date) -> dt.date | None:
+        with self._motor().connect() as conexion:
+            fila = (
+                conexion.execute(
+                    _PISO_SIN_PEDIR, {"negocio": negocio, "antes_de": antes_de}
+                )
+                .mappings()
+                .first()
+            )
+        return None if fila is None else fila["piso"]
 
     def leer_renglon(self, negocio: str, renglon_id: int) -> RenglonGuardado | None:
         with self._motor().connect() as conexion:

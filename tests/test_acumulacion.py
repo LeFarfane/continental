@@ -73,10 +73,22 @@ def test_el_numero_de_la_primera_vez_es_un_argumento_y_no_una_constante():
     assert ventana == Ventana(dt.date(2026, 9, 14), dt.date(2026, 9, 16))
 
 
-def test_los_siete_dias_de_la_primera_vez_salen_del_yaml_versionado():
-    """El número vive en el archivo que se despliega, no en un `= 7` del código."""
+def test_la_primera_vez_es_un_solo_dia_habil_y_sale_del_yaml_versionado():
+    """El número vive en el archivo que se despliega, no en un literal del código.
+
+    **Era 7 y bajó a 1 el 2026-09-20**, por decisión del dueño. Siete días era
+    razonable mientras no hubiera historia de cierres, y es una mala primera
+    impresión: la primerísima lista propondría una semana entera de ventas de
+    golpe sobre un anaquel que ya se repuso solo durante esa semana.
+
+    **Uno aquí ya es "un día hábil"** y no hace falta que nadie sepa de
+    calendarios: la ventana termina en `max(fecha)` de las ventas, así que su
+    último día siempre tiene ventas y ni un domingo ni un feriado pueden caer
+    ahí. Medido el 2026-09-20 contra el almacén con el 16 de septiembre
+    —Independencia—, que se ve idéntico a un domingo: cero filas.
+    """
     assert "dias_primera_vez" in CONFIG.read_text(encoding="utf-8")
-    assert dias_primera_vez_configurados() == 7
+    assert dias_primera_vez_configurados() == 1
 
 
 def test_sin_el_numero_en_el_yaml_la_ventana_es_de_un_dia_y_no_uno_inventado(
@@ -278,7 +290,12 @@ def test_una_lista_abierta_o_vencida_no_es_un_corte(cliente, almacen, almacenami
     cuerpo = cliente.get(RUTA).json()
 
     assert almacenamiento.leer(NEGOCIO, dt.date(2026, 9, 15)).estado == VENCIDO
-    assert cuerpo["ventas_consideradas_desde"] == "2026-09-10"  # siete días
+    # El principio de la lista que nadie cerró, que es `piso_sin_pedir`. Aquí
+    # decía `2026-09-10` —siete días— y eso era la ventana ancha de la primera
+    # vez recogiéndolo **por accidente**. Desde que la ventana es de un día
+    # hábil (2026-09-20) lo recoge a propósito, y esta prueba pasó de
+    # comprobar una casualidad a comprobar la garantía.
+    assert cuerpo["ventas_consideradas_desde"] == "2026-09-15"
     assert sorted(r["producto_id"] for r in cuerpo["renglones"]) == [1, 2], (
         "Lo del día que nadie cerró desapareció de la lista siguiente."
     )
@@ -563,4 +580,85 @@ def _producto(
         existencia=existencia,
         esta_activo=True,
         es_granel=False,
+    )
+
+
+# ------------------ el piso: dias propuestos que nadie pidio (2026-09-20)
+#
+# Llego con la ventana corta. Hasta ese dia `dias_primera_vez` valia 7 y esta
+# red existia por accidente: una ventana de una semana volvia a recoger lo que
+# nadie habia cerrado. Al bajarla a un dia habil -para que la lista sea corta y
+# legible- la red desaparecia, y las ventas de un dia desatendido se caian al
+# suelo sin un solo error que ver.
+
+
+def test_sin_corte_la_ventana_retrocede_hasta_lo_que_nadie_pidio():
+    """Un dia propuesto y no cerrado manda sobre la ventana de la primera vez."""
+    ventana = ventana_de_reposicion(
+        corte=None,
+        hasta=dt.date(2026, 9, 18),
+        dias_primera_vez=1,
+        piso_sin_pedir=dt.date(2026, 9, 15),
+    )
+
+    assert ventana == Ventana(dt.date(2026, 9, 15), dt.date(2026, 9, 18))
+
+
+def test_sin_nada_pendiente_la_ventana_es_la_corta():
+    """El caso ordinario: el encargado cierra su lista y no arrastra nada."""
+    ventana = ventana_de_reposicion(
+        corte=None, hasta=dt.date(2026, 9, 18), dias_primera_vez=1, piso_sin_pedir=None
+    )
+
+    assert ventana == Ventana(dt.date(2026, 9, 18), dt.date(2026, 9, 18))
+
+
+def test_el_piso_no_retrocede_por_encima_de_un_corte_porque_duplicaria():
+    """**La restriccion que impide pedir el doble en silencio.**
+
+    Si el lunes quedo `abierta` y el martes se `cerro`, retroceder hasta el
+    lunes volveria a proponer TAMBIEN el martes, que ya se pidio. Las piezas de
+    los dos dias se suman en un solo numero por renglon, asi que el pedido
+    saldria del doble sin que se vea -- la falla que el ADR 0002 prohibe y que
+    no se nota mirando la pantalla.
+
+    `Ventana` es un intervalo y no un conjunto, asi que no puede saltarse el
+    martes por dentro. Por eso el piso solo se aplica cuando NO hay corte.
+    """
+    ventana = ventana_de_reposicion(
+        corte=dt.date(2026, 9, 16),
+        hasta=dt.date(2026, 9, 18),
+        dias_primera_vez=1,
+        piso_sin_pedir=dt.date(2026, 9, 14),
+    )
+
+    assert ventana == Ventana(dt.date(2026, 9, 17), dt.date(2026, 9, 18)), (
+        "La ventana retrocedio por debajo del corte: esos dias ya se pidieron."
+    )
+
+
+def test_la_pantalla_avisa_cuando_la_lista_trae_mas_de_un_dia(cliente):
+    """Una lista de cinco dias y una de uno se ven IGUAL en los renglones.
+
+    Las piezas se suman en un solo numero por renglon, asi que el arrastre es
+    invisible mirando la tabla: el encargado veria "pedir 12" sin manera de
+    saber que son tres dias y no el de ayer. Por eso el numero va arriba, junto
+    a las fechas.
+
+    La frase no nombra "el ultimo cierre", y eso es a proposito: desde que la
+    ventana es de un dia habil, una lista larga puede venir de un dia que nadie
+    cerro -- y ahi NO hay ningun cierre del cual acumular. La frase vieja
+    nombraba algo que en ese caso no existe.
+    """
+    pagina = cliente.get("/").text
+
+    assert "días de ventas en esta lista, no uno" in pagina
+    # Sobre lo que se PINTA y no sobre el archivo entero: la frase vieja sigue
+    # ahi, citada dentro del comentario que explica por que se fue.
+    assert "textContent = dias + ' días acumulados" not in pagina, (
+        "Volvio la frase que miente cuando no hubo ningun cierre."
+    )
+    assert "dias > 1" in pagina, (
+        "El aviso dejo de estar condicionado: una lista de un dia no tiene nada "
+        "que advertir, y un aviso permanente se deja de leer."
     )

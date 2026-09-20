@@ -112,12 +112,17 @@ def test_la_ventana_se_ancla_en_el_ultimo_dato_y_nunca_en_el_reloj(cliente, alma
     y la lista sale vacía, que es exactamente la falla silenciosa que
     farmacia-data pagó con 11.7 puntos de crecimiento inventados.
 
-    De paso comprueba la otra mitad, que el ticket 09 cambió: **sin un cierre
-    anterior la ventana son los días de `pedido.dias_primera_vez`**, así que lo
-    del día anterior entra y lo de hace un mes no. El extremo derecho sigue
-    siendo el último día con datos, y de ahí cuelga todo lo demás. La
-    acumulación desde el corte tiene su propio archivo,
-    `test_acumulacion.py`.
+    De paso comprueba la otra mitad: **sin un cierre anterior la ventana son los
+    días de `pedido.dias_primera_vez`**, que desde el 2026-09-20 es **uno**.
+    Entra el último día con datos y nada más — ni el día anterior ni el de hace
+    un mes. El extremo derecho sigue siendo el último día con datos, y de ahí
+    cuelga todo lo demás. La acumulación desde el corte tiene su propio
+    archivo, `test_acumulacion.py`.
+
+    **Y sigue probando el anclaje igual de bien con la ventana corta**, que era
+    la duda al acortarla: si alguien anclara en `date.today()`, la ventana sería
+    `[hoy, hoy]` de 2026 y no encontraría ni una venta de 2024. La lista saldría
+    vacía y el `assert` de abajo caería.
     """
     almacen.catalogo_en_memoria = [
         _producto(1, "7501000000001", "PARACETAMOL"),
@@ -126,7 +131,7 @@ def test_la_ventana_se_ancla_en_el_ultimo_dato_y_nunca_en_el_reloj(cliente, alma
     ]
     almacen.ventas_en_memoria = [
         _venta(dt.date(2024, 2, 5), producto_id=3, cantidad=7),  # un mes antes: fuera
-        _venta(dt.date(2024, 3, 4), producto_id=2, cantidad=9),  # el día anterior
+        _venta(dt.date(2024, 3, 4), producto_id=2, cantidad=9),  # el día anterior: fuera
         _venta(dt.date(2024, 3, 5), producto_id=1, cantidad=3),  # el último con datos
     ]
 
@@ -134,10 +139,7 @@ def test_la_ventana_se_ancla_en_el_ultimo_dato_y_nunca_en_el_reloj(cliente, alma
 
     assert cuerpo["fecha_de_ventas"] == "2024-03-05"
     assert cuerpo["fecha_de_ventas"] != dt.date.today().isoformat()
-    assert sorted(r["clave"] for r in cuerpo["renglones"]) == [
-        "7501000000001",
-        "7501000000002",
-    ]
+    assert sorted(r["clave"] for r in cuerpo["renglones"]) == ["7501000000001"]
 
 
 def test_el_calculo_no_menciona_el_reloj_en_ninguna_parte():
@@ -417,11 +419,16 @@ def test_cada_renglon_dice_sus_dias_de_cobertura(cliente, almacen):
     cuerpo = cliente.get(RUTA).json()
 
     assert cuerpo["renglones"][0]["dias_de_cobertura"] == 10.0
-    # La reposición es otra ventana: sin cierre anterior son los siete días de
-    # `pedido.dias_primera_vez`, así que aquí entran las cuatro piezas. Que las
-    # dos ventanas no se confundan es lo que prueba
-    # `test_acumulacion.py::test_el_ritmo_sigue_midiendose_sobre_28_dias_aunque_la_reposicion_sea_mas_larga`.
-    assert cuerpo["renglones"][0]["cantidad_propuesta"] == 4
+    # **Las dos ventanas son distintas, y aquí se ve de un vistazo.** El ritmo
+    # se mide sobre 28 días —de ahí salen las 4 piezas en 4 días y los 10 días
+    # de cobertura—, pero la REPOSICIÓN es otra cosa: sin cierre anterior son
+    # los `pedido.dias_primera_vez`, que desde el 2026-09-20 es **uno**. Así
+    # que se propone 1, la pieza del último día, y no 4.
+    #
+    # Este número decía 4 cuando la primera ventana eran siete días, y el
+    # cambio lo volvió una mejor demostración: antes las dos ventanas daban
+    # cifras que podían confundirse, ahora se separan solas.
+    assert cuerpo["renglones"][0]["cantidad_propuesta"] == 1
 
 
 def test_la_lista_va_ordenada_por_urgencia_y_nada_se_filtra(cliente, almacen):

@@ -25,7 +25,24 @@ pedido:
   # un cierre anterior desde el cual acumular. Después de esa primera vez,
   # siempre acumula desde el último cierre -con el hueco de fin de semana,
   # mirar solo "el último día" tiraría las ventas del sábado al piso-.
-  dias_primera_vez: 7
+  #
+  # ERA 7 HASTA EL 2026-09-20, y se bajó a 1 por decisión del dueño. Siete días
+  # era razonable cuando no había historia de cierres, y es una mala primera
+  # impresión: la primerísima lista propondría una semana entera de ventas de
+  # golpe sobre un anaquel que ya se repuso solo durante esa semana. Pediría de
+  # más, y eso es lo primero que el encargado vería de la herramienta.
+  #
+  # UN DÍA AQUÍ YA ES "UN DÍA HÁBIL", sin necesidad de saber de calendarios.
+  # La ventana termina en `max(fecha)` de las ventas, así que su último día
+  # SIEMPRE tiene ventas: los domingos y los feriados no pueden caer ahí. Se
+  # midió el 2026-09-20 con el 16 de septiembre -Independencia-, que en el
+  # almacén se ve idéntico a un domingo: cero filas.
+  #
+  # Y ojo con la lectura contraria, que es la trampa: un día con cero filas NO
+  # quiere decir "cerraron". El sábado 2026-09-19 también tenía cero, porque el
+  # respaldo de SICAR no sale en sábado y todavía no había llegado. Lo que
+  # distingue "cerrado" de "todavía no llega" es `max(fecha)`, no el conteo.
+  dias_primera_vez: 1
 
   # Tope del lote nocturno de precios (ticket 18, lo lee
   # `continental.lote.tope_del_lote_segundos`). Lo que no alcanzó queda marcado
