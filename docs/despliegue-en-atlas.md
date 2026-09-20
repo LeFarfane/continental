@@ -2,10 +2,11 @@
 
 Cómo `farmacia.farfanlab.uk` llega a existir, paso a paso y en orden.
 
-**Estado al 2026-09-20: hechos A.1, A.2, A.3 y A.5. Falta A.4 y de A.6 en
-adelante.** Lo que falta necesita dos cosas que una sesión de agente no puede
-hacer sola: **escribir en atlas** y **entrar al dashboard de Cloudflare**. Las
-casillas sin marcar lo están por eso, no por olvido.
+**Estado al 2026-09-20: hecha toda la parte A menos A.8.** Continental corre en
+atlas, escucha en `172.19.0.1:8585` y lee el almacén con su rol acotado. Lo que
+queda es **la parte B, que se hace en el dashboard de Cloudflare y no por ssh**,
+y **A.8, el lote nocturno, que espera a que Doyle esté en atlas** (ADR 0008 de
+Doyle, pendiente 6 de `pendientes.md`).
 
 > **A.5 se hizo antes que A.4 y el orden de los números no manda aquí.** El rol
 > subió de prioridad cuando farmacia-data agregó `continental` al `grants` de
@@ -230,11 +231,12 @@ sigue valiendo para cualquier instalación vieja.
 > estar mintiendo. Ahora hay una prueba que impide que otro `string_agg` del
 > archivo ordene descendente.
 
-### A.6 — Instalar la unidad
+### A.6 — Instalar la unidad — ✅ **hecho el 2026-09-20**
 
-- [ ] Y verificarla **antes** de encenderla: `systemd-analyze verify` es lo que
-      delató en Marlowe que `StartLimitIntervalSec` estaba en la sección
-      equivocada y systemd lo ignoraba en silencio.
+- [x] Verificada **antes** de encenderla. `systemd-analyze verify` **no dijo
+      nada**, que es lo que se busca: es lo que delató en Marlowe que
+      `StartLimitIntervalSec` estaba en la sección equivocada y systemd lo
+      ignoraba en silencio.
 
 ```bash
 sudo cp scripts/systemd/continental-web.service /etc/systemd/system/
@@ -244,14 +246,31 @@ sudo systemctl enable --now continental-web.service
 systemctl status continental-web.service
 ```
 
-### A.7 — Comprobar que escucha donde se cree
+Corriendo desde las 00:56 del 2026-09-20, con `NRestarts=0`.
 
-- [ ] Tiene que decir `172.19.0.1:8585`, no `127.0.0.1` y no `0.0.0.0`:
+> **El journal de esta unidad está vacío y no es un síntoma.** `iniciar.py`
+> arranca uvicorn con `log_level="warning"`, así que no hay banner de arranque
+> ni log de accesos — los avisos y los errores sí viajan. Si buscas confirmar
+> que está viva, `systemctl status`, `ss` y `/api/salud` son las respuestas;
+> `journalctl -u continental-web` en silencio significa *nada que reportar*, no
+> *no arrancó*. (Marlowe se lee igual: su última línea es de septiembre 8.)
+
+### A.7 — Comprobar que escucha donde se cree — ✅ **hecho el 2026-09-20**
+
+- [x] Dice `172.19.0.1:8585` —el gateway de `borde`, no loopback y no
+      `0.0.0.0`— y `/api/salud` contesta
+      `{"ok":true,"version":"0.1.0","negocio":"farmacia_01",...}`.
 
 ```bash
 ss -ltn | grep 8585
 curl -s http://172.19.0.1:8585/api/salud
 ```
+
+> **En esa respuesta `"quien"` dice `sin-identificar`, y está bien.** Ese `curl`
+> entra por el gateway, no por el túnel, así que no trae
+> `Cf-Access-Authenticated-User-Email`. Que diga un correo es lo que hay que
+> comprobar en **B.3**, desde fuera; verlo aquí sería el problema, no la
+> confirmación.
 
 > Si `ss` no muestra nada y el journal dice "Cannot assign requested address",
 > el gateway de `borde` cambió. Volver a medirlo y poner el valor nuevo en la
@@ -266,6 +285,25 @@ Es lo que hace que **en la mañana la lista ya traiga precios sin que nadie los
 pida**. Va después de A.6 porque comparte el venv y el `.env`, y **puede ir
 antes de la parte B**: el lote no escucha en ningún puerto y no pasa por el
 túnel. Lo que necesita es Postgres y Doyle, no Cloudflare.
+
+> ### ⏸️ Detenido a propósito el 2026-09-20: falta Doyle
+>
+> `Doyle no está en atlas` (el 8383 no escucha; es el ADR 0008 de Doyle y el
+> pendiente 6). Una corrida sin él **no truena**: marca cada renglón como *no se
+> pudo* y lo dice, que es el comportamiento correcto de la regla 4. El problema
+> es el latido: `lote.estado_del_latido` manda `ABAJO` **solo** cuando la
+> corrida `se interrumpió`, así que una noche entera en la que Doyle nunca
+> contestó sale como `ARRIBA`.
+>
+> Hoy eso no se ve porque `KUMA_PUSH_URL_CONTINENTAL` todavía no existe y el
+> lote solo escribe un aviso. El día que exista —parte D—, lo primero que ese
+> monitor diría es *"todo bien"* sobre un lote que no pudo preguntarle a nadie.
+> Un monitor que empieza mintiendo es peor que no tenerlo: enseña a ignorar el
+> verde.
+>
+> **Orden, entonces:** primero Doyle en atlas; si por lo que sea el lote entra
+> antes, que entre **después** del monitor y no antes, para que la primera noche
+> rara quede en el historial en vez de pasar en verde.
 
 - [ ] Instalar las dos unidades y **habilitar el TIMER, no el servicio**. Un
       `enable` sobre el servicio no hace nada útil —no tiene `[Install]`, a

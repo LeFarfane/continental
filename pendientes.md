@@ -28,12 +28,12 @@ pegables. Si los dos no coinciden, manda Notion.
 | 1 | El remoto y el clon en atlas | ✅ 2026-09-19 |
 | 2 | Los `grants` de farmacia-data | ✅ 2026-09-19 |
 | 7 | El DDL, el rol y el verificador | ✅ 2026-09-20 |
-| **8** | **Las unidades de systemd** | ⏭️ **el siguiente** — antes, el `.env` (A.4) |
+| 8 | Las unidades de systemd | 🟡 la web corre; el lote espera al 6 |
+| **9** | **El túnel y Access** | ⏭️ **el siguiente** — se hace en el dashboard |
 | 3 | Las cuatro sesiones de Doyle | pendiente |
 | 4 | La decisión del descarte | pendiente *(es una decisión, no trabajo)* |
 | 5 | `clase_abc` en `dim_producto` | pendiente |
-| 6 | Doyle a atlas | pendiente *(lo más incierto)* |
-| 9 | El túnel y Access | pendiente |
+| 6 | Doyle a atlas | pendiente *(lo más incierto, y ahora bloquea al 8)* |
 | 10 | El monitor de Uptime Kuma | pendiente |
 | 11 | El recorrido en navegador del ticket 20 | pendiente |
 
@@ -43,11 +43,12 @@ el rol que faltaba y con eso el `pull` se hizo el 2026-09-20 sin novedad. Los
 números no se renumeran aunque cambie el orden —Notion y los commits los
 referencian—; lo que cambia es por dónde se sigue.
 
-**El `.env` de atlas no es ninguno de estos once**, y sin él el 8 no arranca:
-vive como paso A.4 de `docs/despliegue-en-atlas.md`. Es copiar `.env.example` y
-poner la contraseña del rol en `WAREHOUSE_URL` —**la misma** que se le dio a
-`crear_rol.sql`, o lo que se ve es un *password authentication failed* con cara
-de problema de red.
+**El `.env` de atlas no es ninguno de estos once** —vive como paso A.4 de
+`docs/despliegue-en-atlas.md`— y quedó hecho el 2026-09-20. Mordió al ponerlo:
+la contraseña del rol y la del archivo no coincidían, y el síntoma es un
+*password authentication failed* enterrado en cien líneas de SQLAlchemy, con un
+*Connection refused* de `::1` arriba que lo disfraza de problema de red. El
+remedio, con su orden de descarte, quedó escrito en A.4.
 
 **Por qué existe esto y no está en `HANDOVER.md`:** el HANDOVER describe **el
 estado actual** y no una lista de parches por aplicar —lo dice su primera
@@ -294,25 +295,51 @@ desaparecido justo aquí. El del `config` no. Es la falla que mordió el
 > en esa corrida fueron **19 y 164**. Si vas a citar esas cifras, mídelas —yo
 > las cité de ahí y salieron mal.
 
-### 8. Las unidades de systemd
+### 8. Las unidades de systemd · *la web ya entró; el lote espera a Doyle*
 
 - [ ] `continental-web.service` y `continental-lote.{service,timer}` instalados
 
+**`continental-web.service` está instalado y corriendo desde el 2026-09-20
+00:56.** `systemd-analyze verify` calló, `NRestarts=0`, escucha en
+`172.19.0.1:8585` —el gateway, no loopback— y `/api/salud` contesta
+`{"ok":true,...,"negocio":"farmacia_01"}`. El journal de la unidad está vacío y
+**eso es correcto**: `iniciar.py` arranca uvicorn con `log_level="warning"`, así
+que no hay banner ni log de accesos, pero los avisos y los errores sí viajan.
+La confirmación de que está viva son `systemctl status`, `ss` y `/api/salud`,
+no el journal.
+
+**El lote NO se instaló, a propósito.** `continental-lote.timer` dispara
+lun–vie a las 22:00 y lo primero que hace es pedirle precios a Doyle, que **no
+está en atlas** (el 8383 no escucha; es el pendiente 6). La corrida no tronaría
+—marca cada renglón como *no se pudo* y lo dice, que es lo correcto—, pero
+`estado_del_latido` solo manda `ABAJO` cuando la corrida **se interrumpió**:
+una noche entera sin que Doyle conteste sale como `ARRIBA`. Hoy no se nota
+porque `KUMA_PUSH_URL_CONTINENTAL` no existe todavía y solo escribe un aviso.
+El día que exista —pendiente 10—, lo primero que ese monitor diría es *"todo
+bien"* sobre un lote que no pudo preguntarle a nadie, y eso es exactamente lo
+que enseña a ignorar un monitor.
+
+> **El orden entre este pendiente, el 6 y el 10 no es libre.** El lote se
+> instala cuando Doyle esté en atlas. Si por lo que sea entra antes, que entre
+> **después** del monitor de Kuma y no antes, para que la primera noche rara se
+> vea en el historial en vez de pasar en verde.
+
+Lo que falta de esta casilla, cuando toque:
+
 ```bash
-sudo cp scripts/systemd/continental-web.service /etc/systemd/system/
 sudo cp scripts/systemd/continental-lote.service /etc/systemd/system/
 sudo cp scripts/systemd/continental-lote.timer /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemd-analyze verify continental-web.service continental-lote.service
-sudo systemctl enable --now continental-web.service continental-lote.timer
-ss -ltn | grep 8585    # debe decir 172.19.0.1:8585
+sudo systemd-analyze verify continental-lote.service
+sudo systemctl enable --now continental-lote.timer
+systemctl list-timers continental-lote.timer
 ```
 
 **`systemd-analyze verify` ANTES del `enable --now`, no después.** Marlowe tuvo
 `StartLimitIntervalSec` en la sección equivocada y systemd lo ignoraba **en
 silencio**: el freno contra el bucle de reinicios no existía y nadie se habría
 enterado. Es la única herramienta que caza eso, y no se puede correr desde la
-torre.
+torre. En la web ya se corrió y calló.
 
 ### 9. El túnel y Access · *no se hace por ssh*
 
