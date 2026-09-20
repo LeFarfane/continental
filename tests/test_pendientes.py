@@ -3,8 +3,10 @@
 **Es la única prueba del suite que falla porque las cosas salieron bien**, y
 está escrita así a propósito.
 
-`pendientes.md` es una lista de acarreo con fecha de caducidad: los once pendientes
-—16 casillas— que ponen a Continental en pie en atlas. El modo de falla que existe para
+`pendientes.md` es una lista de acarreo con fecha de caducidad: los doce pendientes
+—17 casillas— que ponen a Continental en pie en atlas. El número no está
+clavado en esta prueba a propósito: el 2026-09-20 entró un pendiente nuevo y lo
+unico que hubo que tocar fue esta frase. El modo de falla que existe para
 evitar no es que alguien olvide un paso —para eso están las casillas— sino el
 otro, el silencioso: que el archivo siga en el repo en diciembre, con todo
 hecho, diciéndole a quien llegue que nada se ha hecho. Un archivo de pendientes

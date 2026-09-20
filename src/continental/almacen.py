@@ -72,30 +72,34 @@ class LineaDeVenta:
 CLASES_ABC: tuple[str, ...] = ("A", "B", "C")
 
 #: Que un producto no tenga clase conocida. **No es una cuarta clase**: es "no
-#: se sabe", igual que `existencia is None` en un renglón. Hoy vale esto para
-#: los 3,429 artículos, porque la columna todavía no existe.
+#: se sabe", igual que `existencia is None` en un renglón.
+#:
+#: Desde el 2026-09-20 ya no vale esto para todos: vale para los productos que
+#: no vendieron nada en los últimos 365 días, que es lo que dbt deja en NULL a
+#: propósito. Ver el ADR 0018 — mandarlos a `'C'` ordenaba igual de bien y
+#: afirmaba algo que nadie midió.
 SIN_CLASE_ABC = ""
 
-#: **El interruptor del bloqueo externo, y el único que hay que mover.**
+#: **El interruptor del bloqueo externo. Se movió el 2026-09-20.**
 #:
-#: `marts.dim_producto` tiene 18 columnas al 2026-09-19 y ninguna es la clase
-#: (verificado: `clase_abc` no aparece en un solo modelo de
-#: `../dbt/models`). El ADR 0018 de farmacia-data está **aceptado y sin
-#: implementar**, así que un `select clase_abc` hoy rebota en atlas con
-#: "column does not exist" y se lleva por delante la lista entera del día —el
-#: catálogo es una de las dos lecturas con las que se arma—.
+#: `marts.dim_producto` ya trae `clase_abc`: el ADR 0018 de farmacia-data se
+#: implementó ese día —A3 dejó de ser un CTE copiado cuatro veces y pasó a
+#: columna, calculada por dbt en la cadena nocturna—. `dbt build` en atlas:
+#: 61 de 61.
 #:
-#: Así que la columna se lee **cuando exista** y no antes. El día que
-#: `dbt build` la materialice, esto pasa a `True` y no hay nada más que tocar:
-#: el `Producto` ya tiene el campo, el orden del lote ya sabe usarlo y sus
-#: pruebas ya están escritas contra dobles con clase.
+#: Queda escrito porque el interruptor sigue haciendo falta y la razón no es
+#: histórica: **el catálogo es una de las dos lecturas con las que se arma la
+#: lista del día**, así que un `select clase_abc` contra una base donde la
+#: columna no esté rebota con "column does not exist" y se lleva la lista
+#: entera por delante. Si algún día hay un segundo almacén, o alguien apunta
+#: Continental a una base sin construir, esto se vuelve a mover a `False` y el
+#: módulo sigue funcionando —ordenando por urgencia y diciéndolo en su
+#: bitácora— en vez de no funcionar.
 #:
-#: Y nadie tiene que acordarse de venir: `continental.verificar` mira las
-#: columnas reales de `marts.dim_producto` en cada despliegue y lo imprime como
-#: PENDIENTE mientras la columna falte —el mismo trato que el invariante 3 del
-#: ticket 17—. En cuanto aparezca, el paso 6 del despliegue lo dice con el
-#: nombre de esta constante dentro.
-LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO = False
+#: `continental.verificar` mira las columnas reales en cada despliegue y
+#: distingue los dos casos: que la columna falte, y que exista y Continental no
+#: la lea. Los dos salen como PENDIENTE y ninguno tumba nada.
+LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO = True
 
 
 def clase_abc_normalizada(crudo) -> str:

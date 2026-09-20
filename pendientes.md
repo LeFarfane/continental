@@ -1,7 +1,7 @@
 # Pendientes para poner Continental en pie — 2026-09-19
 
 **ESTE ARCHIVO SE BORRA.** No es documentación: es una lista de acarreo con
-fecha de caducidad. Cuando las 16 casillas estén marcadas, `pendientes.md`
+fecha de caducidad. Cuando las 17 casillas estén marcadas, `pendientes.md`
 deja de tener trabajo que describir y **hay que borrarlo del repo**.
 
 No lo vas a tener que recordar: `tests/test_pendientes.py` se pone **rojo** en
@@ -21,7 +21,7 @@ pegables. Si los dos no coinciden, manda Notion.
 
 ---
 
-## Dónde vamos — 11 de 16 casillas
+## Dónde vamos — 12 de 17 casillas
 
 | | Pendiente | Estado |
 |---|---|---|
@@ -30,12 +30,25 @@ pegables. Si los dos no coinciden, manda Notion.
 | 7 | El DDL, el rol y el verificador | ✅ 2026-09-20 |
 | 8 | Las unidades de systemd | 🟡 la web corre; el lote espera al 6 |
 | 9 | El túnel y Access | ✅ 2026-09-20 — falta mirar B.3 |
-| **11** | **El recorrido en navegador del ticket 20** | ⏭️ **el siguiente, y por fin se puede** |
-| 3 | Las cuatro sesiones de Doyle | pendiente |
+| 5 | `clase_abc` en `dim_producto` | ✅ 2026-09-20 — el ADR 0018, implementado |
+| **12** | **Uptime Kuma 1.23 → 2.x** | ⏭️ **el siguiente: se decide con una medición** |
+| **11** | **El recorrido en navegador del ticket 20** | 🟡 a medias hasta que Doyle dé precios |
+| 3 | Las cuatro sesiones de Doyle | pendiente *(las contraseñas, el lunes)* |
 | 4 | La decisión del descarte | ✅ 2026-09-20 — decidida e implementada |
-| 5 | `clase_abc` en `dim_producto` | pendiente |
 | 6 | Doyle a atlas | pendiente *(lo más incierto, y ahora bloquea al 8)* |
 | 10 | El monitor de Uptime Kuma | ✅ 2026-09-20 — y se arregló el del vecino |
+
+**El 12 no estaba en la lista original y se agregó el 2026-09-20.** Es el único
+que no pone a Continental en pie: vive en `borde`. Está aquí porque **invalida
+al 10** —las dos ventanas de mantenimiento están calibradas contra un
+comportamiento de la 1.23— y sin casilla propia esta lista se podría borrar
+entera dejando esos dos números mintiendo.
+
+**Del 11 se sabe más que ayer, y es media mala noticia.** El desplegable de "Se
+le pide a" se llena de una lista fija, así que se puede mirar hoy. Lo que no se
+puede es lo que el recorrido existe para cazar: con los 124 renglones en *no se
+pudo*, todos salen en "— elige —" y el bloque de partición no tiene qué
+comparar. La mitad que importa espera al 6.
 
 **Se levantó el freno de mano.** El 2 había puesto a farmacia-data en una
 posición en la que un `git pull` en atlas tumbaba su cadena nocturna; el 7 creó
@@ -43,7 +56,7 @@ el rol que faltaba y con eso el `pull` se hizo el 2026-09-20 sin novedad. Los
 números no se renumeran aunque cambie el orden —Notion y los commits los
 referencian—; lo que cambia es por dónde se sigue.
 
-**El `.env` de atlas no es ninguno de estos once** —vive como paso A.4 de
+**El `.env` de atlas no es ninguno de estos doce** —vive como paso A.4 de
 `docs/despliegue-en-atlas.md`— y quedó hecho el 2026-09-20. Mordió al ponerlo:
 la contraseña del rol y la del archivo no coincidían, y el síntoma es un
 *password authentication failed* enterrado en cien líneas de SQLAlchemy, con un
@@ -198,23 +211,50 @@ Qué se tocó:
 Cuatro pruebas nuevas —dos de comportamiento, una sobre el SQL y una sobre el
 HTML—, verificadas en rojo antes del cambio. **833 pasan.**
 
-### 5. `clase_abc` en `dim_producto` (ADR 0018 de farmacia-data)
+### 5. `clase_abc` en `dim_producto` (ADR 0018 de farmacia-data) — ✅ **hecho el 2026-09-20**
 
-- [ ] Las columnas `clase_abc` y `clase_xyz`, calculadas por dbt en la cadena
+- [x] Las columnas `clase_abc` y `clase_xyz`, calculadas por dbt en la cadena
       nocturna
 
-Aceptado y sin implementar: verificado el 2026-09-19, `clase_abc` no aparece en
-un solo modelo de `dbt/models`.
+El ADR 0018 llevaba semanas aceptado y sin implementar. A3 —la clasificación
+ABC-XYZ— dejó de ser un CTE copiado en cuatro archivos de tres repos y pasó a
+ser columna de `dim_producto`, calculada por dbt. Commit `c989ecb` de
+farmacia-data, rama `fase1-tableros`; **`dbt build` en atlas: 61 de 61**.
 
-**Continental ya tiene su mitad lista esperando.** `ordenar_por_importancia` es
-función pura, escrita y probada (A, B, C, y al final lo que no se sabe). El día
-que la columna exista: `LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO = True` en
-`src/continental/almacen.py`, y `pytest`. Hoy la consulta **ni nombra la
-columna**, porque un `select clase_abc` rebotaría con *column does not exist* y
-se llevaría por delante la lista del día entera.
+Y de este lado, la línea que esperaba:
+`LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO = True`. El orden por importancia del lote
+nocturno ya estaba escrito y probado; lo único que faltaba era el dato.
 
-Nadie tiene que acordarse: `continental.verificar` lo imprime como PENDIENTE en
-cada despliegue.
+> **A3 no se pudo copiar tal cual, y las tres diferencias valen la pena.**
+>
+> 1. **La ventana se ancla en la última venta, no en `current_date`.** En una
+>    consulta que alguien lee a mano eso mueve el borde un día y no pasa nada.
+>    En una columna que decide el orden del pedido nocturno, la ventana se
+>    recorrería sola cada vez que la cadena se salta una noche —el Postgres del
+>    contenedor corre en UTC—, **sin fallar y sin avisar**. Es la regla que ya
+>    le costó a farmacia-data 11.7 puntos de crecimiento inventados.
+> 2. **El corte del 80% lleva desempate por `producto_id`.** La suma corrida va
+>    con `rows between unbounded preceding and current row`: dos productos con
+>    la misma utilidad quedaban en un orden que Postgres no promete, así que
+>    cuál caía en A y cuál en B **podía cambiar entre corridas sin que nada
+>    cambiara en el negocio**. A3 no lo necesitaba porque nadie comparaba dos
+>    corridas suyas; una columna que se recalcula cada noche sí.
+> 3. **Sin ventas en la ventana es NULL, no `'C'`.** `'C'` afirmaría que se
+>    midió y salió bajo. Continental ya esperaba exactamente eso: A, B, C y al
+>    final lo que no se sabe.
+>
+> Va además una prueba singular —`clase_abc_cubre_lo_que_se_vendio.sql`—, y no
+> es de adorno: el `LEFT JOIN` que permite el NULL es el mismo que se tragaría
+> un emparejamiento roto, y **una columna llena de nulos se lee igual que
+> "estos productos no se han vendido"**. Eso mandaría al final de la noche
+> justo a los que más pesan.
+
+**Lo que esto NO cierra**, y lo dice el propio ADR 0018 en sus consecuencias:
+las cuatro copias siguen ahí. A3, A3b y A3c en `sql/tableros/analisis_puntual.sql`
+y el CTE `clase` de `Marlowe/sql/canasta.sql` siguen recalculando los umbrales
+en vez de leer la columna. Son cinco definiciones en vez de una hasta que se
+reemplacen por un join. Eso es trabajo de farmacia-data y de Marlowe, no de
+esta lista.
 
 ### 6. Doyle a atlas (ADR 0008 de Doyle) · *lo más incierto de todo*
 
@@ -457,6 +497,62 @@ y nunca va al YAML versionado — hay una prueba que lo vigila.
 El timer es `Mon-Fri`: sin una ventana de mantenimiento el monitor se pone rojo
 todos los sábados, y eso enseña a ignorar el rojo.
 
+### 12. Uptime Kuma 1.23 → 2.x · *el único que no es de Continental*
+
+- [ ] Respaldar, actualizar y volver a medir la ventana
+
+**Está aquí porque invalida el pendiente 10, no porque ponga a Continental en
+pie.** Kuma corre en `borde`, que es otro repo; si esta casilla no existiera, la
+lista se podría borrar entera con los dos números del 10 apuntando a un
+comportamiento que ya no es cierto.
+
+**El salto no es un `docker pull`.** La migración del SQLite es automática, en
+el sitio y **de un solo sentido**: no hay downgrade de una base ya migrada, y la
+2.x además **eliminó el respaldo/restauración en JSON** que tenía la 1.23. El
+directorio `data`, respaldado con el contenedor parado, es el único camino de
+vuelta. La guía oficial es explícita con que la migración **no se interrumpe**;
+si se corta a la mitad, se restaura y se empieza de nuevo.
+
+> **Primero la medición del CPU, que decide si esto se puede siquiera
+> intentar.** Kuma 2.x exige **Node ≥ 20.4**, y atlas es un Athlon II de 2010:
+> SSE2 y SSE4a, **sin SSSE3, SSE4.1 ni SSE4.2**. Es la misma trampa que el
+> `CLAUDE.md` de farmacia-data ya tiene escrita para numpy y pandas. Hay
+> reportes de Node 20 muriendo con `Illegal instruction` por debajo de la línea
+> base moderna, pero son de compilaciones de distribución y no de la imagen de
+> Docker, así que **no se sabe y no se adivina**:
+>
+> ```bash
+> docker run --rm --entrypoint node louislam/uptime-kuma:2 --version
+> ```
+>
+> Si contesta `Illegal instruction`, esta casilla se cierra como *no se puede*
+> y no se respalda nada. Si imprime una versión, el segundo paso arranca la
+> aplicación entera en un volumen desechable —sin tocar los datos— para verla
+> sobrevivir bajo JIT real.
+
+**Qué hay que volver a medir después, y es el motivo de que esto esté aquí:**
+los **4190** minutos de la ventana del fin de semana y los **4105** del vecino
+están calibrados contra un comportamiento de la 1.23 —que un latido que llega
+*dentro* de una ventana se guarda como `MAINTENANCE` y **no levanta** un monitor
+Push—. Si la 2.x no lo conserva, los dos números quedan mal **sin que nada lo
+diga**, que es exactamente el modo de falla contra el que se escribió el 10.
+
+Lo demás que cambia y nos roza: los reintentos por omisión pasan de 1 a 0 **solo
+para monitores nuevos** (los seis que existen conservan lo suyo, incluidos los 2
+del de Continental), y las imágenes Alpine desaparecen. Conviene apuntar los
+seis monitores antes —nombre, tipo, intervalo— para poder cotejar, y **los
+tokens de push sobre todo**: si la migración los tocara, los `.env` de
+farmacia-data y de Marlowe apuntarían a monitores que ya no escuchan, en
+silencio.
+
+> **El fin de semana es la mejor ventana que va a haber.** Las dos ventanas de
+> mantenimiento están abiertas hasta el lunes 21:50 y la cadena nocturna es
+> `Mon-Fri`, así que **nadie empuja un latido hasta el lunes**: si Kuma se cae
+> hoy no se pierde una medición ni suena una alerta. El lunes ya no es cierto.
+>
+> Y el token de Continental que falta regenerar va **después** de actualizar,
+> no antes.
+
 ### 11. El recorrido en navegador del ticket 20
 
 - [ ] Mirar la pantalla de elegir proveedor y partir, en atlas y a 375 px
@@ -484,7 +580,7 @@ QuePharma sin `proveedor_id` de SICAR.
 
 ## Cuando esté todo
 
-Las 16 casillas marcadas —los once pendientes— quieren decir que Continental **corre en atlas, con
+Las 17 casillas marcadas —los doce pendientes— quieren decir que Continental **corre en atlas, con
 sus tablas creadas, detrás de Access y con el lote programado**. Entonces:
 
 ```bash
