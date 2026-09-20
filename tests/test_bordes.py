@@ -130,6 +130,15 @@ def test_el_borde_real_del_almacen_mal_configurado_es_un_hueco_y_no_tumba_nada(
     motor. Y el texto de la falla —que dice dónde está el archivo de
     configuración— se queda en la bitácora del servidor, no viaja al navegador
     (regla 5 de CLAUDE.md).
+
+    **El `delenv` de abajo solo simula algo porque `_sin_env_del_disco` —la
+    fixture autouse de `conftest.py`— ya neutralizó `load_dotenv`.** Sin ella,
+    en una máquina **con** `.env` la variable reaparece del disco, el borde
+    conecta de verdad y contesta `ok: True`. Esta prueba pasaba en la torre,
+    donde no hay `.env`, y se puso roja en atlas el 2026-09-20, el día que el
+    `.env` existió — con el suite siendo el paso 3 de `scripts/desplegar.sh`,
+    o sea la capacidad de desplegar. Y mientras tanto la promesa de arriba —"no
+    toca Postgres ni la red"— era falsa justo en la máquina donde importa.
     """
     from continental.almacen import motor
     from continental.config import cargar
@@ -151,6 +160,40 @@ def test_el_borde_real_del_almacen_mal_configurado_es_un_hueco_y_no_tumba_nada(
         app.dependency_overrides.clear()
         cargar.cache_clear()
         motor.cache_clear()
+
+
+def test_el_env_del_disco_no_entra_al_suite():
+    """El guardia de la prueba de arriba, porque su falla es invisible aquí.
+
+    `_sin_env_del_disco` (autouse, en `conftest.py`) es lo que hace que un
+    `monkeypatch.delenv(...)` signifique algo en una máquina con `.env`. Si
+    alguien la quita, **nada se pone rojo en la torre**: el daño aparece en
+    atlas, en el paso 3 de `scripts/desplegar.sh`, sobre una rama que aquí se
+    veía verde. Exactamente lo que pasó el 2026-09-20.
+
+    Por eso el guardia vive aquí, junto a la prueba que protege, y no en un
+    archivo de utilería que nadie abre.
+
+    Se compara **contra la función real** y no con su valor de retorno. Fue el
+    primer intento y no servía: el `load_dotenv` de verdad también contesta
+    `False` cuando no encuentra el archivo, así que en la torre —donde no hay
+    `.env`— el guardia pasaba con la fixture apagada. Un guardia que solo sabe
+    vigilar donde no hay nada que vigilar.
+    """
+    from dotenv import load_dotenv as el_de_verdad
+
+    from continental import config
+
+    import iniciar
+
+    for modulo in (config, iniciar):
+        assert modulo.load_dotenv is not el_de_verdad, (
+            f"`{modulo.__name__}.load_dotenv` es el de verdad: la fixture "
+            "autouse `_sin_env_del_disco` de conftest.py no corrió o alguien "
+            "la quitó. Sin ella, cualquier prueba que borre una variable del "
+            "entorno deja de simular nada en una máquina con `.env` — y eso "
+            "solo se ve en atlas, en el paso 3 de desplegar.sh."
+        )
 
 
 # --------------------------------------------------- la lectura del almacén

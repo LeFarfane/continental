@@ -352,6 +352,50 @@ from continental.web.dependencias import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _sin_env_del_disco(monkeypatch: pytest.MonkeyPatch) -> None:
+    """El suite da el mismo resultado haya o no haya `.env` en la máquina.
+
+    Corre en **todas** las pruebas, sin que nadie la pida. No es celo: es la
+    única forma de que "pasa en la torre" signifique "pasa en atlas".
+
+    ## La falla que existe para impedir, que ya ocurrió
+
+    `config.cargar` llama a `load_dotenv(RAIZ / ".env")` antes de leer el
+    entorno. Una prueba que simula *"falta esta variable"* con
+    `monkeypatch.delenv(...)` funciona en una máquina **sin** `.env` y **deja
+    de simular nada** en una que sí lo tenga: dotenv la repone del disco y la
+    prueba afirma sobre un sistema bien configurado creyendo que lo probó roto.
+
+    Pasó el 2026-09-20, el día que atlas estrenó su `.env`:
+    `test_el_borde_real_del_almacen_mal_configurado_es_un_hueco_y_no_tumba_nada`
+    seguía verde aquí y se puso roja allá —y de paso conectaba a Postgres de
+    verdad, justo lo que su docstring promete no hacer—. Lo caro no fue la
+    prueba: el suite es el **paso 3 de `scripts/desplegar.sh`**, así que una
+    prueba roja en atlas es la capacidad de desplegar, perdida.
+
+    ## Por qué neutralizar y no borrar el archivo
+
+    Borrar o mover el `.env` de la máquina para correr pruebas es tocar la
+    configuración de producción desde el suite, y un `pytest` interrumpido lo
+    dejaría movido. Esto no toca el disco: sustituye la **función** en los dos
+    módulos que la llaman, y `monkeypatch` la devuelve al terminar cada prueba.
+
+    Ninguna prueba depende de que el `.env` se lea —en la torre no existe y el
+    suite está verde desde siempre—, así que esto no le quita cobertura a nada.
+    """
+    from continental import config
+
+    monkeypatch.setattr(config, "load_dotenv", lambda *a, **k: False)
+
+    # `iniciar.py` tiene su propia llamada, y es la que decide dónde escucha el
+    # servicio. Importarlo aquí es barato: el suite ya lo importa en
+    # `test_despliegue.py`, y no abre nada al importarse.
+    import iniciar
+
+    monkeypatch.setattr(iniciar, "load_dotenv", lambda *a, **k: False)
+
+
 @pytest.fixture
 def almacen() -> AlmacenFalso:
     """El doble del almacén. Se le cargan filas y las devuelve tal cual."""

@@ -21,7 +21,7 @@ pegables. Si los dos no coinciden, manda Notion.
 
 ---
 
-## Dónde vamos — 7 de 16 casillas
+## Dónde vamos — 9 de 16 casillas
 
 | | Pendiente | Estado |
 |---|---|---|
@@ -29,13 +29,13 @@ pegables. Si los dos no coinciden, manda Notion.
 | 2 | Los `grants` de farmacia-data | ✅ 2026-09-19 |
 | 7 | El DDL, el rol y el verificador | ✅ 2026-09-20 |
 | 8 | Las unidades de systemd | 🟡 la web corre; el lote espera al 6 |
-| **9** | **El túnel y Access** | ⏭️ **el siguiente** — se hace en el dashboard |
+| 9 | El túnel y Access | ✅ 2026-09-20 — falta mirar B.3 |
+| **11** | **El recorrido en navegador del ticket 20** | ⏭️ **el siguiente, y por fin se puede** |
 | 3 | Las cuatro sesiones de Doyle | pendiente |
 | 4 | La decisión del descarte | pendiente *(es una decisión, no trabajo)* |
 | 5 | `clase_abc` en `dim_producto` | pendiente |
 | 6 | Doyle a atlas | pendiente *(lo más incierto, y ahora bloquea al 8)* |
-| 10 | El monitor de Uptime Kuma | pendiente |
-| 11 | El recorrido en navegador del ticket 20 | pendiente |
+| 10 | El monitor de Uptime Kuma | pendiente *(antes que el lote del 8)* |
 
 **Se levantó el freno de mano.** El 2 había puesto a farmacia-data en una
 posición en la que un `git pull` en atlas tumbaba su cadena nocturna; el 7 creó
@@ -343,8 +343,22 @@ torre. En la web ya se corrió y calló.
 
 ### 9. El túnel y Access · *no se hace por ssh*
 
-- [ ] Política de Access **primero**
-- [ ] Public Hostname después
+- [x] Política de Access **primero**
+- [x] Public Hostname después
+
+**Comprobado desde fuera el 2026-09-20, sin autenticar.** Ocho rutas —`/`,
+`/api/salud`, `/api/pedidos`, `/api/lista`, `/static/app.css`, `/favicon.ico`,
+`/docs` y `/openapi.json`— contestan **302 al login de Access**, y el HTTP
+plano del puerto 80 da 301 a HTTPS y de ahí al mismo login. El token de la
+redirección dice `auth_status: NONE` y su `aud` es el de la aplicación de
+`farmacia.farfanlab.uk`, así que la política está amarrada al hostname
+correcto y no hay excepción por ruta.
+
+`/docs` y `/openapi.json` se probaron a propósito: FastAPI los publica solos y
+son los que se olvidan cuando alguien agrega una ruta de excepción.
+
+**Falta B.3**, que no se puede hacer por `curl`: entrar desde fuera con el
+login y mirar que la pantalla diga el correo y no `sin-identificar`.
 
 El túnel de atlas es *remotely-managed*: su enrutamiento vive en el dashboard
 de Cloudflare Zero Trust, no en un archivo local.

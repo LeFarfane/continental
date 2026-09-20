@@ -383,9 +383,9 @@ tablero de solo lectura.
 > y no un impedimento. Si de verdad no dejara guardar, entonces sí: B.2 y B.1
 > pegados, en ese orden y sin nada en medio.
 
-### B.1 — Access, antes de que haya nada que proteger
+### B.1 — Access, antes de que haya nada que proteger — ✅ **2026-09-20**
 
-- [ ] **Zero Trust → Access → Applications → Add an application →
+- [x] **Zero Trust → Access → Applications → Add an application →
       Self-hosted**:
 
 | Campo | Valor |
@@ -394,20 +394,20 @@ tablero de solo lectura.
 | Session duration | lo mismo que Metabase |
 | Subdomain / Domain | `farmacia` / `farfanlab.uk` |
 
-- [ ] Y una política: **Action `Allow`**, regla **Include → Emails** con los
+- [x] Y una política: **Action `Allow`**, regla **Include → Emails** con los
       correos del dueño y del encargado. Esos correos son los que van a
       aparecer en la pantalla como "Entrando como": es la firma de quién está
       trabajando.
-- [ ] **No usar "Bypass"** ni dejar la aplicación sin política. Esto escribe a
+- [x] **No usar "Bypass"** ni dejar la aplicación sin política. Esto escribe a
       producción (pedidos y renglones en Postgres), no es un tablero de solo
       lectura: necesita Access igual que Metabase, no menos.
 
 Hasta aquí no hay nada publicado: la política existe y no hay tráfico que
 proteger todavía. Eso es justo lo que se busca.
 
-### B.2 — La ruta del túnel, ya con la puerta puesta
+### B.2 — La ruta del túnel, ya con la puerta puesta — ✅ **2026-09-20**
 
-- [ ] **Zero Trust → Networks → Tunnels →** el túnel de atlas (el mismo que ya
+- [x] **Zero Trust → Networks → Tunnels →** el túnel de atlas (el mismo que ya
       sirve `stadistics.farfanlab.uk`) **→ Public Hostname → Add a public
       hostname**, con estos valores:
 
@@ -419,9 +419,9 @@ proteger todavía. Eso es justo lo que se busca.
 | Type | `HTTP` |
 | URL | `172.19.0.1:8585` |
 
-- [ ] **`HTTP`, no `HTTPS`.** Continental habla HTTP plano; el TLS lo termina
+- [x] **`HTTP`, no `HTTPS`.** Continental habla HTTP plano; el TLS lo termina
       Cloudflare. Poner `HTTPS` da un 502 que parece un problema del servicio.
-- [ ] **`172.19.0.1:8585`, no `localhost:8585`.** Para el contenedor del túnel
+- [x] **`172.19.0.1:8585`, no `localhost:8585`.** Para el contenedor del túnel
       `localhost` es él mismo. Ese error exacto le costó a Marlowe un 502 el
       2026-09-06, y el porqué está en `docs/decisiones/0005-*`. Medido otra vez
       el 2026-09-20: el gateway de `borde` sigue siendo `172.19.0.1`.
