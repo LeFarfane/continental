@@ -40,9 +40,45 @@
 # de verdad importa aquí: sin él, `algo_que_falla | tail -1` devuelve cero y el
 # script seguiría hasta reiniciar.
 
+# SE EJECUTA, NO SE IMPORTA — y el freno no es paranoia, es de lo medido.
+#
+# El 2026-09-20 alguien escribió `. desplegar.sh` estando dentro de `scripts/`,
+# que es donde más natural sale escribirlo. Lo que pasó, eslabón por eslabón:
+# importado, `$0` vale `-bash` y no la ruta del script; `dirname -bash` contesta
+# *invalid option*; la sustitución queda vacía; `cd "/.."` aterriza en `/` **sin
+# fallar**, así que `set -e` no tiene nada que detener; y `git` contesta que eso
+# no es un repositorio. El script culpó entonces al remoto —que existe desde el
+# 2026-09-19— y su `exit 1`, al estar importado, salió del shell de la sesión:
+# se cayó la conexión de ssh.
+#
+# `return` antes que `exit` justamente por eso: dentro de un script importado,
+# `exit` mata el shell de quien lo importó. Si no se pudo `return` —porque no
+# estamos importados— entonces sí, `exit`.
+#
+# **Y VA ANTES DE `set -euo pipefail`, que es el eslabón que falta a la vista.**
+# Importado, el `set -e` no se queda en este archivo: se le pega al shell de la
+# sesión. Con él puesto, un `return 1` limpio ya es un comando que devolvió
+# distinto de cero en ese shell, y `set -e` lo mata igual — la conexión de ssh
+# se cae lo mismo, solo que ahora con el mensaje correcto impreso antes. Medido
+# el 2026-09-20 con el freno ya escrito: seguía cerrando el shell.
+#
+# Así que el orden es la mitad del arreglo. Si alguien sube estas líneas por
+# debajo del `set`, el freno sigue pareciendo bueno y deja de servir.
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+    echo "desplegar.sh se ejecuta, no se importa. Usa:" >&2
+    echo "    ~/proyectos/Continental/scripts/desplegar.sh" >&2
+    echo "o desde la torre:" >&2
+    echo "    ssh -t eddie@192.168.100.14 '~/proyectos/Continental/scripts/desplegar.sh'" >&2
+    return 1 2>/dev/null || exit 1
+fi
+
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+# `BASH_SOURCE` y no `$0`, por lo mismo de arriba. Y el `cd` va dentro de la
+# sustitución para que un fallo al resolver la raíz sea un fallo y no un viaje
+# silencioso a `/`.
+RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$RAIZ"
 export PYTHONPATH="${PYTHONPATH:-$PWD/src}"
 
 # La MISMA interfaz que declara la unidad de systemd. Si se recreó la red
@@ -59,11 +95,23 @@ trap 'rm -f "$SALIDA_PRUEBAS"' EXIT
 paso() { printf '\n==> %s\n' "$*"; }
 
 paso "1/6  git pull"
+# DOS PREGUNTAS DISTINTAS, DOS MENSAJES DISTINTOS. Antes había uno solo, y el
+# 2026-09-20 contestó "no tienes remoto" a un "no estás en un repositorio". El
+# remoto existía desde el día anterior, así que el mensaje mandó a arreglar algo
+# que no estaba roto mientras el problema real quedaba sin nombrar. Un
+# diagnóstico seguro de sí mismo señalando el lugar equivocado es lo mismo que
+# hacía el `[MAL]` falso del verificador: enseña a desconfiar de la herramienta.
+if ! git rev-parse --git-dir >/dev/null 2>&1; then
+    echo "    !! $PWD no es un repositorio de git."
+    echo "       El script se ubica solo, así que llegar aquí quiere decir que"
+    echo "       el clon no está donde se espera. Debería ser:"
+    echo "         ~/proyectos/Continental"
+    exit 1
+fi
 if ! git remote | grep -q .; then
     echo "    !! este repo no tiene ningún remoto configurado."
-    echo "       Al 2026-09-19 Continental todavía no tiene remoto de git; está"
-    echo "       en la lista de HANDOVER.md. Configúralo antes de desplegar:"
-    echo "         git remote add origin <url>"
+    echo "       Debería tener 'origin' apuntando al GitHub privado:"
+    echo "         git remote add origin git@github.com:LeFarfane/continental.git"
     exit 1
 fi
 git -c pull.rebase=true pull -q

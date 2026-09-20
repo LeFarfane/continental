@@ -536,15 +536,21 @@ si se corta a la mitad, se restaura y se empieza de nuevo.
 > mismo "Node 20 no corre en este CPU" que "el Node de mi distro no corre en
 > este CPU"**, y aquí la diferencia decidía el pendiente entero.
 >
-> **Lo que esto todavía NO prueba:** `node --version` imprime y se sale. No
-> ejercita el JIT ni las dependencias nativas que Kuma carga al arrancar, que
-> es donde muere numpy. Falta la segunda medición, que arranca la aplicación
-> completa en un volumen desechable **sin tocar los datos** — se espera a que
-> diga que escucha y se corta con Ctrl-C:
+> **Y la aplicación entera también arranca.** `node --version` imprime y se
+> sale: no ejercita el JIT ni las dependencias nativas que Kuma carga al
+> arrancar, que es donde muere numpy. Así que se midió la segunda, en un
+> volumen desechable y sin tocar los datos:
 >
 > ```bash
 > docker run --rm -p 127.0.0.1:3099:3001 louislam/uptime-kuma:2
 > ```
+>
+> **Uptime Kuma 2.5.5 sobre Node 22.22.3**: cargó módulos, levantó express y
+> socket.io, y se quedó esperando en la pantalla de configuración inicial. Eso
+> es el arranque completo, no un `--version`.
+>
+> **El gate está cerrado: el CPU no es el problema.** Lo que queda es el
+> respaldo, la migración del SQLite y volver a medir la ventana.
 
 **Qué hay que volver a medir después, y es el motivo de que esto esté aquí:**
 los **4190** minutos de la ventana del fin de semana y los **4105** del vecino

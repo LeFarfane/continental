@@ -479,6 +479,83 @@ def test_el_script_existe_y_se_detiene_al_primer_fallo():
     assert "set -euo pipefail" in _desplegar()
 
 
+def test_el_script_no_se_deja_importar_ni_se_ubica_por_dolar_cero():
+    """Un `. desplegar.sh` no puede tumbarte la sesión ni mentir sobre por qué.
+
+    **Pasó el 2026-09-20**, estando dentro de `scripts/`, que es justo donde da
+    más natural escribirlo. La cadena completa, porque cada eslabón es
+    invisible por su cuenta:
+
+    1. `. desplegar.sh` **importa** el script en el shell de la sesión en vez
+       de ejecutarlo, así que `$0` no vale la ruta del script: vale `-bash`.
+    2. `dirname "$0"` recibe entonces una opción en vez de una ruta y contesta
+       *invalid option -- 'b'*. La sustitución queda **vacía**.
+    3. `cd "/.."` aterriza en `/` **sin fallar**, que es lo que mata el
+       `set -e`: no hay error que detener.
+    4. `git` en `/` contesta *not a git repository*... y el script culpaba al
+       remoto, que existe desde el 2026-09-19.
+    5. Como está importado, el `exit 1` sale del shell de la sesión: **se cayó
+       la conexión de ssh**.
+
+    Se vigilan las tres defensas y no solo la última, porque cualquiera de las
+    tres sola habría convertido eso en un mensaje de una línea:
+
+    - `BASH_SOURCE` en vez de `$0` para ubicarse.
+    - Un freno explícito contra ser importado, que además no puede usar `exit`.
+    - Un diagnóstico que distinga *no estás en un repo* de *no hay remoto*.
+
+    Es la misma clase de falla que el `[MAL]` falso del verificador: un
+    mensaje seguro de sí mismo señalando el lugar equivocado enseña a
+    desconfiar de la herramienta.
+    """
+    texto = _desplegar()
+
+    assert "BASH_SOURCE" in texto, (
+        "El script se ubica con `$0`, que vale `-bash` cuando alguien lo "
+        "importa con `. desplegar.sh`: `dirname` contesta 'invalid option' y "
+        "el `cd` aterriza en `/` sin fallar. Usa `${BASH_SOURCE[0]}`."
+    )
+
+    assert 'return 1 2>/dev/null || exit 1' in texto, (
+        "Falta el freno contra ser importado, o no sale como debe. Un `exit` "
+        "dentro de un script importado mata el shell que lo importó — en ssh, "
+        "cierra la conexión. `return` primero, `exit` solo si no se pudo."
+    )
+
+    # Las posiciones del CÓDIGO, no de la prosa: el comentario que explica
+    # todo esto nombra `set -euo pipefail` antes de que aparezca la primera
+    # línea ejecutable, y buscar la primera coincidencia del texto medía el
+    # comentario en vez del script.
+    freno = re.search(r"^if \[\[ \"\$\{BASH_SOURCE\[0\]\}\"", texto, re.MULTILINE)
+    modo = re.search(r"^set -euo pipefail$", texto, re.MULTILINE)
+    assert freno and modo, (
+        "No se encontró el freno contra ser importado o el `set -euo pipefail` "
+        "como líneas de código. Si cambiaron de forma, actualiza esta prueba: "
+        "lo que tiene que seguir siendo cierto es el ORDEN entre los dos."
+    )
+    assert freno.start() < modo.start(), (
+        "El freno contra ser importado quedó DEBAJO de `set -euo pipefail`, y "
+        "así no sirve aunque se vea bien. Importado, el `set -e` se le pega al "
+        "shell de la sesión; con él puesto, hasta un `return 1` limpio es un "
+        "comando que devolvió distinto de cero y `set -e` mata ese shell "
+        "igual. La conexión de ssh se cae lo mismo, solo que con el mensaje "
+        "correcto impreso antes. Medido el 2026-09-20 con el freno ya escrito."
+    )
+
+    assert "rev-parse" in texto, (
+        "El script no distingue *no estás en un repositorio* de *no hay "
+        "remoto configurado*, así que contesta lo segundo cuando pasa lo "
+        "primero. Pregunta antes con `git rev-parse`."
+    )
+
+    assert "todavía no tiene remoto" not in texto, (
+        "Quedó el mensaje que decía que Continental no tiene remoto de git. "
+        "Lo tiene desde el 2026-09-19 (pendiente 1), y ese texto mandó a "
+        "configurar un remoto que ya existía mientras el problema real era "
+        "otro."
+    )
+
+
 def test_los_pasos_van_en_el_orden_del_ticket():
     """pull entonces compila entonces pruebas entonces reinicia, vive, verifica.
 
