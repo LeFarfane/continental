@@ -2,10 +2,16 @@
 
 Cómo `farmacia.farfanlab.uk` llega a existir, paso a paso y en orden.
 
-**Estado al 2026-09-19: hecho de A.1 a A.3; de A.4 en adelante, no.** Lo que
-falta necesita dos cosas que una sesión de agente no puede hacer sola:
-**escribir en atlas** y **entrar al dashboard de Cloudflare**. Las casillas sin
-marcar lo están por eso, no por olvido.
+**Estado al 2026-09-20: hechos A.1, A.2, A.3 y A.5. Falta A.4 y de A.6 en
+adelante.** Lo que falta necesita dos cosas que una sesión de agente no puede
+hacer sola: **escribir en atlas** y **entrar al dashboard de Cloudflare**. Las
+casillas sin marcar lo están por eso, no por olvido.
+
+> **A.5 se hizo antes que A.4 y el orden de los números no manda aquí.** El rol
+> subió de prioridad cuando farmacia-data agregó `continental` al `grants` de
+> sus modelos de `marts`: mientras el rol no existiera, un `dbt build` en atlas
+> tumbaba la cadena nocturna entera. A.4 solo hace falta para que Continental
+> *arranque*; A.5 hacía falta para que lo de al lado no se cayera.
 
 El repo **ya existe en GitHub y ya está clonado en atlas**:
 `LeFarfane/continental`, privado, y `~/proyectos/Continental` parado en `main`.
@@ -143,13 +149,23 @@ de seguridad no estaba conectada.
       del rol `continental`. **`CONTINENTAL_HOST` no hace falta aquí**: lo fija
       la unidad de systemd, y lo del entorno gana sobre lo del `.env`.
 
-### A.5 — El rol y las tablas en Postgres
+### A.5 — El rol y las tablas en Postgres — ✅ **hecho el 2026-09-20**
 
-- [ ] Los tres pasos del ticket 07, con credenciales de dueño. Están escritos
-      completos en `HANDOVER.md` (sección "Lo que todavía no existe"), con sus
-      migraciones y el aviso de volver a correr `crear_rol.sql` después de la
-      0003 **y de la 0004**. El tercero da el veredicto: 22 comprobaciones y
-      salida distinta de cero si algo quedó mal.
+- [x] `sql/crear_tablas.sql`, `sql/crear_rol.sql` y `sql/verificar_rol.sql`, en
+      ese orden, con credenciales de dueño
+
+Veredicto de la primera corrida de verdad: **25 de 26 comprobaciones pasan, con
+1 aviso conocido**, y `verificar_rol.sql` sale con 0. El esquema `pedidos`
+existe con sus cinco tablas, las posee `farmacia` —no `continental`—, el rol
+escribe las suyas, lee las cinco de `marts` y no puede crear ni borrar nada.
+
+**Las migraciones `0001` a `0005` NO se corrieron, y no hacía falta.** Están
+para una base que se creó antes que ellas; ésta se creó después, y
+`crear_tablas.sql` ya trae lo que las cinco agregan —verificado antes de correr
+nada: las cinco tablas, `pedido.proveedor_id` admitiendo nulos con `proveedor`
+NOT NULL al lado, `ux_pedido_proveedor` sobre `(pedido_sugerido_id, proveedor)`
+y `fk_renglon_pedido` con sus tres columnas—. Un solo `psql` y ya. Lo de abajo
+sigue valiendo para cualquier instalación vieja.
 
 > **Las dos migraciones que CREAN una tabla exigen volver a correr
 > `crear_rol.sql`, y es el olvido más caro de este esquema.** Un GRANT no se
@@ -162,6 +178,22 @@ de seguridad no estaba conectada.
 > lote no corrió sobre esta lista"* sobre una noche en la que sí corrió. Es la
 > ausencia de esa fila lo que significa eso. Las comprobaciones 4 y 6 del
 > verificador lo cazan.
+
+> **El aviso que queda es el 17 y se deja a propósito.** `continental` puede
+> crear tablas TEMPORALES, porque el `TEMPORARY` le llega por `PUBLIC` sobre la
+> base. Quitarlo sería `REVOKE TEMPORARY ... FROM PUBLIC`, que le pega a dbt y a
+> Metabase por igual: es decisión de farmacia-data, no de Continental. Una tabla
+> temporal vive en la sesión, no puede leer nada que el rol no lea ya, y
+> desaparece al desconectarse.
+
+> **El verificador tenía un `[MAL]` que no lo era, y se arregló ese día
+> (`f445e21`).** La comprobación 23 armaba su *obtenido* con un `string_agg`
+> ordenado `DESC` y lo comparaba contra un *esperado* escrito en orden
+> ascendente: las dos cadenas decían lo mismo y no coincidían nunca. El script
+> salió con código 3 sobre un esquema impecable. Si un verificador de éstos
+> vuelve a dar `[MAL]`, **lee las dos celdas antes de tocar la base**: puede
+> estar mintiendo. Ahora hay una prueba que impide que otro `string_agg` del
+> archivo ordene descendente.
 
 ### A.6 — Instalar la unidad
 

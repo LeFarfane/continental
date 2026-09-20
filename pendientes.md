@@ -21,27 +21,33 @@ pegables. Si los dos no coinciden, manda Notion.
 
 ---
 
-## Dónde vamos — 4 de 16 casillas
+## Dónde vamos — 7 de 16 casillas
 
 | | Pendiente | Estado |
 |---|---|---|
 | 1 | El remoto y el clon en atlas | ✅ 2026-09-19 |
 | 2 | Los `grants` de farmacia-data | ✅ 2026-09-19 |
-| **7** | **El DDL, el rol y el verificador** | ⏭️ **el siguiente, y ahora urge** |
+| 7 | El DDL, el rol y el verificador | ✅ 2026-09-20 |
+| **8** | **Las unidades de systemd** | ⏭️ **el siguiente** — antes, el `.env` (A.4) |
 | 3 | Las cuatro sesiones de Doyle | pendiente |
 | 4 | La decisión del descarte | pendiente *(es una decisión, no trabajo)* |
 | 5 | `clase_abc` en `dim_producto` | pendiente |
 | 6 | Doyle a atlas | pendiente *(lo más incierto)* |
-| 8 | Las unidades de systemd | pendiente |
 | 9 | El túnel y Access | pendiente |
 | 10 | El monitor de Uptime Kuma | pendiente |
 | 11 | El recorrido en navegador del ticket 20 | pendiente |
 
-**El 7 dejó de ser uno más.** Desde que el 2 entró, el rol `continental` no es
-solo lo que hace falta para que este módulo lea el almacén: es lo que impide
-que un `dbt build` en atlas tumbe la cadena nocturna de farmacia-data. Los
+**Se levantó el freno de mano.** El 2 había puesto a farmacia-data en una
+posición en la que un `git pull` en atlas tumbaba su cadena nocturna; el 7 creó
+el rol que faltaba y con eso el `pull` se hizo el 2026-09-20 sin novedad. Los
 números no se renumeran aunque cambie el orden —Notion y los commits los
 referencian—; lo que cambia es por dónde se sigue.
+
+**El `.env` de atlas no es ninguno de estos once**, y sin él el 8 no arranca:
+vive como paso A.4 de `docs/despliegue-en-atlas.md`. Es copiar `.env.example` y
+poner la contraseña del rol en `WAREHOUSE_URL` —**la misma** que se le dio a
+`crear_rol.sql`, o lo que se ve es un *password authentication failed* con cara
+de problema de red.
 
 **Por qué existe esto y no está en `HANDOVER.md`:** el HANDOVER describe **el
 estado actual** y no una lista de parches por aplicar —lo dice su primera
@@ -104,25 +110,26 @@ un rol y que no sobre. Quitar `'continental'` de un modelo no rompe nada en
 farmacia-data —ni sus pruebas ni su `dbt build`—; rompe **este** repo, de
 noche, sin dejar rastro que apunte al cambio.
 
-> ### ⚠️ Esto invirtió el orden: el pendiente 7 va **antes**
+> ### ✅ Esto invirtió el orden, y el orden ya se cumplió
 >
-> Comprobado contra `pg_roles` el 2026-09-19: **el rol `continental` no existe
-> todavía.** Están `farmacia` y `marlowe`, no el tercero.
+> Del 2026-09-19 al 20, este cambio estuvo **empujado pero no traído**: mientras
+> el rol `continental` no existiera, un `git pull` de farmacia-data en atlas
+> dejaba a la cadena nocturna a un `dbt build` de contestar
+> `role "continental" does not exist`, fallar el modelo y llevarse lo que
+> cuelga de él —y a Marlowe con ello—, por un permiso para un módulo que ni
+> siquiera estaba corriendo.
 >
-> Si ese cambio llega a un `dbt build` en atlas antes que el rol, Postgres
-> contesta `role "continental" does not exist`, el modelo falla y **se lleva lo
-> que cuelga de él**: tumba la cadena nocturna de farmacia-data, y a Marlowe con
-> ella, por un permiso para un módulo que ni siquiera está corriendo.
+> No se armó. La cadena **no hace `git pull`**: corre `dbt build` sobre el árbol
+> que haya en `~/proyectos/Farmacia`, así que empujar desde la torre nunca puso
+> la trampa. Atlas se quedó en `742d062` hasta que el pendiente 7 creó el rol, y
+> el `pull` se hizo el **2026-09-20**, ya sin riesgo: fast-forward a `8ddd91f`,
+> doce commits, y de `dbt/` exactamente los cinco `grants` y nada más.
 >
-> **El margen, medido:** la cadena **no hace `git pull`** —corre `dbt build`
-> sobre el árbol que haya en `~/proyectos/Farmacia`—, así que empujar desde la
-> torre no arma la trampa. Se arma el día que alguien haga `pull` en atlas. El
-> timer `farmacia-diario.timer` dispara **lunes a viernes a las 20:30**.
->
-> **Y no se arregla creando el rol a mano para adelantarse.** `crear_rol.sql`
-> es idempotente y, si encuentra el rol ya creado, **no le toca la contraseña**
-> a propósito. Un rol creado a mano deja a Continental sin poder entrar nunca,
-> y el script imprime que todo salió bien.
+> **Lo que dejó escrito, por si vuelve a pasar:** el orden correcto es *primero
+> el rol, después el `grants`*, y no se arregla creando el rol a mano para
+> adelantarse. `crear_rol.sql` es idempotente y, si lo encuentra ya creado,
+> **no le toca la contraseña** a propósito: un rol creado a mano deja a
+> Continental sin poder entrar nunca, y el script imprime que todo salió bien.
 
 `dim_proveedor` importa desde el ticket 20: ahí vive el `pro_id` de SICAR con
 el que se identifica el proveedor de un pedido. Medido el 2026-09-19 contra el
@@ -212,38 +219,43 @@ Esa condición se cumplió el 2026-09-19 con el pendiente 1:
 cinco de aquí abajo **ya se pueden empezar**; se quedan agrupados así porque
 explica por qué estuvieron detenidos, no porque sigan estándolo.
 
-### 7. El DDL, el rol y el verificador · *ahora también bloquea a farmacia-data*
+### 7. El DDL, el rol y el verificador — ✅ **hecho el 2026-09-20**
 
-- [ ] `sql/crear_tablas.sql`
-- [ ] `sql/crear_rol.sql`
-- [ ] `sql/verificar_rol.sql` — **el que da el veredicto**
+- [x] `sql/crear_tablas.sql`
+- [x] `sql/crear_rol.sql`
+- [x] `sql/verificar_rol.sql` — **el que da el veredicto**
 
-> **Subió de prioridad el 2026-09-19 y no por gusto.** Desde que el pendiente 2
-> agregó `continental` al `grants` de los modelos de `marts`, un `dbt build` en
-> atlas **sin que este rol exista** tumba la cadena nocturna de farmacia-data y
-> a Marlowe con ella. Mientras nadie haga `git pull` de farmacia-data en atlas
-> no pasa nada; el día que alguien lo haga, esto tiene que estar hecho antes.
-> El detalle, en el pendiente 2.
+**Veredicto: BIEN. 25 de 26 comprobaciones, 1 aviso conocido, salida 0.** El
+esquema `pedidos` existe con sus cinco tablas, las posee `farmacia` y no
+`continental`, el rol escribe las suyas, lee las cinco de `marts`, y no puede
+crear objetos en ningún esquema ni borrar una sola fila. El DDL se corrió a
+mano con credenciales de dueño, que es como tiene que ser: el rol no hace DDL a
+propósito (ADR 0003).
 
-Cinco tablas escritas y cero creadas. Se corre **a mano, con credenciales de
-dueño**, desde `~/proyectos/Continental`. El rol `continental` no puede hacer
-DDL a propósito (ADR 0003).
+El aviso es el **17** y se deja: `continental` puede crear tablas TEMPORALES
+porque el `TEMPORARY` le llega por `PUBLIC` sobre la base. Quitarlo sería un
+`REVOKE ... FROM PUBLIC` que le pega a dbt y a Metabase por igual — decisión de
+farmacia-data, no de Continental.
 
-```bash
-docker exec -i farmacia_warehouse psql -U farmacia -d farmacia \
-    -v ON_ERROR_STOP=1 < sql/crear_tablas.sql
-docker exec -i farmacia_warehouse psql -U farmacia -d farmacia \
-    -v ON_ERROR_STOP=1 -v password="'LA_DEL_.ENV'" < sql/crear_rol.sql
-docker exec -i farmacia_warehouse psql -U farmacia -d farmacia \
-    -v ON_ERROR_STOP=1 < sql/verificar_rol.sql ; echo "salida: $?"
-```
+**Las migraciones `0001` a `0005` no se corrieron, y no hacía falta.** Están
+para una base creada antes que ellas; ésta se creó después y `crear_tablas.sql`
+ya trae lo que las cinco agregan. Se verificó **antes** de correr nada, no
+después: las cinco tablas, `pedido.proveedor_id` admitiendo nulos con
+`proveedor` NOT NULL al lado, `ux_pedido_proveedor` sobre
+`(pedido_sugerido_id, proveedor)` y `fk_renglon_pedido` con sus tres columnas.
 
-El tercero hace 26 comprobaciones y sale con código distinto de cero si algo
-quedó mal.
-
-Comprobado contra `pg_roles` el 2026-09-19: **el rol no existe todavía.** En la
-base están `farmacia` y `marlowe`, no el tercero — así que esta es la primera
-corrida de verdad, no una repetición.
+> **El verificador dio un `[MAL]` que no lo era, y eso valía arreglarlo.** La
+> comprobación 23 armaba su *obtenido* con un `string_agg` ordenado `DESC` y lo
+> comparaba —igualdad de cadenas— contra un *esperado* escrito ascendente:
+> `proveedor_id admite nulos, proveedor NOT NULL` contra `proveedor NOT NULL,
+> proveedor_id admite nulos`. Lo mismo, en otro orden, sin coincidir jamás. El
+> script salió con código 3 sobre un esquema impecable.
+>
+> Arreglado en `f445e21`, con una prueba para la clase entera: ningún
+> `string_agg` de `verificar_rol.sql` puede ordenar descendente. **Si uno de
+> estos vuelve a decir `[MAL]`, lee las dos celdas antes de tocar la base.** Un
+> falso `[MAL]` es lo segundo peor que puede hacer un verificador: enseña a
+> desconfiar de él, y el día que tenga razón nadie le va a creer.
 
 > **La contraseña se pone una sola vez, y el script no avisa de lo contrario.**
 > `crear_rol.sql` es idempotente, y si encuentra el rol ya creado **no le toca
@@ -254,20 +266,19 @@ corrida de verdad, no una repetición.
 > verde. Si hay que cambiarla, es un `ALTER ROLE continental PASSWORD ...`
 > aparte, no otra pasada de este archivo.
 >
-> La misma contraseña va en `WAREHOUSE_URL` del `.env` de atlas (paso A.4 de
+> **Ahora esa contraseña tiene que volver a aparecer, idéntica**, en
+> `WAREHOUSE_URL` del `.env` de atlas (paso A.4 de
 > `docs/despliegue-en-atlas.md`). Si las dos no coinciden, lo que se ve es un
 > *password authentication failed* que parece problema de red.
 
-Si la base se creó **antes** del 2026-09-19, correr además las migraciones
-`0001` a `0005` de `sql/migraciones/`. Son idempotentes. Hacen falta porque
-`CREATE TABLE IF NOT EXISTS` **calla si la tabla ya existe con otra forma**.
-
-**Lo que sigue inmediatamente después**, y es lo que cierra el lazo con el
-pendiente 2: ya con el rol creado, hacer `git pull` de farmacia-data en atlas,
-correr `cd dbt && ../.venv/bin/dbt build` una vez, y **volver a correr
-`verificar_rol.sql`**. Su comprobación 9 compara las tablas de `marts` que el
-rol puede leer contra las cinco esperadas, así que detecta tanto que falte una
-—dbt se la llevó— como que sobre otra.
+**El lazo con el pendiente 2, a medias.** El `git pull` de farmacia-data en
+atlas ya se hizo —fast-forward de `742d062` a `8ddd91f`, sin novedad—. Falta
+correr `cd dbt && ../.venv/bin/dbt build` una vez y **volver a correr
+`verificar_rol.sql`**: su comprobación **7** compara las tablas de `marts` que
+el rol puede leer contra las cinco esperadas, así que detecta tanto que falte
+una —dbt se la llevó al recrearla— como que sobre otra. Hasta que eso corra, que
+los `grants` del config sobrevivan a una construcción está razonado pero no
+medido en esta base.
 
 ### 8. Las unidades de systemd
 
