@@ -68,12 +68,16 @@ Host github-continental
 EOF
 cat ~/.ssh/id_ed25519_continental_deploy.pub   # esto se pega en GitHub
 
-# 2. en GitHub: repo privado LeFarfane/Continental, y en
+# 2. en GitHub: repo privado LeFarfane/continental (en minuscula, como marlowe), y en
 #    Settings -> Deploy keys -> Add, pegar esa línea SIN marcar
 #    "Allow write access". Atlas despliega, no publica.
 
-# 3. de vuelta en atlas
-cd ~/proyectos && git clone git@github-continental:LeFarfane/Continental.git Continental
+# 3. de vuelta en atlas, comprobar la llave ANTES de intentar clonar:
+#    GitHub contesta con el repo al que esa deploy key esta amarrada, asi que
+#    caza de una vez el repo equivocado y la llave mal pegada.
+ssh -T git@github-continental   # "Hi LeFarfane/continental! You've successfully authenticated"
+
+cd ~/proyectos && git clone git@github-continental:LeFarfane/continental.git Continental
 cd Continental
 python3 -m venv .venv
 .venv/bin/pip install -e ".[test]"
