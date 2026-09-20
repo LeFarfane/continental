@@ -67,8 +67,14 @@ log = logging.getLogger("continental")
 VARIABLE_DEL_LATIDO = "KUMA_PUSH_URL_CONTINENTAL"
 
 #: Lo que Kuma entiende. `up` pinta el monitor en verde y reinicia su cuenta de
-#: gracia; `down` lo pinta en rojo **ahora mismo**, sin esperar a que venza el
-#: intervalo.
+#: gracia; `down` lo declara caído sin esperar a que venza el intervalo.
+#:
+#: **`down` ya no es rojo instantáneo, y aquí decía que sí.** El monitor lleva
+#: `Retries = 2` con reintento de una hora —para que el cierre de la ventana
+#: del fin de semana no sea un falso rojo cada lunes, parte D de
+#: `docs/despliegue-en-atlas.md`—, así que un `down` pasa ~2 h por `PENDING`
+#: antes del rojo. Sigue siendo mucho antes que el intervalo de 26 h, que es lo
+#: que esta línea quería decir.
 ARRIBA = "up"
 ABAJO = "down"
 

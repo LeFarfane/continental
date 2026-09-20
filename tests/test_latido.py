@@ -64,6 +64,9 @@ from continental.latido import (
     url_del_latido,
 )
 from continental.lote import (
+    CONSULTADO,
+    NO_SE_PUDO,
+    RenglonDelLote,
     ResumenDeLaCorrida,
     correr_el_lote,
     estado_del_latido,
@@ -551,8 +554,9 @@ def test_el_lote_que_se_interrumpe_deja_su_fila_y_late_en_rojo():
     - la fila queda escrita **con lo que alcanzó a hacer**, no con ceros: una
       bitácora que dice "0 renglones" sobre una noche en la que se consultaron
       dos parece un dato y no lo es;
-    - el latido va en `down`, que pinta el monitor en rojo **ahora** en vez de
-      esperar a que venza el intervalo de gracia;
+    - el latido va en `down`, que declara la corrida caída sin esperar a que
+      venza el intervalo de gracia de 26 h (pasa antes por `PENDING`, porque el
+      monitor lleva `Retries = 2`);
     - la excepción sube igual, porque una corrida cortada tiene que salir
       distinto de cero para que systemd la marque.
     """
@@ -719,3 +723,61 @@ def test_el_resumen_se_traduce_a_la_fila_sin_recontar_nada():
     # leyó".
     assert corrida.corrida_del_lote_id == 0
     assert corrida.termino_en is None
+
+
+# ------------------- la noche en que no se le pudo preguntar a nadie
+#
+# Decidido el 2026-09-20. Hasta hoy `estado_del_latido` decidia con UNA sola
+# variable -- `final` -- y por eso una noche entera con Doyle ausente salia
+# `up`: los renglones acaban en `no se pudo`, la corrida recorre la lista y
+# termina, asi que `final = termino`. El monitor recien nacido habria dicho
+# "todo bien" sobre un lote que no pudo preguntarle a nadie -- y ese es
+# exactamente el estado de hoy, porque Doyle todavia no esta en atlas.
+#
+# La regla es LA MAS ESTRECHA que caza el caso: se intento y no se pudo NI UNA
+# vez. Si se consulto aunque sea un renglon, la corrida hizo su trabajo y el
+# `msg` ya dice cuantos huecos hubo. Se descarto `con_precio == 0 -> abajo`,
+# que es mas ancha y pintaria rojo la noche en que Doyle contesta y los cuatro
+# portales fallan -- eso es "sin dato", ya se ve en la pantalla con su motivo,
+# y se arregla abriendo sesiones, no reparando el lote.
+
+
+def _renglon_del_lote(final: str) -> RenglonDelLote:
+    return RenglonDelLote(
+        renglon_id=1, clave="7501000000001", descripcion="lo que sea", final=final
+    )
+
+
+def test_una_noche_sin_poder_preguntarle_a_nadie_pinta_el_monitor_en_rojo():
+    """Doyle caido toda la noche. La lista amanece sin un solo precio."""
+    resumen = _resumen(
+        final=TERMINO,
+        renglones=tuple(_renglon_del_lote(NO_SE_PUDO) for _ in range(3)),
+    )
+
+    assert estado_del_latido(resumen) == ABAJO
+
+
+def test_si_se_consulto_aunque_sea_uno_la_corrida_hizo_su_trabajo():
+    """Un solo renglon consultado basta para que el verde sea honesto.
+
+    Que dos de tres portales fallen es el caso ordinario que el vocabulario de
+    los tickets 14 y 15 llama "sin dato": se ve en la pantalla con su motivo y
+    no es una falla del lote.
+    """
+    resumen = _resumen(
+        final=TERMINO,
+        renglones=(_renglon_del_lote(NO_SE_PUDO), _renglon_del_lote(CONSULTADO)),
+    )
+
+    assert estado_del_latido(resumen) == ARRIBA
+
+
+def test_una_lista_que_nadie_intento_no_es_una_falla():
+    """Sin renglones que intentar no hay nada que reprocharle a la corrida.
+
+    Es el caso de `sin lista` -- la farmacia cierra los domingos -- y tambien el
+    de una lista entera sin EAN, que es un problema de captura en SICAR y no del
+    lote. La regla mira lo intentado, no lo logrado.
+    """
+    assert estado_del_latido(_resumen(final=TERMINO, renglones=())) == ARRIBA

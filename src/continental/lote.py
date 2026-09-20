@@ -577,6 +577,17 @@ class ResumenDeLaCorrida:
         return sum(1 for r in self.renglones if r.final == NO_SE_PUDO)
 
     @property
+    def intentados(self) -> int:
+        """A cuántos se les fue a preguntar de verdad, salga como salga.
+
+        No es `en_la_lista`: de ahí hay que descontar los que ni se intentaron
+        —los que no tienen EAN (`sin clave`) y los que no alcanzaron el tope—.
+        Es el denominador de la única pregunta que distingue "el lote corrió y
+        los portales fallaron" de "el lote no pudo preguntarle a nadie".
+        """
+        return self.consultados + self.no_se_pudo
+
+    @property
     def sin_clave(self) -> int:
         """Cuántos se saltaron por no tener EAN. Se arregla en SICAR."""
         return sum(1 for r in self.renglones if r.final == SIN_CLAVE)
@@ -725,15 +736,44 @@ def estado_del_latido(resumen: ResumenDeLaCorrida) -> str:
     | `terminó` | `up` | recorrió la lista entera |
     | `se acabó el tiempo` | `up` | **no es un error**: detenerse es lo que se le pide (ticket 18). Un monitor rojo todas las noches por el tope es un monitor que nadie vuelve a mirar |
     | `no hubo lista` | `up` | el lote corrió y el almacén no tenía ventas. La farmacia cierra los domingos |
-    | `se interrumpió` | `down` | eso sí es una falla, y `down` pinta el monitor en rojo **ahora**, sin esperar a que venza el intervalo de gracia |
+    | `se interrumpió` | `down` | eso sí es una falla |
+
+    Y un quinto caso que **no sale del final** y por eso no cabía en la tabla:
+    **se intentó preguntar y no se pudo ni una sola vez** → `down`. Doyle no
+    está, o el almacenamiento rebotó todo: la lista amanece sin un solo precio.
+
+    Hasta el 2026-09-20 esto decidía con una sola variable y ese caso salía
+    `up`. Los renglones acaban en `no se pudo`, la corrida recorre la lista y
+    termina, así que `final = terminó` — y el monitor habría dicho *"todo
+    bien"* sobre un lote que no pudo preguntarle a nadie. Es el estado de hoy,
+    porque Doyle todavía no está en atlas.
+
+    **Es la regla más estrecha que caza el caso**, a propósito. Si se consultó
+    aunque sea un renglón, la corrida hizo su trabajo y el `msg` ya dice
+    cuántos huecos hubo. Se descartó `con_precio == 0 → down`, que es más
+    ancha: pintaría rojo la noche en que Doyle contesta y los cuatro portales
+    fallan —eso es *"sin dato"*, se ve en la pantalla con su motivo y se
+    arregla abriendo sesiones, no reparando el lote— y también una lista entera
+    sin EAN, que se arregla en SICAR.
 
     Lo que Kuma caza **no está en esta tabla**: es la noche en la que no llega
     ningún latido —atlas apagado a las 22:00, el timer sin habilitar—. Para eso
     hace falta que las noches buenas sí latan, y por eso `se acabó el tiempo`
     late en verde: un monitor que se pone rojo por algo que no es una falla
     deja de distinguirse del silencio, que es lo único que de verdad muerde.
+
+    > **Un `down` ya no pinta rojo al instante.** Decía aquí que sí, y dejó de
+    > ser cierto cuando el monitor tomó `Retries = 2` para que el cierre de la
+    > ventana del fin de semana no fuera un falso rojo cada lunes (parte D de
+    > `docs/despliegue-en-atlas.md`). Ahora pasa ~2 h por `PENDING` antes del
+    > rojo. A las 22:30 no hay nadie mirando el panel, así que el aviso sirve
+    > igual a las 00:30.
     """
-    return ABAJO if resumen.final == SE_INTERRUMPIO else ARRIBA
+    if resumen.final == SE_INTERRUMPIO:
+        return ABAJO
+    if resumen.intentados and not resumen.consultados:
+        return ABAJO
+    return ARRIBA
 
 
 def mensaje_del_latido(resumen: ResumenDeLaCorrida) -> str:
