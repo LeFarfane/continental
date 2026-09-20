@@ -31,7 +31,7 @@ pegables. Si los dos no coinciden, manda Notion.
 | 8 | Las unidades de systemd | 🟡 la web corre; el lote espera al 6 |
 | 9 | El túnel y Access | ✅ 2026-09-20 — falta mirar B.3 |
 | 5 | `clase_abc` en `dim_producto` | ✅ 2026-09-20 — el ADR 0018, implementado |
-| **12** | **Uptime Kuma 1.23 → 2.x** | ⏭️ **el siguiente: se decide con una medición** |
+| **12** | **Uptime Kuma 1.23 → 2.x** | ⏭️ **el siguiente — el CPU sí lo aguanta (medido)** |
 | **11** | **El recorrido en navegador del ticket 20** | 🟡 a medias hasta que Doyle dé precios |
 | 3 | Las cuatro sesiones de Doyle | pendiente *(las contraseñas, el lunes)* |
 | 4 | La decisión del descarte | ✅ 2026-09-20 — decidida e implementada |
@@ -513,22 +513,38 @@ directorio `data`, respaldado con el contenedor parado, es el único camino de
 vuelta. La guía oficial es explícita con que la migración **no se interrumpe**;
 si se corta a la mitad, se restaura y se empieza de nuevo.
 
-> **Primero la medición del CPU, que decide si esto se puede siquiera
-> intentar.** Kuma 2.x exige **Node ≥ 20.4**, y atlas es un Athlon II de 2010:
-> SSE2 y SSE4a, **sin SSSE3, SSE4.1 ni SSE4.2**. Es la misma trampa que el
-> `CLAUDE.md` de farmacia-data ya tiene escrita para numpy y pandas. Hay
-> reportes de Node 20 muriendo con `Illegal instruction` por debajo de la línea
-> base moderna, pero son de compilaciones de distribución y no de la imagen de
-> Docker, así que **no se sabe y no se adivina**:
+> ### ✅ El CPU sí lo aguanta — medido el 2026-09-20
+>
+> Era la duda que podía cerrar esta casilla antes de empezar. Kuma 2.x exige
+> **Node ≥ 20.4**, y atlas es un Athlon II X4 de 2010: SSE2 y SSE4a, **sin
+> SSSE3, SSE4.1 ni SSE4.2**. Es la misma trampa que el `CLAUDE.md` de
+> farmacia-data tiene escrita para numpy y pandas, y hay reportes de Node 20
+> muriendo con `Illegal instruction` por debajo de la línea base moderna
+> (`nodejs/node#52371`).
 >
 > ```bash
 > docker run --rm --entrypoint node louislam/uptime-kuma:2 --version
 > ```
 >
-> Si contesta `Illegal instruction`, esta casilla se cierra como *no se puede*
-> y no se respalda nada. Si imprime una versión, el segundo paso arranca la
-> aplicación entera en un volumen desechable —sin tocar los datos— para verla
-> sobrevivir bajo JIT real.
+> Contestó **`v22.22.3`**. No `Illegal instruction`: Node 22, dos versiones
+> mayores por encima del mínimo, corriendo en un CPU de 2010.
+>
+> **Por qué la predicción falló, que es lo que hay que recordar:** esos
+> reportes son de compilaciones de distribución —Fedora y compañía— que se
+> arman contra una línea base de micro-arquitectura más alta. La imagen de
+> Docker trae el binario oficial de Node, que sigue apuntando bajo. **No es lo
+> mismo "Node 20 no corre en este CPU" que "el Node de mi distro no corre en
+> este CPU"**, y aquí la diferencia decidía el pendiente entero.
+>
+> **Lo que esto todavía NO prueba:** `node --version` imprime y se sale. No
+> ejercita el JIT ni las dependencias nativas que Kuma carga al arrancar, que
+> es donde muere numpy. Falta la segunda medición, que arranca la aplicación
+> completa en un volumen desechable **sin tocar los datos** — se espera a que
+> diga que escucha y se corta con Ctrl-C:
+>
+> ```bash
+> docker run --rm -p 127.0.0.1:3099:3001 louislam/uptime-kuma:2
+> ```
 
 **Qué hay que volver a medir después, y es el motivo de que esto esté aquí:**
 los **4190** minutos de la ventana del fin de semana y los **4105** del vecino
