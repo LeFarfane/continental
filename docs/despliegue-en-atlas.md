@@ -143,11 +143,46 @@ El plan B que figuraba aquí —`sudo apt install python3-psycopg2` y quitarlo d
 que el `--system-site-packages` no habría encontrado nada que heredar. La red
 de seguridad no estaba conectada.
 
-### A.4 — El `.env`
+### A.4 — El `.env` — ✅ **hecho el 2026-09-20**
 
-- [ ] Copiar `.env.example` a `.env` y poner `WAREHOUSE_URL` con la contraseña
-      del rol `continental`. **`CONTINENTAL_HOST` no hace falta aquí**: lo fija
-      la unidad de systemd, y lo del entorno gana sobre lo del `.env`.
+- [x] `.env` con `WAREHOUSE_URL` y `CODIGO_NEGOCIO`. **`CONTINENTAL_HOST` se
+      queda comentado**: lo fija la unidad de systemd, y lo del entorno gana
+      sobre lo del `.env`.
+
+`python -m continental.verificar` entra con las credenciales del servicio y lee
+las cinco tablas de `marts` y las cinco de `pedidos`. Los dos `··` que reporta
+son pendientes conocidos que se encienden solos: `clase_abc` cuando exista la
+columna (ADR 0018 de farmacia-data) y `enviado_por` cuando llegue el ticket 21.
+
+> ### ⚠️ La trampa de la contraseña mordió, y así se ve por dentro
+>
+> Entre A.5 y A.4 el rol quedó con **una contraseña distinta** de la del
+> `.env`. El síntoma es `FATAL: password authentication failed for user
+> "continental"` dentro de un rastro de SQLAlchemy de cien líneas, y **parece
+> un problema de red**: psycopg2 intenta primero `::1`, que contesta
+> *Connection refused*, y esa es la primera línea que uno lee.
+>
+> Antes de tocar nada conviene descartar lo mecánico, que es rápido y explica
+> la mayoría de los casos: que la contraseña lleve caracteres que una URL tiene
+> que escapar (`@ : / # %`), que al `.env` se le haya colado un `\r`, un
+> espacio final, comillas o un BOM, o que el rol se haya quedado sin
+> contraseña —`select rolpassword is null from pg_authid`—. Si todo eso está
+> limpio, lo que queda es que las dos mitades no coinciden.
+>
+> **No se arregla volviendo a correr `crear_rol.sql`**: es idempotente y, si
+> encuentra el rol ya creado, no le toca la contraseña a propósito. Se arregla
+> con un `ALTER ROLE` aparte, y lo correcto es **leer la contraseña del `.env`
+> en vez de teclearla**, para que las dos mitades coincidan por construcción y
+> no por cuidado. Desde `~/proyectos/Continental`:
+>
+> ```bash
+> CLAVE=$(./.venv/bin/python -c 'from urllib.parse import urlsplit; l=next(x for x in open(".env") if x.startswith("WAREHOUSE_URL=")); print(urlsplit(l.split("=",1)[1].strip()).password)')
+> printf "ALTER ROLE continental PASSWORD '%s';\n" "$CLAVE" | docker exec -i farmacia_warehouse psql -U farmacia -d farmacia -v ON_ERROR_STOP=1
+> unset CLAVE && ./.venv/bin/python -m continental.verificar
+> ```
+>
+> Va por entrada estándar a propósito: así la contraseña no entra al historial
+> del shell ni se asoma en `ps`.
 
 ### A.5 — El rol y las tablas en Postgres — ✅ **hecho el 2026-09-20**
 
