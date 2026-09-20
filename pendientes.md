@@ -27,73 +27,32 @@ línea—. Esto es justo una lista de parches por aplicar.
 
 ## Lo que se puede empezar hoy
 
-### 1. El remoto de GitHub y el clon en atlas · *bloquea casi todo lo demás*
+### 1. El remoto de GitHub y el clon en atlas — ✅ **hecho el 2026-09-19**
 
-- [ ] Crear el remoto y la llave de despliegue de solo lectura para atlas
-- [ ] Clonar y preparar el entorno
+- [x] Crear el remoto y la llave de despliegue de solo lectura para atlas
+- [x] Clonar y preparar el entorno
 
-Hoy el repo **no tiene remoto** y `~/proyectos/Continental` en atlas está vacío.
+`LeFarfane/continental` en GitHub, **privado**, con `main` por omisión, y
+`~/proyectos/Continental` clonado en atlas. **827 pasan ahí en 9.86 s**, contra
+3.3 s en la torre: mismo número de pruebas, tres veces más lento.
 
-La rama por omisión es `main`, ya adelantada a `pedido-sugerido` el 2026-09-19
-(avance directo: 24 commits, cero divergencia). Atlas clona la rama por omisión
-y `desplegar.sh` hace `git pull` sobre la que esté: dejarlo parado en una rama
-de trabajo es la trampa de que alguien fusione a `main` y atlas siga
-desplegando lo viejo sin decir nada.
+El procedimiento completo —las dos llaves, el alias de ssh, los comandos— quedó
+en `docs/despliegue-en-atlas.md`, pasos A.1 a A.3, que es donde vive lo
+permanente. Aquí solo el saldo:
 
-**En atlas los repos son hermanos y planos** (`~/proyectos/Marlowe`, y
-`~/proyectos/Farmacia`, que **es** farmacia-data), al revés que en la torre,
-donde están anidados. Verificado el 2026-09-19.
+- **`psycopg2-binary` corre en ese CPU.** Era la única duda técnica del
+  pendiente. 2.9.13 importa sin `Illegal instruction`, y el venv va **sin**
+  `--system-site-packages`. El plan B que este archivo proponía
+  —`apt install python3-psycopg2`— no existía: ese paquete no está instalado en
+  atlas, así que no había nada que heredar.
+- **Dos llaves, no una.** Atlas tiene deploy key de **lectura**; la torre, una
+  de escritura. Atlas despliega, no publica.
+- **La torre no puede empujar por HTTPS**, y eso todavía muerde en el próximo
+  repo: el almacén de credenciales de Windows truena, y aunque se arregle,
+  GitHub no acepta contraseñas desde 2021. El camino es ssh.
 
-**El repo va privado.** Lleva el gateway de la red Docker, la IP de atlas, el
-nombre del rol de Postgres y el enrutamiento del túnel. Nada de eso es un
-secreto por sí solo, pero junto es el mapa de cómo entrar.
-
-**La llave de despliegue se genera EN atlas y su mitad privada nunca sale de
-ahí.** Se copia el patrón de Marlowe, verificado el 2026-09-19: una deploy key
-de GitHub sirve a **un solo repo**, así que hace falta un alias de ssh por repo
-—es lo que elige la llave correcta—. Por eso el remoto de Marlowe en atlas dice
-`git@github-marlowe:...` y no `git@github.com:...`.
-
-```bash
-# 1. en atlas, la llave y su alias (respaldando el config: de él depende Marlowe)
-ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_continental_deploy -N ""     -C "continental-deploy@atlas"
-cp -n ~/.ssh/config ~/.ssh/config.respaldo
-cat >> ~/.ssh/config <<'EOF'
-
-Host github-continental
-    HostName github.com
-    User git
-    IdentityFile ~/.ssh/id_ed25519_continental_deploy
-    IdentitiesOnly yes
-EOF
-cat ~/.ssh/id_ed25519_continental_deploy.pub   # esto se pega en GitHub
-
-# 2. en GitHub: repo privado LeFarfane/continental (en minuscula, como marlowe), y en
-#    Settings -> Deploy keys -> Add, pegar esa línea SIN marcar
-#    "Allow write access". Atlas despliega, no publica.
-
-# 3. de vuelta en atlas, comprobar la llave ANTES de intentar clonar:
-#    GitHub contesta con el repo al que esa deploy key esta amarrada, asi que
-#    caza de una vez el repo equivocado y la llave mal pegada.
-ssh -T git@github-continental   # "Hi LeFarfane/continental! You've successfully authenticated"
-
-cd ~/proyectos && git clone git@github-continental:LeFarfane/continental.git Continental
-cd Continental
-python3 -m venv .venv
-.venv/bin/pip install -e ".[test]"
-.venv/bin/python -m pytest -q
-```
-
-**Sin `--system-site-packages`, y ya no hace falta plan B.** La duda era si
-`psycopg2-binary` corre en el Athlon II X4 de 2010 sin SSSE3. **Corre**: medido
-el 2026-09-19, el venv de Marlowe en atlas lo trae de PyPI (2.9.12), es un venv
-con `include-system-site-packages = false`, y su intérprete lo importa sin
-quejarse. El `apt install python3-psycopg2` que antes figuraba aquí como salida
-de emergencia no existe: ese paquete no está instalado en atlas y no hace falta.
-
-Atlas alcanza GitHub por ssh (medido el mismo día: el saludo llega y rebota con
-`Permission denied (publickey)`, que es la respuesta de una máquina que sí
-conecta y todavía no tiene llave).
+Lo que esto desbloquea son los pendientes 7 a 11: todos empiezan con "en
+`~/proyectos/Continental`", que hasta hoy no existía.
 
 ### 2. Los `grants` de farmacia-data · *sin esto, los permisos se borran solos*
 

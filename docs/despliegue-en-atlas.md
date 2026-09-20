@@ -2,17 +2,15 @@
 
 Cómo `farmacia.farfanlab.uk` llega a existir, paso a paso y en orden.
 
-**Estado al 2026-09-19: nada de esto está hecho todavía.** Lo que los tickets
-16 y 18 dejaron construido y probado es lo que vive en este repo —las tres
-unidades de systemd (el servicio web, el lote y su timer), el script de
-despliegue, la interfaz de escucha y sus pruebas—. Lo que falta
-necesita dos cosas que una sesión de agente no puede hacer: **escribir en
-atlas** y **entrar al dashboard de Cloudflare**. Las casillas de abajo están
-sin marcar por eso, no por olvido.
+**Estado al 2026-09-19: hecho de A.1 a A.3; de A.4 en adelante, no.** Lo que
+falta necesita dos cosas que una sesión de agente no puede hacer sola:
+**escribir en atlas** y **entrar al dashboard de Cloudflare**. Las casillas sin
+marcar lo están por eso, no por olvido.
 
-Medido en atlas el 2026-09-19, en solo lectura: `~/proyectos/` contiene
-`borde`, `Farmacia` (que es farmacia-data), `Marlowe` y `Sarabia`.
-**Continental no está ahí**, y este repo todavía no tiene remoto de git.
+El repo **ya existe en GitHub y ya está clonado en atlas**:
+`LeFarfane/continental`, privado, y `~/proyectos/Continental` parado en `main`.
+El suite corre ahí: **827 pasan en 9.86 s**, contra 3.3 s en la torre. Mismo
+número de pruebas, tres veces más lento, que es lo que se espera de ese CPU.
 
 ---
 
@@ -42,41 +40,102 @@ prohibido** porque ahí corre Marlowe en producción.
 
 ### A.1 — Un remoto de git, primero
 
-- [ ] Continental no tiene remoto. Sin él no hay `git pull` y `desplegar.sh`
-      se detiene en el paso 1 con ese mensaje exacto (comprobado el
-      2026-09-19). Es la misma forma que usa farmacia-data: un repo bare en
-      atlas del que se despliega, más un GitHub privado como única copia fuera
-      de casa, con `origin` empujando a los dos a la vez.
+- [x] Hecho el 2026-09-19: `LeFarfane/continental` en GitHub, **privado**, con
+      `main` por omisión.
+
+**Se hizo como Marlowe, no como farmacia-data.** Este documento decía antes que
+sería un repo bare en atlas más un GitHub, con `origin` empujando a los dos a
+la vez. Se descartó al ver que Marlowe ya resuelve lo mismo con una pieza
+menos: un bare en atlas es una segunda fuente de verdad que hay que mantener en
+sincronía a mano, y el de farmacia-data existe por su historia, no porque sea
+mejor.
+
+Privado porque lleva el gateway de la red Docker, la IP de atlas, el nombre del
+rol de Postgres y el enrutamiento del túnel. Ninguno es secreto por separado;
+juntos son el mapa de cómo entrar.
+
+**Dos llaves, con permisos distintos a propósito:**
+
+| Quién | Llave | Alcance | Permiso |
+|---|---|---|---|
+| atlas | deploy key `id_ed25519_continental_deploy` | solo este repo | **lectura** |
+| la torre | deploy key con la pública de `eddie@torre` | solo este repo | escritura |
+
+Atlas despliega, no publica: si esa máquina se ve comprometida, lo que se filtra
+es lectura de un repo. La mitad privada de su llave se generó **en atlas** y no
+sale de ahí.
+
+**Una deploy key de GitHub sirve a un solo repo**, así que hace falta un alias
+de ssh por repo —es lo que elige la llave correcta—. Por eso el remoto en atlas
+dice `git@github-continental:` y no `git@github.com:`. El bloque vive en
+`~/.ssh/config` de atlas, junto al `github-marlowe` que ya estaba:
+
+```
+Host github-continental
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/id_ed25519_continental_deploy
+    IdentitiesOnly yes
+```
+
+**Comprobar la llave antes de clonar.** GitHub contesta con el nombre del repo
+al que está amarrada, así que es lo único que caza de una vez la llave pegada
+en el repo equivocado, en vez de que eso aparezca como un `git clone` que falla
+sin decir por qué:
+
+```bash
+ssh -T git@github-continental
+# Hi LeFarfane/continental! You've successfully authenticated...
+```
+
+> **Trampa medida el 2026-09-19, para cuando toque el próximo repo:** desde la
+> torre, empujar por HTTPS falla dos veces seguidas. Primero el almacén de
+> credenciales de Windows (`fatal: Unable to persist credentials with the
+> 'wincredman' credential store`), y aunque eso se arregle, **GitHub no acepta
+> contraseñas desde 2021**. El camino que sí funciona es ssh.
 
 ### A.2 — Clonar, plano
 
-- [ ] El repo va en `~/proyectos/Continental`, **hermano** de `~/proyectos/Marlowe`
+- [x] Hecho el 2026-09-19. El repo va en `~/proyectos/Continental`, **hermano** de `~/proyectos/Marlowe`
       y de `~/proyectos/Farmacia`. En la torre cuelga de `Farmacia/`, en atlas
       **no**. La unidad de systemd tiene esa ruta escrita en tres lugares
       (`WorkingDirectory`, `PYTHONPATH`, `ExecStart`).
 
 ```bash
-cd ~/proyectos && git clone <url-del-remoto> Continental && cd Continental
+cd ~/proyectos && git clone git@github-continental:LeFarfane/continental.git Continental
+cd Continental
 ```
 
-### A.3 — El venv, con `--system-site-packages`
+### A.3 — El venv, normal
 
-- [ ] El CPU de atlas es un Athlon II X4 de 2010 **sin SSSE3**: los wheels de
-      PyPI con código vectorizado mueren ahí con `Illegal instruction`. Por eso
-      todos los venvs de atlas se crean así. Continental no trae numpy ni
-      pandas ni rapidfuzz —y no los va a traer—, pero la regla de la casa vale
-      igual y cuesta cero.
+- [x] Hecho el 2026-09-19. **Sin `--system-site-packages`**, al revés de lo que
+      decía antes este documento.
 
 ```bash
-python3 -m venv --system-site-packages .venv
+python3 -m venv .venv
 .venv/bin/pip install -e ".[test]"
 .venv/bin/python -m pytest -q      # el suite entero, antes de nada más
 ```
 
-> **Sin verificar:** si `psycopg2-binary` muriera con `Illegal instruction` en
-> ese CPU, la salida es `sudo apt install python3-psycopg2` y quitarlo de
-> `pyproject.toml`. No se ha podido comprobar desde la torre. `pydantic_core`
-> —que FastAPI arrastra— **sí** pasa: medido en atlas el 2026-09-06 con Marlowe.
+Aquí decía que `--system-site-packages` era "la regla de la casa" de atlas,
+porque su CPU es un Athlon II X4 de 2010 **sin SSSE3** y los wheels de PyPI con
+código vectorizado mueren ahí con `Illegal instruction`. **Medido el
+2026-09-19: no es la regla de la casa.** El venv de Marlowe en atlas tiene
+`include-system-site-packages = false` y trae `psycopg2-binary` de PyPI.
+
+La causa sí es cierta —numpy, pandas y rapidfuzz mueren ahí—, pero Continental
+no trae ninguno y no los va a traer. Medido el mismo día dentro de este venv,
+en atlas:
+
+| Paquete | Versión | Importa |
+|---|---|---|
+| `psycopg2-binary` | 2.9.13 | sí |
+| `pydantic_core` | 2.46.5 | sí |
+
+El plan B que figuraba aquí —`sudo apt install python3-psycopg2` y quitarlo de
+`pyproject.toml`— **se retira**: ese paquete no está instalado en atlas, así
+que el `--system-site-packages` no habría encontrado nada que heredar. La red
+de seguridad no estaba conectada.
 
 ### A.4 — El `.env`
 
