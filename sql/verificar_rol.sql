@@ -456,7 +456,14 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
            string_agg(a.attname
                       || CASE WHEN a.attnotnull THEN ' NOT NULL'
                               ELSE ' admite nulos' END,
-                      ', ' ORDER BY a.attname DESC),
+                      -- ASCENDENTE, y no es cosmético: el veredicto es una
+                      -- comparación de cadenas (`ok = (obtenido = esperado)`),
+                      -- así que el orden forma parte del valor. Con `DESC`
+                      -- esto armaba `proveedor_id ..., proveedor ...` contra
+                      -- un esperado escrito al revés, y el caso salía [MAL]
+                      -- con la base perfectamente bien. Lo cazó la primera
+                      -- corrida de verdad, el 2026-09-19.
+                      ', ' ORDER BY a.attname),
            'NO EXISTEN esas columnas')
     FROM pg_attribute a
    WHERE a.attrelid = to_regclass('pedidos.pedido')

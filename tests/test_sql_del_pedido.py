@@ -348,3 +348,56 @@ def test_el_verificador_espera_las_mismas_cinco_tablas():
         "La lista esperada de la comprobación 7 de sql/verificar_rol.sql no "
         f"coincide con los GRANT. Debería decir: {esperadas}"
     )
+
+
+def _llamadas_a_string_agg(texto: str) -> list[str]:
+    """Cada `string_agg(...)` del archivo, sin comentarios y con los paréntesis balanceados."""
+    sin_comentarios = re.sub(r"--.*", "", texto)
+
+    llamadas = []
+    for inicio in (m.end() - 1 for m in re.finditer(r"string_agg\s*\(", sin_comentarios)):
+        profundidad = 0
+        for fin in range(inicio, len(sin_comentarios)):
+            if sin_comentarios[fin] == "(":
+                profundidad += 1
+            elif sin_comentarios[fin] == ")":
+                profundidad -= 1
+                if profundidad == 0:
+                    llamadas.append(sin_comentarios[inicio : fin + 1])
+                    break
+    return llamadas
+
+
+def test_el_verificador_arma_sus_listas_en_orden_ascendente():
+    """Un `DESC` dentro de un `string_agg` del verificador es un falso [MAL].
+
+    El veredicto de `verificar_rol.sql` es una comparación de cadenas
+    —`ok = (obtenido = esperado)`—, así que **el orden forma parte del valor**.
+    Los `esperado` son literales escritos a mano en orden natural; si el
+    `string_agg` que arma el `obtenido` ordena al revés, las dos cadenas dicen
+    exactamente lo mismo y no coinciden nunca.
+
+    Lo pagamos en la primera corrida de verdad, el 2026-09-19: la comprobación
+    23 salió `[MAL]` con *esperado* `proveedor NOT NULL, proveedor_id admite
+    nulos` contra *obtenido* `proveedor_id admite nulos, proveedor NOT NULL`, y
+    el script terminó en código 3 sobre una base impecable. Es la falla más
+    cara que puede tener un verificador después de la contraria: enseña a
+    desconfiar de él, y el día que diga `[MAL]` de verdad nadie le va a creer.
+    """
+    # Los bordes de palabra no sobran: sin ellos, y con IGNORECASE, un
+    # `ORDER BY descripcion` sería un culpable inventado.
+    descendente = re.compile(r"ORDER\s+BY[^)]*\bDESC\b", re.IGNORECASE)
+
+    # Se guarda el `ORDER BY` y no la llamada entera: el mensaje de una prueba
+    # roja se lee con prisa, y la llamada son diez renglones de SQL.
+    culpables = [
+        " ".join(hallado.group(0).split())
+        for llamada in _llamadas_a_string_agg(_texto(VERIFICAR_ROL))
+        if (hallado := descendente.search(llamada))
+    ]
+
+    assert not culpables, (
+        "Hay string_agg en sql/verificar_rol.sql que ordenan descendente: "
+        f"{culpables}. El `esperado` con el que se comparan está escrito en "
+        "orden ascendente, así que el caso saldría [MAL] con la base bien."
+    )
