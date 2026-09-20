@@ -537,8 +537,9 @@ latido de prueba escribiría en el historial de un monitor que alguien mira.
 | Monitor Type | **Push** | Es el lote quien avisa; Kuma no puede consultarlo, porque el lote no escucha en ningún puerto |
 | Friendly Name | `Continental — lote nocturno` | Que se distinga del de la cadena y del de Marlowe de un vistazo |
 | Heartbeat Interval | **93600** s (26 h) | El lote corre **lunes a viernes a las 22:00**. Con 24 h justas, el lunes por la noche sería siempre un falso rojo, porque el último latido sería el del viernes. Ver D.3 |
-| Retries | 0 | Un push no se reintenta: o llegó o no llegó |
-| Resend Notification if Down | 1 | Que avise una vez y no cada intervalo |
+| Retries | **2** | Dos horas de gracia al cerrar la ventana del fin de semana. Ver D.3: sin esto, **todos los lunes** son rojo entre las 21:50 y el latido de las 22:0x |
+| Heartbeat Retry Interval | **3600** s | 2 × 3600 = esas dos horas |
+| Resend Notification if Down | **0** | **`0` es "no reenviar".** Aquí decía `1` con la glosa *"que avise una vez y no cada intervalo"*, y `1` hace justo lo contrario: el campo es *resend every X times*, así que `1` reenvía en **cada** ciclo — cada 26 h. Corregido el 2026-09-20 |
 
 - [ ] Copiar la **Push URL** que Kuma genera (`http://.../api/push/<token>`).
 
@@ -585,23 +586,79 @@ URL completa y la URL completa **es** el token— y la corrida vale lo que valí
 | la corrida se cortó | `down` | rojo **ahora**, sin esperar al intervalo |
 | **el lote no corrió** | nada | rojo cuando vence el intervalo. **Esto es lo que el monitor existe para cazar** |
 
-> **El fin de semana es el caso que va a confundir.** El timer es
-> `OnCalendar=Mon-Fri 22:00` sin `Persistent=true` (ADR 0006), así que del
-> viernes 22:00 al lunes 22:00 pasan 72 h sin latido. Con el intervalo de 26 h
-> de D.1, Kuma se pone rojo el sábado por la madrugada y se queda así hasta el
-> lunes por la noche, **todas las semanas**. Hay dos salidas y las dos son
-> decisiones del dueño, así que se dejan escritas en vez de elegidas aquí:
+> **El fin de semana es el caso que va a confundir, y ya está elegido.** El
+> timer es `OnCalendar=Mon-Fri 22:00` sin `Persistent=true` (ADR 0006), así que
+> del viernes 22:00 al lunes 22:00 pasan 72 h sin latido. Con el intervalo de
+> 26 h de D.1, Kuma se pone rojo el sábado por la madrugada y se queda así hasta
+> el lunes por la noche: **70 horas de rojo bueno cada semana**, que es
+> literalmente enseñar a ignorar el rojo.
 >
-> - **Silenciar el monitor los fines de semana** (Kuma tiene ventanas de
->   mantenimiento: *Maintenance → sábado y domingo*). Es lo que conserva el
->   aviso útil de lunes a viernes.
-> - **Subir el intervalo a 73 h** y perder la capacidad de distinguir "no
->   corrió el martes" hasta el viernes. **No se recomienda**: convierte el
->   monitor en ruido de fondo, que es exactamente lo que la casilla del ticket
->   quería evitar.
+> **Una ventana de mantenimiento**, en *Maintenance → Schedule Maintenance*:
 >
-> Sin ninguna de las dos, el rojo del fin de semana enseña a ignorar el rojo, y
-> entonces el lunes que el lote de verdad no corra nadie lo va a mirar.
+> | Campo | Valor |
+> |---|---|
+> | Affected Monitors | **solo** `Continental — lote nocturno` |
+> | Strategy | **Cron Expression** |
+> | Cron | `0 0 * * 6` (sábado 00:00) |
+> | Duration | **4190** minutos → cierra el **lunes a las 21:50** |
+> | Timezone | **`America/Mexico_City`, elegida a mano** — ver abajo |
+>
+> Durante la ventana el monitor se pinta **azul** y no rojo, y no notifica. El
+> historial sigue diciendo la verdad —"estos días no se esperaba latido"— en vez
+> de mentir en los dos sentidos.
+>
+> ### La ventana cierra ANTES del disparo, y ahí está todo el truco
+>
+> Lo cómodo sería extenderla hasta el martes. **No funciona.** En Kuma 1.23 el
+> manejador del push **pisa** un latido que llega dentro de una ventana: lo
+> guarda como `MAINTENANCE` con el mensaje *"Monitor under maintenance"*, y el
+> mensaje real de la corrida se pierde. Peor: el chequeo de un monitor Push
+> exige que el latido previo esté en `UP`, y uno guardado como `MAINTENANCE`
+> **no levanta el monitor** al cerrar la ventana. O sea que el lunes amanecería
+> rojo con el lote habiendo corrido bien, y un `down` de verdad se vería verde.
+>
+> Por eso cierra a las **21:50**, diez minutos antes del disparo, y por eso
+> `Retries = 2`: el hueco entre el cierre y el latido de las 22:0x tiene que
+> pasar por `PENDING` —naranja, sin notificar— en vez de por rojo.
+>
+> **Lo que eso cuesta, dicho:** un `down` explícito ya no pinta rojo al
+> instante, sino ~2 h después. A las 22:30 no hay nadie mirando el panel, así
+> que el aviso sirve igual a las 00:30 — y el precio de equivocarse del otro
+> lado es un falso rojo **cada semana**.
+>
+> ### ⚠️ La zona horaria está desalineada, y medido
+>
+> `atlas` corre en `America/Mexico_City`; el contenedor `borde_kuma` **no tiene
+> `TZ` definida y corre en UTC** (medido el 2026-09-20: `date` dentro del
+> contenedor da 6 h adelante). La ventana trae *"Same as Server Timezone"* por
+> omisión, y ese "servidor" es **Kuma, no atlas**: dejarla así correría la
+> ventana seis horas —empezaría el sábado a las 06:00 y cerraría el martes a las
+> 03:50—, con un rojo el sábado de madrugada y el latido del lunes tragado por
+> la ventana. **Elige `America/Mexico_City` a mano**, y confirma que la próxima
+> ocurrencia que muestra la interfaz dice sábado 00:00.
+>
+> Es la misma clase de trampa que el Postgres del contenedor en UTC.
+>
+> ### Lo que se descartó
+>
+> - **Subir el intervalo a 73 h**: pierde la capacidad de distinguir "no corrió
+>   el martes" hasta el viernes. Convierte el monitor en ruido de fondo.
+> - **Recurring – Day of Week (sáb + dom)**: no cubre el lunes de 00:00 a 21:50,
+>   o sea 22 h de falso rojo cada lunes. Cubrirlo exige **dos** entradas; el
+>   cron lo dice en una.
+> - **Poner el timer en `Mon-Sun`** para que late todas las noches: cambia la
+>   operación para arreglar el monitor, y manda cuatro navegadores contra los
+>   portales del dueño en fin de semana por una lista armada con datos que no se
+>   movieron.
+> - **Un latido de relleno** el sábado: es mentirle a Kuma. Un `up` que no
+>   corresponde a ninguna corrida reintroduce el modo de falla que este monitor
+>   existe para evitar.
+>
+> **Y farmacia-data tiene el mismo problema desde el 2026-09-01** —
+> `farmacia-diario.timer` es `Mon..Fri 20:30` con monitor de 26 h— sin una sola
+> mención en su repo. O lo viven con el rojo, o alguien lo configuró en la
+> interfaz sin dejar rastro. Su ventana sería igual pero cerrando a las **20:25**,
+> porque late a las 20:35.
 
 ---
 
