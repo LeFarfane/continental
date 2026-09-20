@@ -160,26 +160,50 @@ def test_el_mensaje_con_acentos_y_ampersand_viaja_codificado():
     assert _parametros(url)["msg"] == "se acabó el tiempo & no pasó nada"
 
 
-def test_una_base_que_ya_trae_parametros_no_se_rompe():
-    """`?` o `&` según lo que traiga la base.
+def test_los_parametros_de_la_base_se_DESCARTAN_y_no_se_arrastran():
+    """**Kuma muestra su Push URL con un ejemplo pegado, y se copia con él.**
 
-    Una URL de Kuma pegada del portapapeles puede venir con parámetros dentro.
-    Con un `?` fijo, el segundo `?` haría que Kuma leyera el `status` como
-    parte del valor anterior y el monitor se quedaría esperando un latido que
-    ya se mandó.
+    La interfaz de Kuma enseña la URL así:
+
+        http://.../api/push/TOKEN?status=up&msg=OK&ping=
+
+    Eso NO es información: es un marcador de posición. Si se conserva y se le
+    añaden los parámetros de verdad detrás, la petición sale con `status`,
+    `msg` y `ping` **por duplicado**, y cuál gana lo decide Kuma, no nosotros.
+
+    Pasó de verdad el 2026-09-20, en la primera corrida real del lote: la URL
+    salió con `status=up&msg=OK&ping=&status=down&msg=...&ping=2458`. Esa vez
+    Kuma leyó el último y el latido quedó bien, pero **una corrida que depende
+    de cómo el servidor ordena duplicados no es una garantía**: el día que
+    ganara el primero, el monitor diría "todo bien" sobre un lote roto, que es
+    exactamente la mentira que este módulo existe para no contar.
+
+    Hasta ese día aquí se conservaban a propósito, con `&` en vez de `?`. La
+    intención era buena —no romper la URL— pero la conclusión estaba al revés:
+    lo que hay que hacer con esos parámetros es **tirarlos**.
     """
     url = armar_la_url(
-        URL_FALSA + "?algo=1", estado=ABAJO, mensaje="se cortó"
+        URL_FALSA + "?status=up&msg=OK&ping=", estado=ABAJO, mensaje="se cortó"
     )
 
     assert url.count("?") == 1
-    assert url.startswith(URL_FALSA + "?algo=1&")
+    assert url.count("status=") == 1, (
+        "El `status` va duplicado: el del ejemplo de Kuma sobrevivió."
+    )
+    assert url.startswith(URL_FALSA + "?")
     assert _parametros(url) == {
-        "algo": "1",
         "status": "down",
         "msg": "se cortó",
         "ping": "0",
     }
+
+
+def test_un_fragmento_en_la_base_tampoco_viaja():
+    """Un `#algo` al final rompería el último parámetro sin decir nada."""
+    url = armar_la_url(URL_FALSA + "#seccion", estado=ARRIBA, mensaje="ok")
+
+    assert "#" not in url
+    assert _parametros(url)["status"] == "up"
 
 
 @pytest.mark.parametrize("estado", ESTADOS)

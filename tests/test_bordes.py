@@ -20,7 +20,6 @@ import sys
 import typing
 
 import sqlalchemy
-from fastapi.testclient import TestClient
 
 import continental
 from continental.almacen import (
@@ -110,7 +109,7 @@ def test_doyle_caido_es_un_hueco_con_motivo_y_el_otro_borde_no_se_contagia(
 
 
 def test_el_borde_real_del_almacen_mal_configurado_es_un_hueco_y_no_tumba_nada(
-    monkeypatch, doyle
+    monkeypatch, doyle, cliente_de_sesion
 ):
     """La única prueba que NO sustituye el borde del almacén, y es a propósito.
 
@@ -149,7 +148,7 @@ def test_el_borde_real_del_almacen_mal_configurado_es_un_hueco_y_no_tumba_nada(
     motor.cache_clear()
     app.dependency_overrides[obtener_doyle] = lambda: doyle
     try:
-        respuesta = TestClient(app).get("/api/bordes")
+        respuesta = cliente_de_sesion.get("/api/bordes")
         borde = next(b for b in respuesta.json()["bordes"] if b["nombre"] == "almacen")
         assert respuesta.status_code == 200
         assert borde["ok"] is False

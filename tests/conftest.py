@@ -325,15 +325,72 @@ porque Windows no tiene `socketpair`). El volcado del proceso colgado, con
 `pytest -o faulthandler_timeout=8`, terminaba en el `accept()` de ese par. En
 atlas (Linux) ese camino **no existe**: `epoll` no usa el par de respaldo.
 
-**Lo que NO se sabe, y por eso no se tocó nada.** Si el suite por sí solo puede
-colgarse por ese camino, sin un huérfano compitiendo, no está demostrado ni
-descartado: después de la limpieza son **12 corridas seguidas sin un solo
-cuelgue**, y eso es lo único que se puede afirmar hoy. Si vuelve a pasar **con
-la máquina limpia**, entonces sí hay algo que arreglar, y el arreglo va por
-reusar un `TestClient` de sesión —hoy se levantan ~doscientos bucles por
-corrida— separando el cliente (de sesión) de los dobles (por prueba). Lo que
+**Lo que NO se supo ese día, y por eso no se tocó nada.** Si el suite por sí
+solo puede colgarse por ese camino, sin un huérfano compitiendo, no quedó
+demostrado ni descartado: después de la limpieza fueron **12 corridas seguidas
+sin un solo cuelgue**, y eso era lo único que se podía afirmar. Si volvía a
+pasar **con la máquina limpia**, el arreglo iba por reusar un `TestClient` de
+sesión separando el cliente (de sesión) de los dobles (por prueba). Lo que
 **no** es el arreglo: `WindowsSelectorEventLoopPolicy`, que en Windows usa el
 mismo par de sockets de respaldo y mueve el problema sin quitarlo.
+
+### El 2026-09-20 se hizo ese arreglo — y el cuelgue no se reprodujo para medirlo
+
+Se pidió por el mismo síntoma, reportado ahora como **entre 1 de cada 12 y 1 de
+cada 3 corridas**. Lo primero fue lo de la lección de arriba: comprobar la
+máquina **por proceso**. No había ningún huérfano de Continental. Lo que sí
+había eran dos `python` de otro proyecto, uno quemando un núcleo entero, y es
+por eso que los tiempos de esta sección son de 6-14 s y no de los 2-3 s de los
+tickets anteriores: **son otro día y otra carga, no otro suite.**
+
+**Y entonces el cuelgue no apareció: 0 de 112 corridas.** 64 sobre el árbol de
+`b30fbf6`, 24 sobre el árbol vivo y 24 sobre una copia congelada de `7820a13`,
+con tope de 60 s por corrida y matando el árbol de procesos de la que se pasara.
+Con 0 de 112, la regla de tres deja la frecuencia de cuelgue de ese día **por
+debajo de 2.7% con 95% de confianza** — por debajo del piso de 1 de cada 12
+(8.3%) que se había reportado. No dice que el cuelgue no exista; dice que ese
+día, en esta máquina, no estaba ocurriendo.
+
+**Por qué se midió sobre una copia congelada, que es una lección aparte.** A
+media medición alguien editó el repo: `config/continental.yml` y dos archivos de
+`tests/` cambiaron entre la corrida 37 y la 38, y en una tanda posterior la
+huella del árbol **cambió nueve veces en 24 corridas**. Un antes y un después
+sobre un árbol que se mueve no compara nada. Por eso el harness guarda un hash
+del árbol en cada corrida y la comparación de abajo se hizo sobre
+`git archive HEAD` en una carpeta temporal, con el arreglo como **única**
+variable.
+
+**Lo que sí quedó medido** (24 corridas de cada lado, misma copia, misma hora):
+
+| | antes | después |
+|---|---|---|
+| bucles de eventos por corrida | **412** | **1** |
+| corridas colgadas | 0 de 112 | 0 de 24 |
+| tiempo de las que pasan | 7.04-14.46 s, mediana **9.57 s** | 5.98-8.16 s, mediana **6.48 s** |
+
+Y sobre el repo de verdad, ya con el arreglo dentro: **24 de 24 verdes, 0
+colgadas**, 5.61-17.46 s con mediana 6.17 s —la de 17.46 s es la primera de la
+tanda, con todo frío—, 841 pruebas, árbol estable durante toda la tanda.
+
+Los 412 no son una cuenta de peticiones: se contaron parchando
+`anyio.from_thread.start_blocking_portal`, que es literalmente un bucle de
+eventos nuevo cada vez. El suite hace 228 llamadas escritas a `cliente.*`; las
+otras salen de las parametrizadas y de las pruebas que piden dos veces.
+
+**Se dejó puesto, y la razón se dice entera porque la regla del repo es esa.**
+El arreglo **no** se puede acreditar con una baja de cuelgues: no había cuelgues
+que bajar. Lo que sí hace, y está medido, es quitar 411 de los 412 bucles —el
+mecanismo exacto donde terminaba el volcado de pila— y **~3 s de mediana, un
+32%**, con el rango apretándose de 7.4 s de ancho a 2.2 s. Un cambio que borra
+el mecanismo sospechoso y de paso deja el suite un tercio más rápido no se
+revierte por no haber podido reproducir el síntoma; lo que no se hace es
+cantarlo como arreglado.
+
+**Si vuelve a colgarse con esto puesto, el cliente de sesión no era la causa** —
+un solo bucle por corrida ya no alcanza para explicarlo— y lo siguiente que hay
+que mirar es, en este orden: los procesos vivos (por proceso, no por puerto),
+qué más estaba cargando la torre, y el volcado real con
+`pytest -q -o faulthandler_timeout=8`. Sin volcado no se diagnostica nada.
 """
 
 from __future__ import annotations
@@ -444,8 +501,47 @@ def consultas() -> RegistroDeConsultas:
     return RegistroDeConsultas(lanzar=lambda tarea: tarea())
 
 
+@pytest.fixture(scope="session")
+def cliente_de_sesion():
+    """Un solo `TestClient` —y un solo bucle de eventos— para todo el suite.
+
+    **El `with` es todo el punto, no el ámbito.** `TestClient` sin `with`
+    levanta un bucle de eventos **por petición**
+    (`starlette/testclient.py:423-428`: `_portal_factory` llama a
+    `anyio.from_thread.start_blocking_portal` cada vez que no hay un portal
+    abierto). Con `with`, `__enter__` abre el portal una vez y todas las
+    peticiones lo reusan. Medido en la torre el 2026-09-20 contando las
+    llamadas a `start_blocking_portal`: **412 bucles por corrida antes, 1
+    después.**
+
+    Cada bucle nuevo importa porque en Windows se despierta a sí mismo con un
+    par de sockets de loopback —`proactor_events._make_self_pipe` →
+    `socket._fallback_socketpair` → `socket.accept()`, porque Windows no tiene
+    `socketpair`— y ese `accept()` es donde terminaba el volcado de pila de una
+    corrida colgada. Es el camino descrito arriba. En atlas (Linux) no existe:
+    `epoll` no usa el par de respaldo.
+
+    **No guarda estado de nadie, y por eso puede ser de sesión.** Lo que cambia
+    por prueba no vive en el cliente sino en `app.dependency_overrides`, que la
+    fixture `cliente` pone y quita en cada una. `app` ya se compartía: es un
+    objeto de módulo. Y ninguna prueba del suite usa cookies, encabezados
+    pegados al cliente ni websockets, que es lo único que un cliente reusado
+    arrastraría de una prueba a la siguiente.
+
+    **El `with` corre el ciclo de vida de la aplicación.** Hoy `app` no
+    registra `startup`, `shutdown` ni `lifespan` —los bordes nacen detrás de un
+    `Depends`, no al arrancar—, así que abrirlo no conecta a nada ni levanta un
+    hilo. El día que se registre uno, esta fixture lo va a ejecutar una vez por
+    corrida: si ese ciclo toca Postgres o la red, esto deja de ser gratis y hay
+    que mirarlo aquí.
+    """
+    with TestClient(app) as cliente_de_pruebas:
+        yield cliente_de_pruebas
+
+
 @pytest.fixture
 def cliente(
+    cliente_de_sesion: TestClient,
     almacen: AlmacenFalso,
     doyle: DoyleFalso,
     almacenamiento: AlmacenamientoFalso,
@@ -453,14 +549,21 @@ def cliente(
 ):
     """La aplicación real con los cuatro bordes sustituidos.
 
+    **El cliente es de sesión y los dobles son por prueba**, y por eso son dos
+    fixtures y no una. Son dos vidas distintas: el cliente no tiene por qué
+    nacer de nuevo —lo único que hacía al nacer era un bucle de eventos más,
+    que es el mecanismo del cuelgue de arriba—, y los dobles sí, porque nacen
+    vacíos como lo haría una base recién creada.
+
     Se limpia al terminar: `app` es un objeto de módulo y un override que
     sobrevive a su prueba contamina a las demás en un orden que depende de
     cómo pytest recolectó los archivos — el tipo de falla que se descubre un
-    mes después y cuesta media tarde.
+    mes después y cuesta media tarde. Eso no cambió: lo que se comparte es el
+    cliente, no los dobles.
     """
     app.dependency_overrides[obtener_almacen] = lambda: almacen
     app.dependency_overrides[obtener_doyle] = lambda: doyle
     app.dependency_overrides[obtener_almacenamiento] = lambda: almacenamiento
     app.dependency_overrides[obtener_consultas] = lambda: consultas
-    yield TestClient(app)
+    yield cliente_de_sesion
     app.dependency_overrides.clear()

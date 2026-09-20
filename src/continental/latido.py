@@ -57,7 +57,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 log = logging.getLogger("continental")
 
@@ -163,8 +163,22 @@ def armar_la_url(
     mensaje lleva acentos y espacios —"se acabó el tiempo"— y un `&` suelto
     dentro partiría la URL en dos.
 
-    `?` o `&` según lo que ya traiga la base: una URL de Kuma pegada del
-    portapapeles puede venir con parámetros dentro.
+    **LO QUE LA BASE TRAIGA DE QUERY SE TIRA, y eso llegó el 2026-09-20.**
+    Kuma enseña su Push URL con un ejemplo pegado —
+    `?status=up&msg=OK&ping=`— y así se copia al `.env`. Aquí se conservaba a
+    propósito, añadiendo los parámetros de verdad con `&`: la intención era no
+    romper una URL con parámetros dentro, pero la conclusión estaba al revés.
+    El resultado era una petición con `status`, `msg` y `ping` **por
+    duplicado**, y cuál gana lo decide Kuma.
+
+    Pasó en la primera corrida real del lote: salió
+    `status=up&msg=OK&ping=&status=down&msg=…&ping=2458`. Esa vez Kuma leyó el
+    último y el latido quedó bien — pero un latido que depende de cómo el
+    servidor ordena duplicados no es una garantía. El día que ganara el
+    primero, el monitor diría *"todo bien"* sobre un lote roto.
+
+    El fragmento (`#algo`) se tira por lo mismo: pegado al final se comería el
+    último parámetro sin un solo error.
     """
     if estado not in ESTADOS:
         raise ValueError(
@@ -179,8 +193,8 @@ def armar_la_url(
             "ping": int(max(segundos, 0.0) * 1000),
         }
     )
-    separador = "&" if "?" in base else "?"
-    return f"{base}{separador}{parametros}"
+    limpia = urlsplit(base)._replace(query="", fragment="").geturl()
+    return f"{limpia}?{parametros}"
 
 
 def _pedir_por_http(url: str) -> None:
