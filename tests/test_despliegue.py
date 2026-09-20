@@ -38,6 +38,7 @@ from __future__ import annotations
 import importlib.util
 import re
 import socket
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -477,6 +478,47 @@ def test_el_script_existe_y_se_detiene_al_primer_fallo():
     """
     assert DESPLEGAR.exists(), "Falta scripts/desplegar.sh."
     assert "set -euo pipefail" in _desplegar()
+
+
+def test_el_script_esta_marcado_ejecutable_en_git():
+    """El modo `100755`, que es de lo que git se acuerda y el disco de Windows no.
+
+    **Nunca lo estuvo, y eso explica todo lo demás.** `CLAUDE.md` y
+    `docs/despliegue-en-atlas.md` llevan desde el principio diciendo que se
+    despliega con `~/proyectos/Continental/scripts/desplegar.sh`, y en atlas
+    ese comando contesta `Permission denied` porque el archivo se subió con
+    modo `100644`. En la torre no se nota: Windows no tiene bit de ejecución y
+    `core.filemode` está en `false`, así que no hay nada que git pueda notar
+    solo.
+
+    Lo caro no fue el `Permission denied` —eso se ve— sino la salida que
+    provoca: quien lo recibe prueba `. desplegar.sh`, que **sí** arranca. Y ahí
+    empieza la cadena del 2026-09-20 que tiró la sesión de ssh y culpó al
+    remoto. El freno contra ser importado, que está una prueba más abajo, fue
+    la cura del síntoma; esto es la causa.
+
+    Se comprueba contra el índice de git y no con `os.access`, porque en la
+    torre ese permiso no existe: lo único que viaja a atlas es el modo que git
+    guardó. Si vuelve a caer a `100644`, se arregla sin tocar el contenido:
+
+        git update-index --chmod=+x scripts/desplegar.sh
+    """
+    salida = subprocess.run(
+        ["git", "ls-files", "-s", "--", "scripts/desplegar.sh"],
+        cwd=RAIZ, capture_output=True, text=True,
+    )
+    if salida.returncode != 0 or not salida.stdout.strip():
+        pytest.skip("sin git o sin índice: no hay modo que comprobar")
+
+    modo = salida.stdout.split()[0]
+    assert modo == "100755", (
+        f"scripts/desplegar.sh está en git como {modo} y tiene que ser 100755. "
+        "Sin el bit de ejecución, el comando que documentan CLAUDE.md y "
+        "docs/despliegue-en-atlas.md contesta 'Permission denied' en atlas, y "
+        "quien lo reciba va a probar `. desplegar.sh`, que es peor. Se arregla "
+        "sin tocar el contenido:\n\n"
+        "    git update-index --chmod=+x scripts/desplegar.sh"
+    )
 
 
 def test_el_script_no_se_deja_importar_ni_se_ubica_por_dolar_cero():
