@@ -142,6 +142,11 @@ UTC.
 - **Se puede exportar un borrador y un enviado**, y el nombre y el primer
   renglón dicen cuál es (`pedido-2026-09-21-nadro-borrador.csv`): un borrador
   guardado en una carpeta no debe confundirse con lo que se capturó.
+  Desde el ticket 27 (ADR 0015) también sale `recibido` y `recibido parcial`:
+  el estado del nombre y del archivo es el **calculado** de los renglones
+  (`recepcion.estado_del_pedido`), no la columna, que en un pedido ya recibido
+  sigue diciendo `enviado`. Hasta el 2026-09-21 el CSV leía la columna, y un
+  pedido que llegó completo se bajaba como `…-enviado.csv`.
 - **El archivo es para leerlo, no para volver a subirlo.** Si alguien lo abre en
   Excel y lo guarda, Excel lo reescribe a su manera: al abrirlo la fecha de la
   lista ya se enseña `05/03/2024` (medido), y qué escribe al guardar no se midió.

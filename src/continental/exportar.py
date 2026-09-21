@@ -72,11 +72,21 @@ import datetime as dt
 import io
 import re
 import unicodedata
+from collections.abc import Callable, Iterable
 from decimal import Decimal
 from urllib.parse import quote
 
-from continental.almacenamiento import BORRADOR, CANCELADO, ENVIADO, PedidoGuardado
+from continental.almacenamiento import (
+    BORRADOR,
+    CANCELADO,
+    ENVIADO,
+    PEDIDO_RECIBIDO,
+    PEDIDO_RECIBIDO_PARCIAL,
+    PedidoGuardado,
+    RenglonGuardado,
+)
 from continental.particion import Captura, Linea, PedidoPorArmar
+from continental.recepcion import estado_del_pedido, frase_de_la_recepcion_del_pedido
 
 #: Las columnas, en el orden del ticket y con el IVA dicho en el propio nombre:
 #: una nota arriba se pierde en cuanto alguien copia la tabla a otra hoja. La
@@ -178,37 +188,71 @@ def _en_utc(instante: dt.datetime) -> str:
 # ------------------------------------------------------------------ el archivo
 
 
-def _estado(pedido: PedidoGuardado) -> str:
-    """Qué es este pedido, dicho para quien abra el archivo sin la pantalla.
+def _borrador(pedido: PedidoGuardado, renglones: list[RenglonGuardado]) -> str:
+    # El que más fácil se confunde: guardado en una carpeta se parece mucho a
+    # un pedido hecho, y el glosario dice que todavía no se le pidió a nadie.
+    return (
+        f"borrador: todavía no se le ha pedido a nadie. Sirve para capturarlo "
+        f"en el portal de {pedido.nombre} o para revisarlo; no es la "
+        f"constancia de un pedido hecho"
+    )
 
-    El borrador es el que más fácil se confunde: guardado en una carpeta se
-    parece mucho a un pedido hecho, y el glosario dice que todavía no se le
-    pidió a nadie. El enviado lleva la firma en voz activa y el desmentido del
-    ADR 0009, igual que la pantalla.
-    """
-    if pedido.estado == BORRADOR:
-        return (
-            f"borrador: todavía no se le ha pedido a nadie. Sirve para capturarlo "
-            f"en el portal de {pedido.nombre} o para revisarlo; no es la "
-            f"constancia de un pedido hecho"
-        )
-    if pedido.estado == ENVIADO:
-        cuando = "" if pedido.enviado_en is None else f" el {_en_utc(pedido.enviado_en)}"
-        return (
-            f"enviado: {pedido.enviado_por} dijo haberlo capturado en el portal "
-            f"de {pedido.nombre}{cuando}. Continental no se lo mandó a nadie: "
-            f"solo guarda quién lo dice y cuándo"
-        )
+
+def _firma_del_envio(pedido: PedidoGuardado) -> str:
+    """La firma en voz activa y el desmentido del ADR 0009, igual que la
+    pantalla. Sigue siendo verdad cuando el pedido ya llegó (ADR 0015)."""
+    cuando = "" if pedido.enviado_en is None else f" el {_en_utc(pedido.enviado_en)}"
+    return (
+        f"{pedido.enviado_por} dijo haberlo capturado en el portal "
+        f"de {pedido.nombre}{cuando}. Continental no se lo mandó a nadie: "
+        f"solo guarda quién lo dice y cuándo"
+    )
+
+
+def _enviado(pedido: PedidoGuardado, renglones: list[RenglonGuardado]) -> str:
+    return f"enviado: {_firma_del_envio(pedido)}"
+
+
+def _recibido(pedido: PedidoGuardado, renglones: list[RenglonGuardado]) -> str:
+    # `recibido` y `recibido parcial` (ticket 27): la frase es la misma que la
+    # pantalla enseña junto al pedido, y la firma del envío va detrás porque
+    # sigue siendo verdad —alguien lo capturó en el portal—.
+    return (
+        f"{frase_de_la_recepcion_del_pedido(pedido, renglones)} Antes, "
+        f"{_firma_del_envio(pedido)}"
+    )
+
+
+def _cancelado(pedido: PedidoGuardado, renglones: list[RenglonGuardado]) -> str:
     # Cancelado (ticket 25): es el archivo que más se presta a confusión —dice
     # lo que se iba a pedir, y no se pidió—, así que lo dice con las dos firmas.
-    if pedido.estado == CANCELADO:
-        cuando = "" if pedido.cancelado_en is None else f" el {_en_utc(pedido.cancelado_en)}"
-        return (
-            f"cancelado: {pedido.cancelado_por} dijo{cuando} que no está en el "
-            f"portal de {pedido.nombre}. NO es la constancia de un pedido hecho; "
-            f"lo suyo vuelve a proponerse en la siguiente lista"
-        )
-    return pedido.estado
+    cuando = "" if pedido.cancelado_en is None else f" el {_en_utc(pedido.cancelado_en)}"
+    return (
+        f"cancelado: {pedido.cancelado_por} dijo{cuando} que no está en el "
+        f"portal de {pedido.nombre}. NO es la constancia de un pedido hecho; "
+        f"lo suyo vuelve a proponerse en la siguiente lista"
+    )
+
+
+#: Qué se dice de cada uno de los cinco estados del glosario. **Se busca por el
+#: estado CALCULADO** (`recepcion.estado_del_pedido`, ADR 0015), nunca por
+#: `pedido.estado`: la columna de un pedido que ya llegó sigue diciendo
+#: `enviado`, y el archivo lo decía también mientras la pantalla decía
+#: `recibido`. Cuál es cuál se decide en un solo lugar; aquí solo se redacta.
+_QUE_ES: dict[str, Callable[[PedidoGuardado, list[RenglonGuardado]], str]] = {
+    BORRADOR: _borrador,
+    ENVIADO: _enviado,
+    PEDIDO_RECIBIDO: _recibido,
+    PEDIDO_RECIBIDO_PARCIAL: _recibido,
+    CANCELADO: _cancelado,
+}
+
+
+def _estado(pedido: PedidoGuardado, renglones: list[RenglonGuardado]) -> str:
+    """Qué es este pedido, dicho para quien abra el archivo sin la pantalla."""
+    estado = estado_del_pedido(pedido, renglones)
+    redactar = _QUE_ES.get(estado)
+    return estado if redactar is None else redactar(pedido, renglones)
 
 
 def _porque_no_hay_precio(linea: Linea) -> str:
@@ -232,7 +276,10 @@ def _fila(linea: Linea, nombre: str) -> list[str]:
 
 
 def filas_del_csv(
-    pedido: PedidoGuardado, captura: Captura, fecha_del_pedido: dt.date
+    pedido: PedidoGuardado,
+    captura: Captura,
+    fecha_del_pedido: dt.date,
+    renglones: Iterable[RenglonGuardado],
 ) -> list[list[str]]:
     """El archivo como filas de texto: lo que después se escribe con `csv`.
 
@@ -242,12 +289,14 @@ def filas_del_csv(
 
     `captura` es `particion.lo_que_hay_que_capturar(pedido, ...)`: las mismas
     líneas que la pantalla de captura, con el precio de ese proveedor.
+    `renglones` son los de la lista: de ellos sale el estado **calculado** del
+    pedido (ADR 0015), el mismo que la pantalla enseña.
     """
     nombre = pedido.nombre
     filas: list[list[str]] = [
         ["Pedido a", _celda(nombre)],
         ["Lista del día", fecha_del_pedido.isoformat()],
-        ["Estado", _celda(_estado(pedido))],
+        ["Estado", _celda(_estado(pedido, list(renglones)))],
         [
             "Precios",
             f"{LOS_PRECIOS_SON_SIN_IVA}. El precio es el de {nombre}, congelado "
@@ -322,7 +371,10 @@ def filas_del_csv(
 
 
 def csv_del_pedido(
-    pedido: PedidoGuardado, captura: Captura, fecha_del_pedido: dt.date
+    pedido: PedidoGuardado,
+    captura: Captura,
+    fecha_del_pedido: dt.date,
+    renglones: Iterable[RenglonGuardado],
 ) -> bytes:
     """Los bytes que se sirven: UTF-8 **con BOM**, coma, y `\\r\\n`.
 
@@ -332,7 +384,7 @@ def csv_del_pedido(
     """
     salida = io.StringIO()
     csv.writer(salida, lineterminator="\r\n").writerows(
-        filas_del_csv(pedido, captura, fecha_del_pedido)
+        filas_del_csv(pedido, captura, fecha_del_pedido, renglones)
     )
     return salida.getvalue().encode("utf-8-sig")
 
@@ -349,7 +401,11 @@ def _para_nombre(texto: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", sin_acentos.lower()).strip("-")
 
 
-def nombre_del_archivo(pedido: PedidoGuardado, fecha_del_pedido: dt.date) -> str:
+def nombre_del_archivo(
+    pedido: PedidoGuardado,
+    fecha_del_pedido: dt.date,
+    renglones: Iterable[RenglonGuardado],
+) -> str:
     """`pedido-2026-09-21-nadro-borrador.csv`.
 
     **La fecha es la de la lista**, no la de hoy ni la de `armado_en`: un pedido
@@ -358,9 +414,13 @@ def nombre_del_archivo(pedido: PedidoGuardado, fecha_del_pedido: dt.date) -> str
     del pedido (ADR 0008) y ya es ASCII. **Y el estado va en el nombre**, que el
     ticket no pide: un borrador guardado en una carpeta no debe poder
     confundirse, por su nombre, con lo que se capturó en el portal.
+
+    **El estado es el calculado** (ADR 0015), no la columna: un pedido que ya
+    llegó se baja como `…-recibido.csv` o `…-recibido-parcial.csv`, igual que
+    la pantalla lo dice. En la tabla seguiría `enviado`.
     """
     proveedor = _para_nombre(pedido.proveedor) or "proveedor"
-    estado = _para_nombre(pedido.estado) or "pedido"
+    estado = _para_nombre(estado_del_pedido(pedido, renglones)) or "pedido"
     return f"pedido-{fecha_del_pedido.isoformat()}-{proveedor}-{estado}.csv"
 
 

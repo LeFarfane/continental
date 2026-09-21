@@ -2025,9 +2025,10 @@ def exportar_el_pedido(
     formato —la clave como fórmula de texto, el BOM, la coma— está en
     `continental/exportar.py`, medido contra el Excel de la torre.
 
-    Se exporta en `borrador` y en `enviado`, y el archivo dice cuál es en su
-    nombre y en su primer renglón: el del borrador sirve para capturar o
-    revisar, y el del enviado es el respaldo de lo que se pidió.
+    Se exporta en cualquiera de los cinco estados, y el archivo dice cuál es en
+    su nombre y en su primer renglón: el del borrador sirve para capturar o
+    revisar, y el del enviado es el respaldo de lo que se pidió. Ese estado es
+    el **calculado** (ADR 0015): lo que llegó se llama `recibido`.
 
     **Lo que no se sirve es un archivo a medias.** Si los precios no se pueden
     leer, cada línea diría "no se le ha consultado el precio", que sería
@@ -2089,18 +2090,24 @@ def exportar_el_pedido(
             },
         )
 
-    nombre = nombre_del_archivo(pedido, lista.fecha_del_pedido)
+    # EL ESTADO QUE DICE EL ARCHIVO ES EL CALCULADO (ADR 0015): un pedido que
+    # ya llegó se baja como `recibido` o `recibido parcial`, igual que la
+    # pantalla, aunque la columna siga diciendo `enviado`. `exportar` lo saca
+    # de los renglones de la lista con `recepcion.estado_del_pedido`.
+    nombre = nombre_del_archivo(pedido, lista.fecha_del_pedido, lista.renglones)
     log.info(
         "Se exportó el pedido %s (%s, %s) de la lista %s como %s: %d renglón(es).",
         pedido.pedido_id,
         pedido.nombre,
-        pedido.estado,
+        estado_del_pedido(pedido, lista.renglones),
         pedido_sugerido_id,
         nombre,
         captura.cuantos,
     )
     return Response(
-        content=csv_del_pedido(pedido, captura, lista.fecha_del_pedido),
+        content=csv_del_pedido(
+            pedido, captura, lista.fecha_del_pedido, lista.renglones
+        ),
         media_type=TIPO_DEL_ARCHIVO,
         headers={"Content-Disposition": disposicion_de_descarga(nombre)},
     )

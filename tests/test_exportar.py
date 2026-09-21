@@ -60,7 +60,11 @@ from continental.almacenamiento import (
     PedidoGuardado,
     PrecioDeProveedor,
     RENGLON_ABIERTO,
+    RENGLON_CANCELADO,
     RENGLON_DESCARTADO,
+    RENGLON_EN_TRANSITO,
+    RENGLON_RECIBIDO,
+    RENGLON_RECIBIDO_PARCIAL,
     RenglonGuardado,
 )
 from continental.exportar import (
@@ -164,7 +168,7 @@ def _precio(renglon_id: int, proveedor: str, precio: str | None) -> PrecioDeProv
 
 def _filas(pedido, renglones, precios) -> list[list[str]]:
     captura = lo_que_hay_que_capturar(pedido, renglones, precios)
-    return filas_del_csv(pedido, captura, HOY)
+    return filas_del_csv(pedido, captura, HOY, renglones)
 
 
 def _tabla(filas: list[list[str]]) -> list[dict[str, str]]:
@@ -444,10 +448,9 @@ def test_una_descripcion_normal_no_se_toca():
 def test_el_archivo_empieza_con_bom_para_que_excel_lea_los_acentos():
     """Medido: sin BOM, `ÁCIDO FÓLICO` se ve `ÃCIDO FÃ“LICO`. Es lo mismo que
     Marlowe escribió en `alta.escribir_csv` el 2026-09-03."""
-    captura = lo_que_hay_que_capturar(
-        _pedido(), [_renglon(1, descripcion="ÁCIDO FÓLICO ñ")], {}
-    )
-    contenido = csv_del_pedido(_pedido(), captura, HOY)
+    renglones = [_renglon(1, descripcion="ÁCIDO FÓLICO ñ")]
+    captura = lo_que_hay_que_capturar(_pedido(), renglones, {})
+    contenido = csv_del_pedido(_pedido(), captura, HOY, renglones)
 
     assert contenido.startswith(BOM)
     assert "ÁCIDO FÓLICO ñ" in contenido.decode("utf-8-sig")
@@ -459,10 +462,11 @@ def test_separador_coma_decimal_punto_y_fin_de_linea_de_windows():
     con ella Excel parte las columnas y lee `86.05` como número sin preguntar.
     Por eso NO va la línea `sep=,`: en es-MX sobra, y Excel ignora el BOM
     cuando la encuentra."""
+    renglones = [_renglon(1)]
     captura = lo_que_hay_que_capturar(
-        _pedido(), [_renglon(1)], {1: [_precio(1, "nadro", "86.05")]}
+        _pedido(), renglones, {1: [_precio(1, "nadro", "86.05")]}
     )
-    contenido = csv_del_pedido(_pedido(), captura, HOY)
+    contenido = csv_del_pedido(_pedido(), captura, HOY, renglones)
     texto = contenido.decode("utf-8-sig")
 
     assert not texto.startswith("sep=")
@@ -471,10 +475,9 @@ def test_separador_coma_decimal_punto_y_fin_de_linea_de_windows():
 
 
 def test_una_descripcion_con_coma_y_comillas_vuelve_intacta():
-    captura = lo_que_hay_que_capturar(
-        _pedido(), [_renglon(1, descripcion='JERINGA 3ML, 21G "X"')], {}
-    )
-    filas = _leer(csv_del_pedido(_pedido(), captura, HOY))
+    renglones = [_renglon(1, descripcion='JERINGA 3ML, 21G "X"')]
+    captura = lo_que_hay_que_capturar(_pedido(), renglones, {})
+    filas = _leer(csv_del_pedido(_pedido(), captura, HOY, renglones))
     assert _tabla(filas)[0]["descripción"] == 'JERINGA 3ML, 21G "X"'
 
 
@@ -482,18 +485,17 @@ def test_lo_que_se_escribe_es_lo_que_se_lee(tmp_path):
     """El viaje entero por un archivo de verdad, **en `tmp_path`** y nunca en el
     repo: escrito como lo baja el navegador y leído como `utf-8-sig`."""
     pedido = _pedido()
+    renglones = [_renglon(1, clave="0012345678905", descripcion="ÁCIDO, FÓLICO")]
     captura = lo_que_hay_que_capturar(
-        pedido,
-        [_renglon(1, clave="0012345678905", descripcion="ÁCIDO, FÓLICO")],
-        {1: [_precio(1, "nadro", "10.10")]},
+        pedido, renglones, {1: [_precio(1, "nadro", "10.10")]}
     )
-    archivo = tmp_path / nombre_del_archivo(pedido, HOY)
-    archivo.write_bytes(csv_del_pedido(pedido, captura, HOY))
+    archivo = tmp_path / nombre_del_archivo(pedido, HOY, renglones)
+    archivo.write_bytes(csv_del_pedido(pedido, captura, HOY, renglones))
 
     with open(archivo, encoding="utf-8-sig", newline="") as f:
         leidas = list(csv.reader(f))
 
-    assert leidas == filas_del_csv(pedido, captura, HOY)
+    assert leidas == filas_del_csv(pedido, captura, HOY, renglones)
 
 
 # ==========================================================================
@@ -502,8 +504,16 @@ def test_lo_que_se_escribe_es_lo_que_se_lee(tmp_path):
 
 
 def test_el_nombre_lleva_la_fecha_de_la_lista_el_proveedor_y_el_estado():
-    assert nombre_del_archivo(_pedido(BORRADOR), HOY) == "pedido-2024-03-05-nadro-borrador.csv"
-    assert nombre_del_archivo(_pedido(ENVIADO), HOY) == "pedido-2024-03-05-nadro-enviado.csv"
+    # En camino: el estado calculado de un enviado sigue siendo `enviado`.
+    en_camino = [_renglon(1, estado=RENGLON_EN_TRANSITO)]
+    assert (
+        nombre_del_archivo(_pedido(BORRADOR), HOY, [_renglon(1)])
+        == "pedido-2024-03-05-nadro-borrador.csv"
+    )
+    assert (
+        nombre_del_archivo(_pedido(ENVIADO), HOY, en_camino)
+        == "pedido-2024-03-05-nadro-enviado.csv"
+    )
 
 
 def test_la_fecha_es_la_de_la_lista_y_no_la_del_reloj():
@@ -511,8 +521,8 @@ def test_la_fecha_es_la_de_la_lista_y_no_la_del_reloj():
     pedido se armó a las 04:30 UTC del día 6 —las 22:30 del 5 en la farmacia—,
     y el archivo es de la lista del 5."""
     assert ARMADO.date() == dt.date(2024, 3, 6)
-    assert "2024-03-05" in nombre_del_archivo(_pedido(), HOY)
-    assert "2024-03-06" not in nombre_del_archivo(_pedido(), HOY)
+    assert "2024-03-05" in nombre_del_archivo(_pedido(), HOY, [_renglon(1)])
+    assert "2024-03-06" not in nombre_del_archivo(_pedido(), HOY, [_renglon(1)])
 
 
 @pytest.mark.parametrize(
@@ -522,7 +532,7 @@ def test_un_proveedor_raro_no_rompe_el_nombre(proveedor):
     """La clave del proveedor viene de la tabla, y el glosario la da como
     cerrada — pero `partir` acepta cualquier otra detrás de los cuatro. El
     nombre sale en ASCII, sin comillas, sin barras y sin saltos de línea."""
-    nombre = nombre_del_archivo(_pedido(proveedor=proveedor), HOY)
+    nombre = nombre_del_archivo(_pedido(proveedor=proveedor), HOY, [_renglon(1)])
     assert re.fullmatch(r"pedido-2024-03-05-[a-z0-9-]+-borrador\.csv", nombre), nombre
     assert "--" not in nombre
 
@@ -837,3 +847,135 @@ def test_gitignore_tapa_el_csv_que_alguien_baje_dentro_del_repo():
         if l.strip() and not l.startswith("#")
     ]
     assert "pedido-*.csv" in patrones
+
+
+# ==========================================================================
+# EL ESTADO QUE DICE EL ARCHIVO ES EL CALCULADO (ticket 27, ADR 0015)
+#
+# La revisión lo cazó: `recibido` y `recibido parcial` del pedido no se
+# guardan, se calculan de sus renglones (`recepcion.estado_del_pedido`), y en
+# la tabla el pedido que llegó sigue `enviado`. El CSV leía la columna, así que
+# un pedido que ya llegó completo se bajaba como `…-enviado.csv` y decía
+# "enviado" adentro, mientras la pantalla decía "recibido".
+# ==========================================================================
+
+
+def _enviado_con(*estados: str) -> tuple[PedidoGuardado, list[RenglonGuardado]]:
+    """Un pedido enviado con un renglón por cada estado dado."""
+    return _pedido(ENVIADO), [
+        _renglon(n, clave=f"750100000000{n}", estado=estado)
+        for n, estado in enumerate(estados, start=1)
+    ]
+
+
+def _texto_de(pedido, renglones) -> str:
+    return ",".join(c for f in _filas(pedido, renglones, {}) for c in f)
+
+
+def test_un_pedido_que_llego_completo_se_llama_recibido():
+    pedido, renglones = _enviado_con(RENGLON_RECIBIDO, RENGLON_RECIBIDO)
+    assert (
+        nombre_del_archivo(pedido, HOY, renglones)
+        == "pedido-2024-03-05-nadro-recibido.csv"
+    )
+
+
+def test_un_pedido_que_llego_de_menos_se_llama_recibido_parcial_con_guion():
+    """Con guion y sin espacio: el estado es `recibido parcial`, y un espacio
+    en el nombre de un archivo es una comilla que alguien olvida."""
+    pedido, renglones = _enviado_con(RENGLON_RECIBIDO, RENGLON_RECIBIDO_PARCIAL)
+    assert (
+        nombre_del_archivo(pedido, HOY, renglones)
+        == "pedido-2024-03-05-nadro-recibido-parcial.csv"
+    )
+
+
+def test_un_pedido_que_llego_completo_lo_dice_adentro_y_no_dice_enviado():
+    pedido, renglones = _enviado_con(RENGLON_RECIBIDO, RENGLON_RECIBIDO)
+    estado = dict((f[0], f[1]) for f in _filas(pedido, renglones, {}) if len(f) > 1)["Estado"]
+    assert estado.startswith("Recibido:"), estado
+    assert "llegaron completos" in estado
+    assert not estado.startswith("enviado")
+    # La firma del envío sigue siendo verdad (ADR 0015) y se conserva.
+    assert CORREO in estado
+    assert "Continental no se lo mandó a nadie" in estado
+
+
+def test_un_pedido_que_llego_de_menos_lo_dice_adentro():
+    pedido, renglones = _enviado_con(RENGLON_RECIBIDO, RENGLON_RECIBIDO_PARCIAL)
+    estado = dict((f[0], f[1]) for f in _filas(pedido, renglones, {}) if len(f) > 1)["Estado"]
+    assert estado.startswith("Recibido parcial:"), estado
+    assert "1 llegó de menos" in estado
+    assert "vuelve a proponerse" in estado
+
+
+def test_un_pedido_con_algo_en_camino_sigue_siendo_enviado():
+    """Lo calculado no inventa: mientras algo venga en camino, es `enviado`."""
+    pedido, renglones = _enviado_con(RENGLON_RECIBIDO, RENGLON_EN_TRANSITO)
+    assert nombre_del_archivo(pedido, HOY, renglones).endswith("-nadro-enviado.csv")
+    assert "Recibido" not in _texto_de(pedido, renglones)
+
+
+def test_el_archivo_y_la_pantalla_dicen_el_mismo_estado():
+    """Una sola fuente: el nombre sale de `estado_del_pedido`, lo mismo que
+    `estado_a_la_vista` de la pantalla."""
+    from continental.recepcion import estado_del_pedido
+
+    for estados in (
+        (RENGLON_RECIBIDO,),
+        (RENGLON_RECIBIDO_PARCIAL,),
+        (RENGLON_RECIBIDO, RENGLON_CANCELADO),
+        (RENGLON_EN_TRANSITO,),
+    ):
+        pedido, renglones = _enviado_con(*estados)
+        calculado = estado_del_pedido(pedido, renglones).replace(" ", "-")
+        assert nombre_del_archivo(pedido, HOY, renglones).endswith(f"-nadro-{calculado}.csv")
+
+
+def _recibir_todo(cliente, almacenamiento, lista_id: int, pedido_id: int, piezas) -> None:
+    cliente.post(
+        f"/api/pedido/{pedido_id}/enviar",
+        headers={"Cf-Access-Authenticated-User-Email": CORREO},
+    )
+    renglones = [
+        r for r in almacenamiento.leer_por_id(NEGOCIO, lista_id).renglones
+        if r.pedido_id == pedido_id
+    ]
+    for renglon, cuantas in zip(renglones, piezas):
+        respuesta = cliente.post(
+            f"/api/renglon/{renglon.renglon_id}/recepcion/a-mano",
+            json={"piezas": cuantas},
+            headers={"Cf-Access-Authenticated-User-Email": CORREO},
+        )
+        assert respuesta.status_code == 200, respuesta.json()
+
+
+def test_la_ruta_baja_como_recibido_el_pedido_que_llego_completo(
+    cliente, almacen, almacenamiento
+):
+    lista_id, pedido = _pedido_partido(cliente, almacen, almacenamiento)
+    _recibir_todo(cliente, almacenamiento, lista_id, pedido["pedido_id"], (3, 3))
+
+    respuesta = cliente.get(_url(lista_id, pedido["pedido_id"]))
+
+    assert respuesta.status_code == 200
+    assert "nadro-recibido.csv" in respuesta.headers["content-disposition"]
+    assert "enviado.csv" not in respuesta.headers["content-disposition"]
+    filas = _leer(respuesta.content)
+    estado = next(f[1] for f in filas if f and f[0] == "Estado")
+    assert estado.startswith("Recibido:"), estado
+
+
+def test_la_ruta_baja_como_recibido_parcial_el_pedido_que_llego_de_menos(
+    cliente, almacen, almacenamiento
+):
+    lista_id, pedido = _pedido_partido(cliente, almacen, almacenamiento)
+    _recibir_todo(cliente, almacenamiento, lista_id, pedido["pedido_id"], (3, 1))
+
+    respuesta = cliente.get(_url(lista_id, pedido["pedido_id"]))
+
+    assert respuesta.status_code == 200
+    assert "nadro-recibido-parcial.csv" in respuesta.headers["content-disposition"]
+    filas = _leer(respuesta.content)
+    estado = next(f[1] for f in filas if f and f[0] == "Estado")
+    assert estado.startswith("Recibido parcial:"), estado
