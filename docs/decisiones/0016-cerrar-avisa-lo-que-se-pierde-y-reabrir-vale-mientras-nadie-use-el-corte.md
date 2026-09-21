@@ -1,6 +1,6 @@
 # 0016 — Cerrar avisa lo que se pierde, y reabrir vale mientras nadie haya usado el corte
 
-**Fecha:** 2026-09-21  ·  **Estado:** propuesta
+**Fecha:** 2026-09-21  ·  **Estado:** aceptada (por el dueño, 2026-09-21)
 
 ## Contexto
 
