@@ -580,6 +580,33 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
          END),
  NULL),
 
+-- LA MARCA DE CAPTURA, PAREADA (ticket 22, ADR 0010). Tachar un renglón en la
+-- pantalla de captura es la palabra de una persona sobre lo que tecleó en un
+-- portal que Continental no ve: sin su firma, "ya se capturó" queda en voz
+-- pasiva y no hay a quién preguntarle qué se tecleó cuando la factura no
+-- cuadre. Y sin las DOS columnas en la base -- si la migración 0007 no se
+-- corrió-- la primera lectura de la lista rebota en atlas con "column
+-- capturado_por does not exist", porque `_LEER_RENGLONES` las nombra.
+--
+-- Es la misma forma que la 28 y se comprueba igual: que la restricción exista
+-- y que las dos columnas estén.
+(29,
+ 'La marca de captura va firmada: quién y cuándo, pareados',
+ 'la restricción y las dos columnas',
+ (SELECT CASE
+           WHEN NOT EXISTS (SELECT 1 FROM pg_constraint con
+                             WHERE con.conrelid = to_regclass('pedidos.renglon')
+                               AND con.conname = 'ck_renglon_captura')
+                THEN 'NO EXISTE ck_renglon_captura'
+           WHEN (SELECT count(*) FROM pg_attribute a
+                  WHERE a.attrelid = to_regclass('pedidos.renglon')
+                    AND NOT a.attisdropped
+                    AND a.attname IN ('capturado_por', 'capturado_en')) <> 2
+                THEN 'falta capturado_por o capturado_en'
+           ELSE 'la restricción y las dos columnas'
+         END),
+ NULL),
+
 -- AVISO y no MAL: una tabla temporal vive en la sesión, no puede leer nada que
 -- el rol no pueda leer ya, y desaparece al desconectarse. El permiso llega por
 -- el TEMPORARY que PUBLIC tiene sobre la base por omisión, y quitarlo sería

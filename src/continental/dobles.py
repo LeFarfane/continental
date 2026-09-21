@@ -948,6 +948,12 @@ class AlmacenamientoFalso:
                     and renglon["pedido_id"] not in borradores_antes
                 ):
                     continue
+                # El `case` de `_ASIGNAR_RENGLONES` (ticket 22): el que CAMBIA
+                # de pedido pierde su marca de captura —en el portal nuevo
+                # nadie lo ha tecleado— y el que se queda la conserva.
+                if renglon.get("pedido_id") != fila["pedido_id"]:
+                    renglon["capturado_por"] = None
+                    renglon["capturado_en"] = None
                 renglon["pedido_id"] = fila["pedido_id"]
                 asignados.append(renglon["renglon_id"])
 
@@ -966,6 +972,9 @@ class AlmacenamientoFalso:
                 and renglon["pedido_id"] in borradores
             ):
                 renglon["pedido_id"] = None
+                # Y sin marca de captura, como `_SOLTAR_RENGLONES` (ticket 22).
+                renglon["capturado_por"] = None
+                renglon["capturado_en"] = None
 
         # `_VACIAR_LOS_PEDIDOS_SIN_RENGLONES`: el pedido que se quedó sin
         # ninguno pierde su total. A NULL y no a cero — un pedido vacío no
@@ -1061,6 +1070,71 @@ class AlmacenamientoFalso:
         return PedidoEnviado(
             pedido=pedido_desde_columnas(fila), renglones=tuple(movidos)
         )
+
+    # -------------------------------------------- la pantalla de captura (22)
+
+    def poner_la_captura(
+        self,
+        renglon_id: int,
+        capturado_por: str | None,
+        capturado_en: dt.datetime | None,
+    ) -> PedidoSugeridoGuardado | None:
+        """El `UPDATE` pelado de la marca de captura, revisado contra los CHECK.
+
+        Aparte de `marcar_capturado` por la misma razón que `poner_la_cantidad`
+        lo está de `ajustar_la_cantidad`: es donde se ve que el doble **se
+        niega** igual que Postgres —una firma vacía, una firma sin hora—. Si el
+        rechazo estuviera escondido dentro del camino que lo evita, nadie
+        podría verlo.
+        """
+        self._revisar()
+        encontrado = self._renglon_por_id(renglon_id)
+        if encontrado is None:
+            return None
+        fila, lista = encontrado
+
+        propuesta = {
+            **fila,
+            "capturado_por": capturado_por,
+            "capturado_en": capturado_en,
+        }
+        revisar_el_renglon(propuesta)
+
+        fila.update(capturado_por=capturado_por, capturado_en=capturado_en)
+        return armar_guardado(lista, lista["renglones"])
+
+    def marcar_capturado(
+        self, negocio: str, renglon_id: int, capturado: bool, quien: str
+    ) -> PedidoSugeridoGuardado | None:
+        """Tachar o destachar, con las cuatro condiciones de `_MARCAR_CAPTURADO`.
+
+        En el mismo orden que el `WHERE` real: el negocio, el renglón
+        `abierto`, que cuelgue de un pedido, y que ese pedido siga en
+        `borrador`. **Y la lista NO se mira**, igual que la sentencia: tachar
+        no exige la lista abierta (ADR 0010).
+        """
+        self._revisar()
+        encontrado = self._renglon_por_id(renglon_id)
+        if encontrado is None:
+            return None
+        fila, _lista = encontrado
+        if fila["negocio"] != negocio or fila["estado"] != RENGLON_ABIERTO:
+            return None
+        pedido = next(
+            (
+                p
+                for p in self.pedidos
+                if p["pedido_id"] == fila.get("pedido_id")
+                and p["negocio"] == fila["negocio"]
+            ),
+            None,
+        )
+        if pedido is None or pedido["estado"] != BORRADOR:
+            return None
+        if not capturado:
+            return self.poner_la_captura(renglon_id, None, None)
+        # El instante real con zona que en la tabla pone `now()`.
+        return self.poner_la_captura(renglon_id, quien, dt.datetime.now(dt.UTC))
 
     def devolver_a_abierto(
         self, negocio: str, renglon_id: int

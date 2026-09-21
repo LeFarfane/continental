@@ -64,9 +64,12 @@ from continental.faltantes import (
     proveedores_con_sesion_caducada,
 )
 from continental.particion import (
+    Captura,
+    captura_como_json,
     eleccion_como_json,
     elegir,
     frase_del_envio,
+    lo_que_hay_que_capturar,
     motivo_para_no_enviar,
     particion_como_json,
     partir,
@@ -602,6 +605,19 @@ class ProveedorElegido(BaseModel):
     proveedor: str
 
 
+class MarcaDeCaptura(BaseModel):
+    """Lo único que el navegador manda al tachar: si queda tachado o no.
+
+    **Explícito y sin valor por omisión**, a propósito: la ruta no "alterna" el
+    estado. Con dos pestañas abiertas, un "alterna" mandado desde la que iba
+    atrasada destacharía lo que la otra acaba de tachar; "déjalo tachado" dicho
+    dos veces deja lo mismo. Sin el campo, 422: un tachón por omisión firmaría
+    algo que nadie dijo.
+    """
+
+    capturado: bool
+
+
 @app.post("/api/renglon/{renglon_id}/cantidad")
 def ajustar_la_cantidad_del_renglon(
     renglon_id: int,
@@ -999,6 +1015,104 @@ def enviar_el_pedido(
     return _como_json(
         relectura,
         almacenamiento.precios_de_la_lista(negocio, lista_id),
+        _ultima_corrida(almacenamiento, negocio, lista_id),
+        almacenamiento.pedidos_de_la_lista(negocio, lista_id),
+    )
+
+
+@app.post("/api/renglon/{renglon_id}/capturado")
+def marcar_el_renglon_como_capturado(
+    renglon_id: int,
+    marca: MarcaDeCaptura,
+    request: Request,
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+):
+    """Tachar —o destachar— un renglón en la pantalla de captura (ticket 22).
+
+    El modo real de trabajo: el portal del proveedor en una ventana, esta
+    pantalla en otra, y el encargado tachando conforme teclea allá. **El avance
+    se guarda aquí, en la tabla, y no en el navegador** (ADR 0010): dos
+    pestañas del mismo pedido no divergen, cambiar de máquina a la mitad no lo
+    pierde, y cada marca dice quién la puso. Es una firma y nunca un permiso
+    (regla 3).
+
+    **Devuelve la lista entera**, como `partir` y `enviar`: tachar cambia el
+    avance de su pedido —cuántos faltan— y la invitación a enviar cuando se
+    tacha el último, y deducir eso en el navegador es justo lo que esta
+    pantalla no hace. Cuesta una relectura; `_mover_el_renglon` no sirve aquí
+    porque devuelve un renglón suelto y no los pedidos, que es donde vive la
+    captura.
+
+    **Tachar no condiciona enviar**, y ésa es la mitad de la quinta casilla que
+    se hace mal sola: esta ruta no toca el pedido y `se_puede_enviar` no mira
+    la captura. Enviar con cero renglones tachados sigue funcionando igual que
+    en el ticket 21.
+
+    Un 409 cuando no había nada que tachar: el renglón no cuelga de un pedido,
+    su pedido ya se envió, se descartó, o no es de este negocio. No se
+    distinguen desde fuera, igual que en el descarte, y la condición vive en el
+    `WHERE` y no en un `if`.
+    """
+    negocio = cargar().negocio
+    firma = quien(request)
+    verbo = "tachar" if marca.capturado else "destachar"
+
+    try:
+        guardado = almacenamiento.marcar_capturado(
+            negocio, renglon_id, marca.capturado, firma
+        )
+    except Exception as exc:  # noqa: BLE001 — el almacenamiento caído es un hueco
+        # Regla 5 de `CLAUDE.md`: el detalle a la bitácora del servidor, nunca
+        # al navegador. Un `str(exc)` de SQLAlchemy lleva la cadena de conexión
+        # con contraseña.
+        log.exception("No se pudo %s el renglón %s", verbo, renglon_id)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "detalle": f"no se pudo {verbo} el renglón ({type(exc).__name__})",
+            },
+        )
+
+    if guardado is None:
+        log.info(
+            "%s quiso %s el renglón %s de %s y no se pudo: o no está en ningún "
+            "pedido, o su pedido ya se envió, o está descartado.",
+            firma,
+            verbo,
+            renglon_id,
+            negocio,
+        )
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "detalle": (
+                    "Ese renglón ya no se puede tachar: o su pedido ya se envió, "
+                    "o salió del pedido al volver a partir, o se descartó. "
+                    "Vuelve a cargar la página para ver cómo quedó."
+                ),
+            },
+        )
+
+    movido = next(r for r in guardado.renglones if r.renglon_id == renglon_id)
+    # Las DOS direcciones van a la bitácora con su firma. La columna guarda solo
+    # la última —destachar la borra, ADR 0010—, y ésta es la única huella de
+    # que alguien tachó y destachó un renglón a la mitad de la captura.
+    log.info(
+        "%s acaba de %s el renglón %s (%s) del pedido %s. Es la palabra de una "
+        "persona sobre lo que tecleó en el portal: Continental no lo vio.",
+        firma,
+        verbo,
+        renglon_id,
+        movido.propuesto.descripcion,
+        movido.pedido_id,
+    )
+
+    lista_id = guardado.pedido_sugerido_id
+    return _como_json(
+        guardado,
+        _precios_de_la_lista(almacenamiento, negocio, lista_id),
         _ultima_corrida(almacenamiento, negocio, lista_id),
         almacenamiento.pedidos_de_la_lista(negocio, lista_id),
     )
@@ -1975,10 +2089,22 @@ def _como_json(
                 puente_configurado(),
             )
         ),
+        # LA CAPTURA DE CADA PEDIDO (ticket 22) viaja DENTRO del pedido y sale
+        # de los renglones que el pedido GUARDADO tiene dentro — no de la vista
+        # previa de arriba, que se recalcula con los precios de este instante y
+        # puede ya haber movido un renglón a otro proveedor. Lo que se captura
+        # es lo que al enviar pasa a `en tránsito`, y eso lo decide `pedido_id`.
         "pedidos": (
             None
             if pedidos is None
-            else [_pedido_como_json(p, *_lo_que_hay_dentro(guardado, p)) for p in pedidos]
+            else [
+                _pedido_como_json(
+                    p,
+                    *_lo_que_hay_dentro(guardado, p),
+                    captura=lo_que_hay_que_capturar(p, guardado.renglones, precios or {}),
+                )
+                for p in pedidos
+            ]
         ),
         "puente": puente_como_json(puente_configurado()),
         "vistas": _vistas(),
@@ -2018,6 +2144,7 @@ def _pedido_como_json(
     pedido: PedidoGuardado,
     renglones_dentro: int = 0,
     total_envejecido: bool = False,
+    captura: Captura | None = None,
 ) -> dict:
     """Un pedido ya guardado, como la pantalla lo lee.
 
@@ -2070,6 +2197,13 @@ def _pedido_como_json(
         "frase_del_envio": frase_del_envio(pedido),
         "se_puede_enviar": motivo is None,
         "motivo_para_no_enviar": motivo,
+        # LO QUE HAY QUE TECLEAR EN EL PORTAL, y cuánto va (ticket 22). Recibe
+        # `se_puede_enviar` y no al revés, y esa dirección es la quinta casilla
+        # entera: la captura puede INVITAR a enviar, pero el envío no mira la
+        # captura. `null` cuando quien llama no la calculó.
+        "captura": (
+            None if captura is None else captura_como_json(captura, motivo is None)
+        ),
     }
 
 

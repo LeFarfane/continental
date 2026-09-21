@@ -214,6 +214,40 @@ tocara `verificar.py`: estaba escrito desde el ticket 17 esperando `estado` y
 `COLUMNAS_QUE_EXIGE_EL_ENVIO` nunca cambió. Deja de imprimirse como PENDIENTE en
 cada despliegue.
 
+**Y desde el ticket 22 hay pantalla de captura: el portal en una ventana, esto
+en la otra, y el encargado tachando renglón por renglón.** Cada pedido en
+borrador lleva un bloque plegable —*Capturar en el portal de NADRO · 3 de 5
+tachados · faltan 2*— con un renglón por línea: la casilla, **la clave como
+botón que la copia de un clic** (portapapeles moderno, camino viejo si no está,
+y si ninguno sirve lo dice en vez de callar), la descripción, las piezas y el
+precio **de ese proveedor**. Lo tachado se tacha de verdad y no se mueve de
+sitio. Con el último, la pantalla **invita** a enviar, resalta el botón y le
+lleva el foco; mientras falte algo dice que tachar **no es requisito** — enviar
+con cero renglones tachados sigue funcionando igual que en el 21, y hay una
+prueba que lo fija.
+
+**El avance vive en `pedidos.renglon`, no en el navegador, y ésa es la decisión
+del ticket** (ADR 0010): dos columnas firmadas, `capturado_por` y
+`capturado_en`, pareadas por `ck_renglon_captura`, migración 0007. Con
+`localStorage`, dos pestañas del mismo pedido divergirían en silencio, cambiar
+de máquina a la mitad perdería el avance, y la marca que lleva a la única
+acción que compromete dinero no diría quién la puso. **Tachar no es un estado
+del renglón** —sigue `abierto`— porque cuatro sentencias llevan
+`estado = 'abierto'` en su `WHERE` y volver a partir se saltaría uno
+`capturado` en silencio. Tachar **no exige la lista abierta**, igual que enviar.
+
+**Dos cosas del 22 que conviene no redescubrir.** (1) **La lista de captura sale
+del pedido GUARDADO (`renglon.pedido_id`), nunca de la vista previa de la
+partición**: la vista previa se recalcula con los precios de este instante y
+puede ya haber movido un renglón a LEVIC mientras el pedido de NADRO todavía lo
+tiene dentro. Lo que se captura es lo que al enviar pasa a `en tránsito`. (2)
+**Volver a partir borra la marca del renglón que CAMBIA de pedido y conserva la
+del que se queda** —un `case ... is distinct from` sobre el valor viejo en
+`_ASIGNAR_RENGLONES`—: en el portal nuevo nadie lo ha tecleado. Y el recorrido
+del navegador volvió a cazar una —cuarta vez: 14, 15, 21, 22—: con todo
+tachado, el resumen seguía mandando a "buscar por nombre" el renglón sin EAN que
+ya se había capturado.
+
 **Lo sugerido NO se guarda y lo decidido SÍ, y ésa es la decisión del ticket.**
 Es la misma pregunta que el 11 resolvió con `cantidad_propuesta` /
 `cantidad_final`, y **aquí la respuesta es distinta a propósito**: la sugerencia
@@ -254,7 +288,19 @@ python iniciar.py     # http://127.0.0.1:8585
 python -m continental.verificar   # los datos de producción, no el código (ticket 17)
 python -m continental.lote        # el lote nocturno, a mano (ticket 18)
 python -m continental.lote --tope-minutos 5   # ...con tope corto, para mirarlo
-pytest                # 886 pruebas, 0 saltadas, 3.31-4.81 s (2026-09-21, ticket 21)
+pytest                # 953 pruebas, 0 saltadas, 4.05-5.26 s (2026-09-21, ticket 22)
+                      # 886 en el 21. Las 67 nuevas son 66 de `test_captura.py`
+                      # (lo puro: qué entra en la captura, cuántos faltan y las
+                      # dos frases de la quinta casilla; lo que se guarda: la
+                      # firma en el doble y el SQL como texto; lo que se ve: la
+                      # ruta, la recarga y la pantalla) y 1 que `test_compila.py`
+                      # gana sola por la migración 0007. Tres pruebas viejas
+                      # cambiaron su censo de `fetch('/api/` de 10 a 11.
+                      # Medido: con `test_captura.py` fuera, 4.22 s ese mismo
+                      # rato; las 66 solas, 0.56 s. NINGUNA TOCA POSTGRES y
+                      # ninguna duerme.
+                      #
+                      # 886 pruebas, 0 saltadas, 3.31-4.81 s (2026-09-21, ticket 21)
                       # 845 AL EMPEZAR EL 21, y no las 824 que este bloque
                       # anoto el dia del 20: entre medias entraron las de los
                       # pendientes 2, 6, 7 y 8, que son despliegue y lote y no
@@ -331,9 +377,10 @@ pytest                # 886 pruebas, 0 saltadas, 3.31-4.81 s (2026-09-21, ticket
 | `docs/decisiones/0006` | el lote nocturno: la hora, el tope, qué pasa con lo que no alcanzó, y por qué la bitácora es el journal y no una tabla nueva |
 | `docs/decisiones/0007` | la corrida del lote en **una fila por noche**, y por qué la pantalla deduce de ahí "el lote no llegó a este renglón" en vez de escribir cuatro huecos por renglón. Reabre la opción β del 0006 por su condición de disparo |
 | `docs/decisiones/0009` | **"enviar" no es enviar**: `enviado` es la firma de que una persona ya capturó el pedido en el portal, no un envío de Continental. Por qué firma y no acuse, por qué no se puede enviar un pedido vacío y sí uno sin total, por qué enviar NO exige la lista abierta, y por qué no hay "desenviar" |
+| `docs/decisiones/0010` | **el avance de la captura vive en la tabla del renglón**, no en el navegador: dos columnas firmadas y no `localStorage`, ni una tabla nueva, ni un estado `capturado`. Por qué se puede destachar y enviar no se deshace, y por qué tachar todo lleva a enviar sin ser requisito |
 | `docs/decisiones/0008` | **el puente que no existía**: el pedido se identifica por la clave de Doyle y el `proveedor_id` de SICAR es una correspondencia que puede faltar. Por qué el mapa va en el YAML y guarda el id y no el nombre, y por qué el UNIQUE tuvo que moverse |
 | `sql/` | el DDL de las **cinco** tablas, el rol acotado y `verificar_rol.sql`, que mira la **forma** de la base. **Se corren a mano, en ese orden, con credenciales de dueño** — no confundirlo con `continental.verificar`, que mira los **datos** en cada despliegue (la cabecera de ese módulo tiene la tabla que los separa) |
-| `sql/migraciones/` | **seis** archivos numerados: lo que le falta a una base donde las tablas YA existen: `crear_tablas.sql` usa `CREATE TABLE IF NOT EXISTS` y calla si la tabla ya está con otra forma. También a mano y con credenciales de dueño |
+| `sql/migraciones/` | **siete** archivos numerados: lo que le falta a una base donde las tablas YA existen: `crear_tablas.sql` usa `CREATE TABLE IF NOT EXISTS` y calla si la tabla ya está con otra forma. También a mano y con credenciales de dueño |
 | `config/continental.yml` | puertos de los módulos y los parámetros del pedido |
 | `src/continental/web/app.py` | `/api/salud`, `/api/modulos`, el pedido sugerido y su cierre, la portada |
 | `src/continental/almacenamiento.py` | donde el pedido sugerido se guarda: el `Protocol`, el SQL real y las reglas de la tabla en un solo lugar |
@@ -343,7 +390,7 @@ pytest                # 886 pruebas, 0 saltadas, 3.31-4.81 s (2026-09-21, ticket
 | `src/continental/verificar.py` | los invariantes sobre los **datos** de producción, no sobre el código. Mitad pura (recibe listas, devuelve un `Informe`, se prueba) y mitad de recolección (lee de Postgres, no se prueba). Acumula todas las fallas, cada una con su comando de reparación, y sale distinto de cero. Es el paso 6 de `desplegar.sh` |
 | `src/continental/comparacion.py` | funciones puras: las cuatro lecturas congeladas + las piezas -> quién gana, con qué certeza, cuánto se ahorra contra NADRO y, para la lista entera, cuántos renglones quedaron sin comparar (`contar_la_lista`). No toca la red, la base ni el reloj |
 | `src/continental/proveedores.py` | funciones puras: el puente entre la clave de Doyle y el `proveedor_id` de SICAR (ADR 0008). Lee el mapa del YAML, se niega con un aviso a una entrada mal escrita —y deja a ese proveedor "sin puente", que es un estado que el módulo sabe decir— y **nunca devuelve un cero**: `None` es "SICAR no lo conoce" |
-| `src/continental/particion.py` | funciones puras: los renglones + sus comparaciones + el puente -> a quién se le pide cada uno, en cuántos pedidos se parte la lista y cuánto suma cada uno. Ahí vive la decisión del ticket 20 —la sugerencia se recalcula, la decisión se guarda—, la regla de que un total con una línea sin precio es `None` y no una suma parcial, y desde el 21 **las frases que dicen qué significa "enviar"** y cuándo no se puede (`frase_del_envio`, `motivo_para_no_enviar`) |
+| `src/continental/particion.py` | funciones puras: los renglones + sus comparaciones + el puente -> a quién se le pide cada uno, en cuántos pedidos se parte la lista y cuánto suma cada uno. Ahí vive la decisión del ticket 20 —la sugerencia se recalcula, la decisión se guarda—, la regla de que un total con una línea sin precio es `None` y no una suma parcial, desde el 21 **las frases que dicen qué significa "enviar"** y cuándo no se puede (`frase_del_envio`, `motivo_para_no_enviar`), y desde el 22 **la captura**: qué renglones se teclean en el portal de cada pedido —los del pedido guardado, no los de la vista previa—, cuántos faltan, y la frase que lleva a enviar sin obligar (`lo_que_hay_que_capturar`, `frase_del_avance`, `invitacion_a_enviar`) |
 | `src/continental/faltantes.py` | funciones puras: la corrida del lote + las comparaciones -> **por qué** le falta el precio a cada renglón, y **cuáles** va a consultar el botón de completar. Ahí vive la decisión cara del ticket 19: qué cuenta como "faltante", que son ~36 s de navegador por renglón de más si se estira |
 | `src/continental/latido.py` | el latido a Uptime Kuma, con monitor propio. `mandar_el_latido` **no levanta nunca** y el borde HTTP entra por argumento, así que ninguna prueba manda uno de verdad. El token vive en `KUMA_PUSH_URL_CONTINENTAL` del `.env`, jamás en el YAML |
 
@@ -415,15 +462,21 @@ más barato y se le pidió a otro.**
       -v ON_ERROR_STOP=1 < sql/verificar_rol.sql ; echo "salida: $?"
   ```
 
-  **Y desde el ticket 21 hay DOS migraciones que NO crean tabla** —la 0005 y la
-  0006, de los tickets 20 y 21— así que `crear_rol.sql` no hace falta volver a
-  correrlo por ellas: el `GRANT SELECT, INSERT, UPDATE` es sobre la tabla entera
-  y no se usan permisos por columna. Lo que sí conviene después de las dos es
-  `verificar_rol.sql`, porque sus comprobaciones **23 a 28** son suyas:
+  **Y desde el ticket 22 hay TRES migraciones que NO crean tabla** —la 0005, la
+  0006 y la 0007, de los tickets 20, 21 y 22— así que `crear_rol.sql` no hace
+  falta volver a correrlo por ellas: el `GRANT SELECT, INSERT, UPDATE` es sobre
+  la tabla entera y no se usan permisos por columna. Lo que sí conviene después
+  de las tres es `verificar_rol.sql`, porque sus comprobaciones **23 a 29** son
+  suyas. **Las tres van ANTES de desplegar el código de su ticket**:
+  `_LEER_RENGLONES` nombra las columnas nuevas, y con la base vieja la lista del
+  día no se puede leer — y `continental.verificar` no lo caza (ver el ticket 22,
+  "sin hacer"):
 
   ```bash
   docker exec -i farmacia_warehouse psql -U farmacia -d farmacia       -v ON_ERROR_STOP=1 < sql/migraciones/0005-elegir-proveedor-y-partir.sql
   docker exec -i farmacia_warehouse psql -U farmacia -d farmacia       -v ON_ERROR_STOP=1 < sql/migraciones/0006-enviar-el-pedido.sql
+  docker exec -i farmacia_warehouse psql -U farmacia -d farmacia \
+      -v ON_ERROR_STOP=1 < sql/migraciones/0007-el-avance-de-la-captura.sql
   ```
 
   **Y desde el ticket 19 hay una migración más**, que también crea una tabla y
@@ -435,7 +488,7 @@ más barato y se le pidió a otro.**
   # y otra vez crear_rol.sql y verificar_rol.sql, en ese orden
   ```
 
-  El tercero es el que **da el veredicto**: 28 comprobaciones con lo que se
+  El tercero es el que **da el veredicto**: 29 comprobaciones con lo que se
   esperaba y lo que se encontró, y salida distinta de cero si algo quedó mal.
   Es lo que cierra la última casilla del ticket 07, y solo lo puede correr una
   persona con credenciales de dueño en atlas. Las 18, 19 y 20 son del ticket 12
@@ -450,7 +503,9 @@ más barato y se le pidió a otro.**
   `proveedor_id` con nulos no impediría nada— y que `fk_renglon_pedido` lleve
   las tres columnas. Las **27 y 28** son del ticket 21: que `ck_pedido_estado`
   conozca los dos estados —con el CHECK viejo, el primer clic en "Enviar" rebota
-  en atlas— y que la firma del envío esté pareada en los dos sentidos.
+  en atlas— y que la firma del envío esté pareada en los dos sentidos. La **29**
+  es del ticket 22: que la marca de captura tenga sus dos columnas y
+  `ck_renglon_captura`.
 
   **Ojo con la comprobación 16: estaba mal y se arregló en el ticket 19.**
   Esperaba `3` llaves `GENERATED AS IDENTITY` cuando ya eran cuatro desde el
@@ -493,7 +548,7 @@ más barato y se le pidió a otro.**
       < sql/migraciones/0004-la-corrida-del-lote-en-una-fila.sql
   ```
 
-  Las seis son idempotentes: correrlas dos veces no rompe nada.
+  Las siete son idempotentes: correrlas dos veces no rompe nada.
 
   **OJO CON LA 0003 Y CON LA 0004: después de cada una HAY que volver a correr
   `sql/crear_rol.sql`**, y ahí se apartan de las dos primeras. Las 0001 y 0002

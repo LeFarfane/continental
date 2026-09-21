@@ -283,7 +283,12 @@ def test_la_pantalla_trae_el_interruptor_con_los_dos_nombres(cliente):
     # ninguna a Doyle** —el navegador no le habla a un módulo, regla 2 de
     # CLAUDE.md—: quien le pide a Doyle que abra el navegador es Continental
     # por HTTP, no esta pantalla.
-    assert portada.count("fetch('/api/") == 10
+    #
+    # La del ticket 22: tachar un renglón en la pantalla de captura. Es un POST
+    # que devuelve la lista entera, como partir y enviar —que no salen en esta
+    # cuenta porque su `fetch(` parte la línea antes de la ruta—, y **no vuelve
+    # a pedir la lista**: la de arriba sigue siendo una sola.
+    assert portada.count("fetch('/api/") == 11
     assert portada.count("fetch('/api/pedido-sugerido')") == 1
 
 

@@ -93,6 +93,18 @@ proveedor.
 > a `en tránsito`. `en tránsito` quiere decir "ya se le pidió a un proveedor", y
 > un borrador no se le ha pedido a nadie. Lo que lo mueve es **enviar**.
 
+**Capturado** (o **tachado**) — un renglón de un pedido en `borrador` que una
+persona ya tecleó en el portal de ese proveedor y marcó en la pantalla de
+captura. Lleva firma —quién y cuándo— y se puede destachar mientras el pedido
+siga en borrador.
+
+> **Capturado no es un estado del renglón.** El renglón sigue `abierto` hasta
+> que su pedido se envía: tachar lleva la cuenta de lo que se tecleó en otra
+> ventana, no cambia dónde está la mercancía. Y **tachar todo lleva a enviar
+> sin ser requisito**: quien capturó el pedido entero en el portal sin ir
+> tachando aquí lo envía igual. Si un renglón tachado se mueve a otro
+> proveedor, deja de estar capturado — en el portal nuevo nadie lo ha tecleado.
+
 **Probablemente recibido** — apareció una compra que encaja con un renglón en
 tránsito, pero los datos no alcanzan para afirmar que sea la misma mercancía.
 Es una sugerencia que espera confirmación de una persona, nunca un hecho.

@@ -266,6 +266,65 @@
   .particion .pedido .envio.hecho { color: var(--ok); }
   .particion .pedido .acciones { grid-column: 1 / -1; margin-top: .35rem; }
   .particion .fila { margin-top: .6rem; }
+  /* LA PANTALLA DE CAPTURA (ticket 22). El portal del proveedor en una ventana
+     y esto en otra: se recorre de arriba abajo tachando conforme se teclea
+     allá. Un bloque plegable por pedido, porque se captura UN portal a la vez;
+     ocupa la línea entera bajo su pedido y va ANTES del botón de enviar, que es
+     adonde lleva. */
+  .captura { grid-column: 1 / -1; margin-top: .45rem; border: 1px solid var(--linea); border-radius: 6px; }
+  .captura > summary { cursor: pointer; padding: .5rem .65rem; font-size: .85rem; min-height: 2.2rem; }
+  .captura > summary .avance { color: var(--tenue); }
+  /* Todo tachado: el resumen se pone en verde, como el envío ya hecho. Es un
+     hecho cerrado, no un aviso. */
+  .captura.completa > summary .avance { color: var(--ok); font-weight: 600; }
+  .captura ol { list-style: none; margin: 0; padding: 0; }
+  /* Un renglón por línea (casilla 1): la casilla, la clave, la descripción, las
+     piezas y el precio. En el teléfono la descripción se va a su propio
+     renglón, pero la casilla y la clave se quedan juntas al principio. */
+  .captura li {
+    display: grid; grid-template-columns: 2rem auto 1fr auto auto;
+    gap: .25rem .6rem; align-items: center;
+    padding: .35rem .65rem; border-top: 1px solid var(--linea);
+  }
+  .captura li input[type="checkbox"] { width: 1.35rem; height: 1.35rem; margin: 0; cursor: pointer; }
+  .captura li label { cursor: pointer; overflow-wrap: anywhere; }
+  .captura li .cuantas, .captura li .costo { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  .captura li .costo.nose { color: var(--tenue); font-style: italic; }
+  /* LA CLAVE SE COPIA DE UN CLIC (casilla 4). Es un botón de verdad y no texto
+     seleccionable, porque "de un clic" no es "doble clic, Ctrl+C". En
+     monoespaciada: trece dígitos se leen mejor alineados, y es lo que se
+     compara de reojo contra el buscador del portal. */
+  .captura .clave {
+    font: inherit; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-size: .8rem; min-height: 2rem; padding: .2rem .45rem; cursor: pointer;
+    color: var(--tinta); background: var(--fondo);
+    border: 1px solid var(--linea); border-radius: 4px; white-space: nowrap;
+  }
+  .captura .clave:hover { border-color: var(--tinta); }
+  .captura .clave.hecho { border-color: var(--ok); color: var(--ok); }
+  .captura .clave.fallo { border-color: var(--mal); color: var(--mal); white-space: normal; }
+  .captura .clave.sin { font-family: inherit; font-style: italic; color: var(--tenue); cursor: default; border-style: dashed; }
+  /* LO TACHADO SE DISTINGUE DE UN VISTAZO (casilla 2), y no solo por color:
+     tachado de verdad, atenuado y con fondo. Se ve igual sin distinguir el
+     verde, y a un metro de la pantalla. NO se mueve de sitio: una lista que se
+     reordena bajo el dedo pierde el renglón por el que uno iba. */
+  .captura li.hecho { background: var(--realce); }
+  .captura li.hecho label, .captura li.hecho .cuantas, .captura li.hecho .costo {
+    text-decoration: line-through; color: var(--tenue);
+  }
+  .captura .invitacion { margin: 0; padding: .5rem .65rem; border-top: 1px solid var(--linea); font-size: .8rem; color: var(--tenue); }
+  .captura .invitacion.lista { color: var(--ok); font-weight: 600; }
+  .captura .nota-captura { margin: 0; padding: 0 .65rem .45rem; font-size: .78rem; color: var(--mal); }
+  .captura .nota-captura:empty { display: none; }
+  /* El botón de enviar, cuando todo está tachado: es adonde lleva la captura
+     (casilla 5). Solo se resalta — nunca se apaga por la captura. */
+  .particion .pedido .accion.listo { border-color: var(--ok); color: var(--ok); font-weight: 600; }
+  @media (max-width: 34rem) {
+    .captura li { grid-template-columns: 2rem auto 1fr; }
+    .captura li label { grid-column: 1 / -1; order: 3; }
+    .captura li .cuantas { order: 4; text-align: left; grid-column: 1 / 3; }
+    .captura li .costo { order: 5; }
+  }
   /* Los cuatro proveedores, uno por renglón dentro de la celda. En columna y
      no en una línea: son cuatro cifras que se comparan entre sí, y comparar
      hacia abajo es lo que un ojo hace sin pensar. 13rem cabe
@@ -1647,7 +1706,7 @@ async function cargarPedido() {
     // ajustar también — uno saca un renglón de un pedido y el otro le cambia
     // el importe. Una vista previa vieja mandaría a apretar "Partir" sobre
     // números que ya no son.
-    pintarParticion(datos.particion, datos.pedidos, acciones.editable, partir, enviarPedido);
+    pintarParticion(datos.particion, datos.pedidos, acciones.editable, partir, enviarPedido, tacharRenglon);
     tabla.hidden = false;
   };
 
@@ -1833,6 +1892,66 @@ async function cargarPedido() {
       + '«en tránsito», así que la lista de mañana ya no los va a volver a '
       + 'proponer. Recuerda: esto no se lo mandó a ' + nombre + ' — lo capturas '
       + 'tú en su portal.', 'todo');
+  }
+
+  // TACHAR UN RENGLÓN EN LA PANTALLA DE CAPTURA (ticket 22).
+  //
+  // El avance se guarda EN EL SERVIDOR y no en el navegador (ADR 0010): con
+  // `localStorage` dos pestañas del mismo pedido divergirían en silencio, y el
+  // encargado que cambia de máquina a la mitad de 40 renglones empezaría de
+  // cero. Por eso aquí no se lleva ninguna cuenta: se manda "déjalo tachado" o
+  // "déjalo sin tachar" —explícito, nunca "alterna", para que la pestaña que
+  // iba atrasada no deshaga lo que hizo la otra— y se pinta lo que vuelve.
+  //
+  // La respuesta trae la lista ENTERA, como partir y enviar: tachar cambia
+  // cuántos faltan en su pedido y, con el último, la invitación a enviar.
+  //
+  // El foco vuelve a la misma casilla después de repintar, para que se pueda
+  // seguir con el teclado; y cuando el que se tachó fue el ÚLTIMO, va al botón
+  // de enviar. Eso es la quinta casilla: tachar todo LLEVA a enviar. El botón
+  // no se apaga ni se enciende por la captura — solo se le lleva el foco.
+  async function tacharRenglon(renglonId, pedidoId, capturado, casilla) {
+    casilla.disabled = true;
+    const aviso = casilla.closest('.captura')?.querySelector('.nota-captura');
+    if (aviso) aviso.textContent = '';
+
+    let respuesta;
+    try {
+      respuesta = await (await fetch('/api/renglon/' + renglonId + '/capturado', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ capturado: capturado }),
+      })).json();
+    } catch (e) {
+      respuesta = null;
+    }
+
+    if (!respuesta || !respuesta.ok) {
+      // Falla ruidoso (regla 4): la casilla vuelve a como estaba y se dice por
+      // qué, al lado de la lista y no arriba de la tabla, que queda lejos.
+      // Genérico a propósito (regla 5): el detalle vive en la bitácora.
+      casilla.checked = !capturado;
+      casilla.disabled = false;
+      if (aviso) {
+        aviso.textContent = respuesta
+          ? (respuesta.detalle || 'No se pudo guardar la marca.')
+          : 'Continental no contestó: la marca NO se guardó. Inténtalo otra vez.';
+      }
+      return;
+    }
+
+    datos = respuesta;
+    if (Array.isArray(datos.puente)) PROVEEDORES = datos.puente;
+    repintar();
+
+    const pedido = (datos.pedidos || []).find(p => p.pedido_id === pedidoId);
+    const destino = pedido && pedido.captura && pedido.captura.todo_capturado && capturado
+      ? document.querySelector('[data-enviar="' + pedidoId + '"]')
+      : document.querySelector('[data-captura-renglon="' + renglonId + '"]');
+    if (destino) {
+      destino.focus();
+      destino.scrollIntoView({ block: 'nearest' });
+    }
   }
 
   // Consultar el precio en los cuatro proveedores (ticket 12).
@@ -2385,7 +2504,167 @@ let PROVEEDORES = [];
 // Ningún número se calcula aquí. Los totales, el parcial, cuántas líneas van
 // sin precio y cuáles proveedores no tiene SICAR llegan de `particion.partir`,
 // que es puro y tiene su tabla de casos.
-const pintarParticion = (particion, pedidos, editable, alPartir, alEnviar) => {
+// COPIAR LA CLAVE DE UN CLIC (ticket 22, casilla 4). Es lo que se pega en el
+// buscador del portal del proveedor, y es un EAN de trece dígitos: teclearlo a
+// mano cuarenta veces es cuarenta oportunidades de pedir otra cosa.
+//
+// El portapapeles moderno solo existe en un contexto seguro —https o
+// 127.0.0.1—, y Continental llega por el túnel con https, así que es el camino
+// normal. Si no está, el camino viejo (`execCommand('copy')`, obsoleto pero
+// vivo en todos los navegadores). Y si NINGUNO sirve, se DICE en el botón
+// (regla 4): un clic que no copia y no avisa hace pegar en el portal lo que
+// había antes en el portapapeles — la clave del renglón anterior.
+const copiarClave = async (clave, boton) => {
+  let copiada = false;
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(clave);
+      copiada = true;
+    }
+  } catch (e) {
+    copiada = false;
+  }
+  if (!copiada) {
+    const area = document.createElement('textarea');
+    area.value = clave;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    document.body.append(area);
+    area.select();
+    try { copiada = document.execCommand('copy'); } catch (e) { copiada = false; }
+    area.remove();
+  }
+  boton.classList.remove('hecho', 'fallo');
+  boton.classList.add(copiada ? 'hecho' : 'fallo');
+  boton.textContent = copiada
+    ? 'copiada ✓'
+    : 'no se pudo copiar: ' + clave;
+  // Vuelve a enseñar la clave después de un momento. Si falló, se queda más:
+  // es lo que hay que copiar a mano.
+  setTimeout(() => {
+    boton.classList.remove('hecho', 'fallo');
+    boton.textContent = clave;
+  }, copiada ? 1200 : 6000);
+};
+
+// Qué bloque de captura está abierto, por pedido. Es ESTADO DE LA VISTA y vive
+// en memoria —ni en el servidor ni en `localStorage`—: repintar recrea el
+// `<details>`, y sin esto cada tachón cerraría la lista que uno está
+// recorriendo. Lo que se guarda en el servidor es el AVANCE, que es un dato del
+// pedido; si un bloque está abierto es de quien mira.
+//
+// Sin entrada, el bloque se abre solo si la captura va a medias: al recargar a
+// la mitad de 40 renglones, lo primero que se ve es por dónde se iba.
+const CAPTURAS_ABIERTAS = new Map();
+
+// LA PANTALLA DE CAPTURA DE UN PEDIDO (ticket 22). Todo lo que dice viene
+// HECHO del servidor: la frase del avance —con cuántos faltan—, la invitación a
+// enviar y cada conteo. Aquí no se filtra ni se suma nada, por lo mismo que el
+// conteo de descartados sale de Python desde el ticket 10: dos pestañas
+// bastan para que un número que el navegador va llevando se separe de la
+// verdad. Lo único que decide esta función es cómo se ve.
+const pintarCaptura = (pedido, alTachar, conBoton) => {
+  const captura = pedido.captura;
+  const caja = document.createElement('details');
+  caja.className = 'captura' + (captura.todo_capturado ? ' completa' : '');
+  const recordado = CAPTURAS_ABIERTAS.get(pedido.pedido_id);
+  caja.open = recordado === undefined
+    ? (captura.capturados > 0 && !captura.todo_capturado)
+    : recordado;
+  caja.addEventListener('toggle', () => CAPTURAS_ABIERTAS.set(pedido.pedido_id, caja.open));
+
+  const resumen = document.createElement('summary');
+  const titulo = document.createElement('b');
+  titulo.textContent = 'Capturar en el portal de ' + captura.nombre;
+  const avance = document.createElement('span');
+  avance.className = 'avance';
+  // La frase trae "faltan N" dentro (casilla 2), y va en el resumen para que
+  // se vea con el bloque cerrado.
+  avance.textContent = captura.frase;
+  resumen.append(titulo, ' · ', avance);
+  caja.append(resumen);
+
+  const lista = document.createElement('ol');
+  captura.lineas.forEach(linea => {
+    const li = document.createElement('li');
+    li.className = linea.esta_capturado ? 'hecho' : '';
+
+    // LA CASILLA (casilla 1). Se manda lo que quedó marcado y no un "alterna".
+    const casilla = document.createElement('input');
+    casilla.type = 'checkbox';
+    casilla.id = 'captura-' + linea.renglon_id;
+    casilla.checked = linea.esta_capturado;
+    casilla.dataset.capturaRenglon = linea.renglon_id;
+    // Quién la tachó y cuándo, a la vista con el puntero encima. Es una firma
+    // y nunca un permiso (regla 3).
+    casilla.title = linea.esta_capturado && linea.capturado_por
+      ? 'Tachado por ' + linea.capturado_por
+        + (linea.capturado_en ? ', ' + instanteEnPalabras(linea.capturado_en) : '')
+      : 'Tacha el renglón en cuanto lo captures en el portal';
+    casilla.onchange = () => alTachar(linea.renglon_id, pedido.pedido_id, casilla.checked, casilla);
+
+    // LA CLAVE, UN CLIC Y COPIADA (casilla 4). Sin EAN no hay qué copiar: se
+    // dice con palabras, y la frase del avance lo cuenta.
+    let clave;
+    if (linea.tiene_clave) {
+      clave = document.createElement('button');
+      clave.type = 'button';
+      clave.className = 'clave';
+      clave.textContent = linea.clave;
+      clave.title = 'Copiar la clave para pegarla en el buscador de ' + captura.nombre;
+      clave.onclick = () => copiarClave(linea.clave, clave);
+    } else {
+      clave = document.createElement('span');
+      clave.className = 'clave sin';
+      clave.textContent = 'sin código';
+      clave.title = 'Este producto no tiene código de barras en el catálogo: búscalo por nombre.';
+    }
+
+    // La descripción es la etiqueta de la casilla: tocar el nombre también
+    // tacha, que es un blanco mucho más grande que el cuadrito.
+    const que = document.createElement('label');
+    que.htmlFor = casilla.id;
+    que.textContent = linea.descripcion;
+
+    const cuantas = document.createElement('span');
+    cuantas.className = 'cuantas';
+    cuantas.textContent = plural(linea.cantidad, 'pieza', 'piezas');
+
+    // EL PRECIO DE ESTE PROVEEDOR, o por qué no lo hay. Nunca "$0.00".
+    const costo = document.createElement('span');
+    costo.className = 'costo' + (linea.tiene_precio ? '' : ' nose');
+    costo.textContent = linea.tiene_precio ? '$' + linea.precio : (linea.motivo || 'sin dato');
+    costo.title = linea.tiene_precio
+      ? 'Por pieza, sin IVA, como lo dio ' + captura.nombre + '. El que manda es el del portal.'
+      : 'El precio lo vas a ver en el portal mientras lo capturas.';
+
+    li.append(casilla, clave, que, cuantas, costo);
+    lista.append(li);
+  });
+  caja.append(lista);
+
+  const aviso = document.createElement('p');
+  aviso.className = 'nota-captura';
+  aviso.setAttribute('role', 'status');
+  caja.append(aviso);
+
+  // LLEVA A ENVIAR, SIN OBLIGAR (casilla 5). La frase viene hecha: con todo
+  // tachado dice que el siguiente paso es enviar; a medias, que tachar no es
+  // requisito. `null` cuando el botón está apagado por otra razón —el motivo
+  // del ticket 21 ya lo dice— y entonces no se escribe nada. Y tampoco cuando
+  // este pedido no tiene su botón al lado (`conBoton`): la frase la decide
+  // Python, pero si hay adónde llevar lo sabe la pantalla.
+  if (captura.invitacion && conBoton) {
+    const invitacion = document.createElement('p');
+    invitacion.className = 'invitacion' + (captura.todo_capturado ? ' lista' : '');
+    invitacion.textContent = captura.invitacion + '.';
+    caja.append(invitacion);
+  }
+  return caja;
+};
+
+const pintarParticion = (particion, pedidos, editable, alPartir, alEnviar, alTachar) => {
   const caja = document.getElementById('particion');
   if (!particion) { caja.hidden = true; caja.replaceChildren(); return; }
 
@@ -2502,6 +2781,12 @@ const pintarParticion = (particion, pedidos, editable, alPartir, alEnviar) => {
            : '');
       fila.append(envio);
 
+      // LA PANTALLA DE CAPTURA (ticket 22), entre la frase del envío y el
+      // botón: se captura, y lo que sigue es enviar.
+      if (!guardado.fue_enviado && guardado.captura && guardado.captura.cuantos) {
+        fila.append(pintarCaptura(guardado, alTachar, true));
+      }
+
       // EL BOTÓN, CON EL TOTAL DENTRO. La primera casilla del ticket pide que
       // el total en pesos se vea ANTES de enviar, y el sitio donde de verdad
       // se ve es la etiqueta del botón que se va a apretar. Cuando no se puede
@@ -2519,6 +2804,11 @@ const pintarParticion = (particion, pedidos, editable, alPartir, alEnviar) => {
         // reciba un 409.
         boton.disabled = !guardado.se_puede_enviar;
         boton.title = guardado.motivo_para_no_enviar || guardado.frase_del_envio;
+        // Adonde lleva tachar el último (ticket 22): el foco viene aquí, y con
+        // todo tachado se resalta. NUNCA se apaga por la captura — la línea de
+        // arriba es la única que decide eso.
+        boton.dataset.enviar = guardado.pedido_id;
+        if (guardado.captura && guardado.captura.todo_capturado) boton.classList.add('listo');
         acciones.append(boton);
         if (guardado.motivo_para_no_enviar) {
           const porque = document.createElement('span');
@@ -2568,6 +2858,19 @@ const pintarParticion = (particion, pedidos, editable, alPartir, alEnviar) => {
          ? ' Fue ' + instanteEnPalabras(g.enviado_en)
          : '');
     fila.append(envio);
+
+    // UN BORRADOR TAMBIÉN PUEDE CAER AQUÍ CON RENGLONES DENTRO, y ésa es la
+    // trampa del ticket 22: la vista previa se recalcula con los precios de
+    // este instante, y si llegó un LEVIC más barato ya no pone a NADRO... pero
+    // el pedido GUARDADO de NADRO todavía los tiene. Se capturan igual: lo que
+    // se captura es lo que al enviar pasa a `en tránsito`, y eso es
+    // `pedido_id`. Su botón de enviar NO se pinta aquí —así quedó desde el
+    // ticket 21—, y por eso la invitación a enviar tampoco: una frase que dice
+    // "el siguiente paso es enviar" sin botón al lado manda a buscar uno que no
+    // está.
+    if (!g.fue_enviado && g.captura && g.captura.cuantos) {
+      fila.append(pintarCaptura(g, alTachar, false));
+    }
 
     // Un pedido que se quedó SIN renglones también cae aquí, y sigue sin
     // poderse enviar: el motivo viene hecho de `particion.motivo_para_no_enviar`

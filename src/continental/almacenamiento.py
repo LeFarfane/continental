@@ -500,6 +500,19 @@ class RenglonGuardado:
     "un renglón pertenece a un solo pedido" se defiende en la tabla y no en un
     `if` — ver `sql/crear_tablas.sql`, donde `fk_renglon_pedido` además lleva
     `pedido_sugerido_id` para que el pedido sea de **esta** lista.
+
+    `capturado_por` y `capturado_en` son **la marca de captura** (ticket 22): una
+    persona dice que ya tecleó este renglón en el portal del proveedor de su
+    pedido. Es el avance de la pantalla de captura, y vive aquí —en la tabla, y
+    no en el navegador— por lo que razona el ADR 0010: dos pestañas no
+    divergen, cambiar de máquina no lo pierde, y cada marca dice quién la puso.
+
+    **No es un estado**, y es a propósito: un renglón dentro de un borrador sigue
+    `abierto` (ticket 20) y tachar no lo mueve, porque `_ASIGNAR_RENGLONES`,
+    `_SOLTAR_RENGLONES`, `_DESCARTAR` y `_AJUSTAR_LA_CANTIDAD` llevan `estado =
+    'abierto'` en su `WHERE` y un estado nuevo los dejaría saltárselo en
+    silencio. La firma va pareada por `ck_renglon_captura`, igual que las otras
+    cuatro del esquema.
     """
 
     renglon_id: int
@@ -514,6 +527,17 @@ class RenglonGuardado:
     proveedor_elegido: str | None = None
     elegido_por: str | None = None
     elegido_en: dt.datetime | None = None
+    capturado_por: str | None = None
+    capturado_en: dt.datetime | None = None
+
+    @property
+    def esta_capturado(self) -> bool:
+        """Si alguien dijo ya haberlo tecleado en el portal (ticket 22).
+
+        Es una firma y nunca un permiso (regla 3 de `CLAUDE.md`), y **no es un
+        estado del renglón**: ver el docstring de la clase y el ADR 0010.
+        """
+        return self.capturado_por is not None
 
     @property
     def cantidad_a_pedir(self) -> int:
@@ -912,6 +936,11 @@ def columnas_del_renglon(
         "proveedor_elegido": None,
         "elegido_por": None,
         "elegido_en": None,
+        # Y SIN TACHAR (ticket 22): nadie lo ha capturado en ningún portal. Las
+        # dos explícitas por lo mismo que las de arriba: `ck_renglon_captura`
+        # las relaciona.
+        "capturado_por": None,
+        "capturado_en": None,
     }
 
 
@@ -1070,6 +1099,22 @@ def revisar_el_renglon(columnas: dict) -> None:
             "a quién preguntarle por qué se le compró a LEVIC habiendo NADRO "
             "más barato, que es la pregunta entera del ticket 20; con la firma "
             "suelta, diría que alguien eligió lo que nadie eligió."
+        )
+    # Las dos del ticket 22, con `.get` por lo mismo que las del 20: una fila
+    # de una base sin la migración 0007 no las trae, y eso es "nadie tachó".
+    if columnas.get("capturado_por") == "":
+        raise ValueError(
+            "Firma vacía. La columna tiene CHECK (capturado_por <> ''): o hay "
+            "correo o es NULL, igual que las otras cuatro firmas del esquema."
+        )
+    if (columnas.get("capturado_por") is None) != (
+        columnas.get("capturado_en") is None
+    ):
+        raise ValueError(
+            "Captura sin decir quién o sin decir cuándo. Lo rechaza "
+            "ck_renglon_captura. Una marca sin firma es un 'ya se capturó' en "
+            "voz pasiva, y cuando la factura no cuadre no habría a quién "
+            "preguntarle qué se tecleó en el portal (ADR 0010)."
         )
 
 
@@ -2092,6 +2137,51 @@ class AlmacenamientoDelPedido(Protocol):
         """
         ...
 
+    def marcar_capturado(
+        self, negocio: str, renglon_id: int, capturado: bool, quien: str
+    ) -> PedidoSugeridoGuardado | None:
+        """Tachar —o destachar— un renglón en la pantalla de captura (ticket 22).
+
+        **Lo que se guarda es lo que una persona dice**: *ya tecleé este
+        renglón en el portal del proveedor*. Por eso va firmado con `quien`, el
+        correo que verificó Access, y es una firma y nunca un permiso (regla 3).
+
+        **Vive en la tabla y no en el navegador**, y es la decisión del ticket
+        (ADR 0010): con el avance en `localStorage`, dos pestañas del mismo
+        pedido divergen en silencio, cambiar de máquina a la mitad lo pierde
+        entero, y la marca que lleva a enviar —la quinta casilla— no diría
+        quién la puso.
+
+        `capturado=False` **destacha**: borra las dos columnas. Un clic de más
+        en una lista de 40 es ordinario, y mientras el pedido siga en borrador
+        nada depende todavía de la marca. No se guarda quién destachó: la
+        columna afirma "está capturado" y lo contrario es su ausencia, no otra
+        afirmación (ADR 0010).
+
+        `None` es "no había nada que tachar", y son **cuatro** condiciones en el
+        `WHERE`, las cuatro en las dos direcciones:
+
+        - el renglón es de este negocio (regla 7);
+        - **sigue `abierto`** — uno descartado no se va a pedir, y teclearlo en
+          el portal sería comprar lo que alguien decidió no comprar;
+        - **cuelga de un pedido** — sin pedido no hay proveedor de cuyo portal
+          hablar;
+        - **y ese pedido sigue en `borrador`** — uno `enviado` ya no se edita
+          (ADR 0009), y sus marcas se quedan como quedaron: son la historia de
+          cómo se capturó.
+
+        **Lo que NO se exige es que la lista siga `abierta`**, igual que enviar
+        y por la misma razón: tachar es decir "esto ya lo tecleé en el portal",
+        que es lo contrario de modificar lo que se va a pedir. Si lo exigiera,
+        quien cierra la lista antes de terminar de capturar se quedaría sin la
+        cuenta —y sin el camino de la quinta casilla— a la mitad de 40
+        renglones.
+
+        **Tachar no cambia el estado del renglón**: sigue `abierto` hasta que se
+        envíe su pedido. Ver `RenglonGuardado` y el ADR 0010, opción 4.
+        """
+        ...
+
     def guardar_la_corrida(self, negocio: str, corrida: CorridaDelLote) -> int:
         """Deja escrito cómo le fue al lote esta noche. Devuelve el id.
 
@@ -2156,7 +2246,8 @@ _LEER_RENGLONES = text(
            dias_de_cobertura, clasificacion, estado,
            descartado_por, descartado_en,
            cantidad_final, ajustada_por, ajustada_en,
-           pedido_id, proveedor_elegido, elegido_por, elegido_en
+           pedido_id, proveedor_elegido, elegido_por, elegido_en,
+           capturado_por, capturado_en
     from pedidos.renglon
     where negocio = :negocio and pedido_sugerido_id = :pedido_sugerido_id
     order by renglon_id
@@ -2174,7 +2265,8 @@ _LEER_RENGLON_POR_ID = text(
            dias_de_cobertura, clasificacion, estado,
            descartado_por, descartado_en,
            cantidad_final, ajustada_por, ajustada_en,
-           pedido_id, proveedor_elegido, elegido_por, elegido_en
+           pedido_id, proveedor_elegido, elegido_por, elegido_en,
+           capturado_por, capturado_en
     from pedidos.renglon
     where negocio = :negocio and renglon_id = :renglon_id
     """
@@ -2699,10 +2791,27 @@ _RENGLONES_A_TRANSITO = text(
 #     depende de que otra parte del sistema haga la suya no es una restricción,
 #     y el día que la recepción (ticket 26) devuelva un renglón a `abierto` esta
 #     sería la única que lo sostendría.
+#
+# **Y desde el ticket 22 le borra la marca de captura al que CAMBIA de
+# pedido.** Tachado en el portal de NADRO y movido a LEVIC: en el portal de
+# LEVIC nadie lo ha tecleado, y una marca que viajara con él le diría al
+# encargado que se lo salte. El que se queda en el mismo pedido la CONSERVA —
+# volver a partir a mitad de la captura no puede costar el avance entero—, y
+# por eso es un `case` sobre el valor viejo y no un `null` a secas. En el `SET`
+# de un `UPDATE`, `r.pedido_id` es el valor de ANTES del cambio.
+#
+# `is distinct from` y no `<>`: con `pedido_id` nulo, `<>` da nulo y el `case`
+# se iría por el `else`, conservando una marca de un renglón que no estaba en
+# ningún pedido. No puede pasar hoy —sin pedido no se tacha— y aun así se
+# escribe bien: la sentencia no depende de que otra parte haga la suya.
 _ASIGNAR_RENGLONES = text(
     """
     update pedidos.renglon as r
-       set pedido_id = :pedido_id
+       set pedido_id = :pedido_id,
+           capturado_por = case when r.pedido_id is distinct from :pedido_id
+                                then null else r.capturado_por end,
+           capturado_en = case when r.pedido_id is distinct from :pedido_id
+                               then null else r.capturado_en end
       from pedidos.pedido_sugerido as s
      where r.negocio = :negocio
        and r.pedido_sugerido_id = :pedido_sugerido_id
@@ -2734,10 +2843,17 @@ _ASIGNAR_RENGLONES = text(
 # renglón que cuelgue de un pedido enviado (ticket 21) no se suelta por volver a
 # partir. Sin esa condición, repartir de nuevo vaciaría un pedido que ya está en
 # el portal del proveedor.
+#
+# Y desde el ticket 22 le borra también la marca de captura: un renglón que ya
+# no se reparte a nadie no está capturado en ningún portal que este sistema vaya
+# a mirar, y una marca colgada lo haría aparecer tachado el día que vuelva a
+# entrar en un pedido.
 _SOLTAR_RENGLONES = text(
     """
     update pedidos.renglon as r
-       set pedido_id = null
+       set pedido_id = null,
+           capturado_por = null,
+           capturado_en = null
       from pedidos.pedido_sugerido as s
      where r.negocio = :negocio
        and r.pedido_sugerido_id = :pedido_sugerido_id
@@ -2790,6 +2906,62 @@ _VACIAR_LOS_PEDIDOS_SIN_RENGLONES = text(
                         where r.pedido_id = p.pedido_id
                           and r.negocio = p.negocio)
     returning p.pedido_id
+    """
+)
+
+# Tachar un renglón en la pantalla de captura (ticket 22, ADR 0010).
+#
+# Las cuatro condiciones del `WHERE`, y cada una defiende algo distinto:
+#
+#   - `r.negocio` — regla 7.
+#   - `r.estado = 'abierto'` — uno descartado no se va a pedir, y uno `en
+#     tránsito` ya se envió.
+#   - `p.pedido_id = r.pedido_id` — el renglón cuelga de un pedido. Sin pedido
+#     no hay proveedor de cuyo portal hablar. El `join` por `pedido_id` deja
+#     fuera, solo, a un renglón con `pedido_id` nulo.
+#   - `p.estado = 'borrador'` — uno `enviado` ya no se edita (ADR 0009), ni
+#     para tachar ni para destachar.
+#
+# **Y lo que NO lleva, a propósito: `pedido_sugerido` en el `FROM`.** Tachar no
+# exige que la lista siga abierta, igual que enviar: es decir "ya lo tecleé en
+# el portal", lo contrario de modificar lo que se va a pedir.
+#
+# **No toca `estado`.** Tachar no es un estado del renglón: sigue `abierto`
+# hasta que se envíe su pedido (ADR 0010, opción 4).
+#
+# `now()` y no una hora de Python, por lo mismo que en el descarte. Devuelve
+# `pedido_sugerido_id` porque `_mover_el_renglon` relee la lista por él.
+_MARCAR_CAPTURADO = text(
+    """
+    update pedidos.renglon as r
+       set capturado_por = :quien,
+           capturado_en = now()
+      from pedidos.pedido as p
+     where r.negocio = :negocio
+       and r.renglon_id = :renglon_id
+       and r.estado = 'abierto'
+       and p.pedido_id = r.pedido_id
+       and p.negocio = r.negocio
+       and p.estado = 'borrador'
+    returning r.renglon_id, r.pedido_sugerido_id
+    """
+)
+
+# Destachar: las dos columnas a NULL, con las MISMAS condiciones. Un pedido
+# enviado no se destacha: sus marcas son la historia de cómo se capturó.
+_DESMARCAR_CAPTURADO = text(
+    """
+    update pedidos.renglon as r
+       set capturado_por = null,
+           capturado_en = null
+      from pedidos.pedido as p
+     where r.negocio = :negocio
+       and r.renglon_id = :renglon_id
+       and r.estado = 'abierto'
+       and p.pedido_id = r.pedido_id
+       and p.negocio = r.negocio
+       and p.estado = 'borrador'
+    returning r.renglon_id, r.pedido_sugerido_id
     """
 )
 
@@ -3326,6 +3498,21 @@ class AlmacenamientoPostgres:
             renglones=tuple(int(f[0]) for f in movidos),
         )
 
+    def marcar_capturado(
+        self, negocio: str, renglon_id: int, capturado: bool, quien: str
+    ) -> PedidoSugeridoGuardado | None:
+        # Por `_mover_el_renglon`, como descartar y ajustar: el `UPDATE` y la
+        # relectura de la lista en una sola transacción, y cero filas es
+        # `None`. `quien` solo viaja al tachar: destachar no firma nada.
+        if capturado:
+            return self._mover_el_renglon(
+                _MARCAR_CAPTURADO,
+                {"negocio": negocio, "renglon_id": renglon_id, "quien": quien},
+            )
+        return self._mover_el_renglon(
+            _DESMARCAR_CAPTURADO, {"negocio": negocio, "renglon_id": renglon_id}
+        )
+
     def guardar_la_corrida(self, negocio: str, corrida: CorridaDelLote) -> int:
         columnas = columnas_de_la_corrida(corrida, negocio)
         # Se revisa antes de escribir, igual que el precio: el `final` decide
@@ -3452,4 +3639,8 @@ def renglon_guardado_desde_columnas(fila) -> RenglonGuardado:
         proveedor_elegido=fila.get("proveedor_elegido"),
         elegido_por=fila.get("elegido_por"),
         elegido_en=fila.get("elegido_en"),
+        # Las dos del ticket 22, con `.get` por la misma razón: sin la
+        # migración 0007 es "nadie tachó", no un KeyError.
+        capturado_por=fila.get("capturado_por"),
+        capturado_en=fila.get("capturado_en"),
     )

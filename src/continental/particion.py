@@ -83,6 +83,7 @@ multiplica y se suma en `Decimal`, y al navegador sale como **cadena**.
 
 from __future__ import annotations
 
+import datetime as dt
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -189,6 +190,36 @@ TOTAL_ENVEJECIDO = (
 )
 
 
+# --------------------------------------------- capturar en el portal (22)
+#
+# El modo real de trabajo: el portal del proveedor en una ventana, esta pantalla
+# en otra, y el encargado tachando renglones conforme los teclea allá. Dónde
+# vive ese avance —en `pedidos.renglon` y no en el navegador— es el ADR 0010.
+#
+# Las dos frases de abajo son la quinta casilla del ticket entera, y viven aquí
+# por la lección del ticket 15: la frase que dice si tachar **condiciona** o
+# **lleva** a enviar es justo la que se escribiría mal en el JavaScript.
+
+#: Todo tachado: el siguiente paso es enviar. Es el empujón que la quinta
+#: casilla pide —*marcar todo es lo que habilita enviar*— dicho con palabras
+#: junto al botón, que la pantalla además resalta.
+CAPTURA_COMPLETA = (
+    "Ya está todo tachado. Si el carrito del portal quedó igual, el siguiente "
+    "paso es enviar el pedido: es lo que evita que mañana se vuelva a proponer"
+)
+
+#: Y la otra mitad de la misma casilla —*sin obligar a ello*—, que es la que se
+#: hace mal sola: un botón al lado de una lista a medio tachar se lee como
+#: condicionado aunque no lo esté. Enviar sin haber tachado es legítimo (ADR
+#: 0009 y 0010): quien capturó todo en el portal sin ir tachando aquí, o tachó
+#: en una pestaña que ya cerró, no tiene por qué tachar cuarenta renglones para
+#: poder decir que ya lo hizo.
+CAPTURA_NO_OBLIGA = (
+    "Tachar sirve para no perder la cuenta, no es requisito: si ya capturaste "
+    "todo en el portal, puedes enviar el pedido aunque aquí falten marcas"
+)
+
+
 # ------------------------------------------------------------------- los datos
 
 
@@ -272,10 +303,25 @@ class Linea:
     precio: Decimal | None = None
     motivo: str | None = None
     detalle: str | None = None
+    #: El EAN, que es lo que se pega en el buscador del portal (ticket 22).
+    #: `""` cuando el producto no está en el catálogo: se busca por nombre.
+    clave: str = ""
+    #: La firma de la captura (ticket 22, ADR 0010). `None` = nadie la tachó.
+    capturado_por: str | None = None
+    capturado_en: dt.datetime | None = None
 
     @property
     def tiene_precio(self) -> bool:
         return self.precio is not None
+
+    @property
+    def tiene_clave(self) -> bool:
+        return bool(self.clave)
+
+    @property
+    def esta_capturado(self) -> bool:
+        """Si alguien dijo ya haberla tecleado en el portal. Es una firma."""
+        return self.capturado_por is not None
 
     @property
     def importe(self) -> Decimal | None:
@@ -489,29 +535,30 @@ def _linea(
     # busca a la referencia.
     lectura = next((l for l in lecturas if l.proveedor == proveedor), None)
 
+    # Lo que la línea es sin importar el precio. Desde el ticket 22 son también
+    # la clave —lo que se pega en el buscador del portal— y la firma de la
+    # captura; escritas una vez aquí y no tres veces abajo, que es como se
+    # olvida una en el camino que menos se prueba.
+    comunes = {
+        "renglon_id": renglon.renglon_id,
+        "descripcion": renglon.propuesto.descripcion,
+        "cantidad": renglon.cantidad_a_pedir,
+        "clave": renglon.propuesto.clave,
+        "capturado_por": renglon.capturado_por,
+        "capturado_en": renglon.capturado_en,
+    }
+
     if lectura is None:
-        return Linea(
-            renglon_id=renglon.renglon_id,
-            descripcion=renglon.propuesto.descripcion,
-            cantidad=renglon.cantidad_a_pedir,
-            motivo=SIN_CONSULTARLE,
-        )
+        return Linea(**comunes, motivo=SIN_CONSULTARLE)
 
     if lectura.precio is None:
         return Linea(
-            renglon_id=renglon.renglon_id,
-            descripcion=renglon.propuesto.descripcion,
-            cantidad=renglon.cantidad_a_pedir,
+            **comunes,
             motivo=SIN_PRECIO_DE_ESE_PROVEEDOR,
             detalle=explicacion_del_motivo(lectura.motivo),
         )
 
-    return Linea(
-        renglon_id=renglon.renglon_id,
-        descripcion=renglon.propuesto.descripcion,
-        cantidad=renglon.cantidad_a_pedir,
-        precio=lectura.precio,
-    )
+    return Linea(**comunes, precio=lectura.precio)
 
 
 def partir(
@@ -664,6 +711,184 @@ def motivo_para_no_enviar(
     return None
 
 
+# ------------------------------------------------ capturar en el portal (22)
+
+
+@dataclass(frozen=True, slots=True)
+class Captura:
+    """Lo que hay que teclear en el portal de **un** proveedor, y cuánto va.
+
+    `lineas` son `Linea` —las mismas de la partición— y no un tipo aparte: la
+    regla de qué precio le toca a cada una vive en `_linea` y se escribe una
+    sola vez. Lo que agrega la captura es **cuáles** entran y **cuántas faltan**.
+
+    `descartados_dentro` son los renglones que cuelgan de este pedido y que
+    alguien descartó después de partir. `_DESCARTAR` no toca `pedido_id`, así
+    que siguen "dentro" hasta que se vuelva a partir; **no se listan para
+    capturar** —teclearlos sería comprar lo que alguien decidió no comprar— y se
+    cuentan para que la cuenta del pedido y la de la captura no difieran sin
+    explicación.
+    """
+
+    proveedor: str
+    lineas: tuple[Linea, ...] = ()
+    descartados_dentro: int = 0
+
+    @property
+    def nombre(self) -> str:
+        return nombre_del_proveedor(self.proveedor)
+
+    @property
+    def hay(self) -> bool:
+        return bool(self.lineas)
+
+    @property
+    def cuantos(self) -> int:
+        return len(self.lineas)
+
+    @property
+    def capturados(self) -> int:
+        return sum(1 for linea in self.lineas if linea.esta_capturado)
+
+    @property
+    def faltan(self) -> int:
+        """**La segunda casilla.** Contado aquí, donde hay pruebas."""
+        return self.cuantos - self.capturados
+
+    @property
+    def todo_capturado(self) -> bool:
+        """**Nada que capturar NO es todo capturado.**
+
+        Si lo fuera, el pedido que se quedó vacío al volver a partir invitaría a
+        enviar, y `motivo_para_no_enviar` lo niega con razón (ticket 21).
+        """
+        return self.hay and self.faltan == 0
+
+    @property
+    def sin_clave(self) -> int:
+        """Cuántas no tienen EAN que copiar: esas se buscan por nombre."""
+        return sum(1 for linea in self.lineas if not linea.tiene_clave)
+
+    @property
+    def sin_clave_por_tachar(self) -> int:
+        """Las de arriba que **todavía** faltan.
+
+        Es lo que la frase dice, y no el total: con todo tachado, "búscalo por
+        nombre" manda a buscar algo que ya se capturó. Lo cazó el recorrido del
+        navegador del 2026-09-21, no el suite.
+        """
+        return sum(
+            1
+            for linea in self.lineas
+            if not linea.tiene_clave and not linea.esta_capturado
+        )
+
+
+def lo_que_hay_que_capturar(
+    pedido: PedidoGuardado,
+    renglones: Sequence[RenglonGuardado],
+    precios: Mapping[int, Sequence[PrecioDeProveedor]],
+) -> Captura:
+    """Los renglones de **este** pedido, como se teclean en su portal.
+
+    **Entran los que el pedido GUARDADO tiene dentro** —`renglon.pedido_id`—, y
+    no los de la vista previa de la partición, y ésa es la trampa del ticket.
+    La vista previa se recalcula con los precios de este instante: si a media
+    mañana llega un LEVIC más barato, la vista previa ya pone el renglón en
+    LEVIC mientras el pedido de NADRO todavía lo tiene dentro. Lo que se captura
+    tiene que ser exactamente lo que al enviar pasa a `en tránsito`, y eso lo
+    decide `pedido_id`, que es lo mismo que mira `_RENGLONES_A_TRANSITO`.
+
+    **El orden es el de la lista, y tachar no lo cambia.** Mandar lo tachado al
+    final movería bajo el dedo la lista que alguien va recorriendo con el
+    portal abierto al lado, y el renglón por el que iba se iría de su sitio.
+
+    El precio es el de **ese** proveedor y no el más barato: es el que el
+    encargado va a ver en el carrito de ese portal, y enseñar otro haría que los
+    dos números no cuadraran justo mientras captura. Sin precio de ese
+    proveedor, la línea lo dice con su motivo —regla 4—, igual que en la
+    partición.
+    """
+    dentro = [r for r in renglones if r.pedido_id == pedido.pedido_id]
+    return Captura(
+        proveedor=pedido.proveedor,
+        lineas=tuple(
+            _linea(r, pedido.proveedor, precios.get(r.renglon_id, ()))
+            for r in dentro
+            if not r.esta_descartado
+        ),
+        descartados_dentro=sum(1 for r in dentro if r.esta_descartado),
+    )
+
+
+def frase_del_avance(captura: Captura) -> str:
+    """Cuánto va y **cuántos faltan**, dicho como lo diría una persona.
+
+    Tres formas y no una plantilla con números, porque "0 de 18 tachados" se lee
+    como un marcador que va perdiendo y "18 de 18" como un trámite: lo que se
+    dice al empezar, a la mitad y al final no es lo mismo.
+    """
+    if not captura.hay:
+        frase = "Este pedido no tiene renglones que capturar"
+    elif captura.capturados == 0:
+        frase = (
+            "El único renglón de este pedido está sin tachar todavía"
+            if captura.cuantos == 1
+            else f"Ninguno de los {captura.cuantos} renglones está tachado todavía"
+        )
+    elif captura.todo_capturado:
+        frase = (
+            "El único renglón de este pedido está tachado"
+            if captura.cuantos == 1
+            else f"Los {captura.cuantos} renglones están tachados"
+        )
+    else:
+        falta = "falta 1" if captura.faltan == 1 else f"faltan {captura.faltan}"
+        frase = f"{captura.capturados} de {captura.cuantos} tachados · {falta}"
+
+    if captura.sin_clave_por_tachar:
+        frase += (
+            " · 1 sin código de barras: búscalo por nombre"
+            if captura.sin_clave_por_tachar == 1
+            else f" · {captura.sin_clave_por_tachar} sin código de barras: "
+            "búscalos por nombre"
+        )
+    if captura.descartados_dentro:
+        frase += (
+            " · 1 renglón de este pedido está descartado: no lo captures, y "
+            "vuelve a partir para sacarlo"
+            if captura.descartados_dentro == 1
+            else f" · {captura.descartados_dentro} renglones de este pedido están "
+            "descartados: no los captures, y vuelve a partir para sacarlos"
+        )
+    return frase
+
+
+def invitacion_a_enviar(captura: Captura, se_puede_enviar: bool) -> str | None:
+    """**La quinta casilla**: tachar todo LLEVA a enviar, sin obligar a ello.
+
+    | La captura | Se puede enviar | Qué se dice |
+    |---|---|---|
+    | todo tachado | sí | `CAPTURA_COMPLETA` — el siguiente paso es enviar |
+    | a medias o sin empezar | sí | `CAPTURA_NO_OBLIGA` — no es requisito |
+    | cualquiera | no | nada: el motivo del ticket 21 ya lo dice |
+    | sin renglones | — | nada |
+
+    **Lo que esta función NO hace es decidir si el botón se apaga**, y es a
+    propósito: eso es `motivo_para_no_enviar` y no recibe la captura. Si
+    tacharlo todo fuera condición, un encargado que capturó todo en el portal
+    sin ir tachando aquí tendría que tachar cuarenta renglones para poder decir
+    que ya lo hizo — y el que no lo hiciera dejaría la mercancía pedida sin
+    pasar a `en tránsito`, que es la falla que el ticket 21 vino a evitar.
+
+    Con el botón apagado no se invita a nada: dos frases al lado, una que dice
+    "envía" y otra que dice por qué no se puede, se contradicen.
+    """
+    if not captura.hay or not se_puede_enviar:
+        return None
+    return CAPTURA_COMPLETA if captura.todo_capturado else CAPTURA_NO_OBLIGA
+
+
 # ---------------------------------------------------------------- al navegador
 
 
@@ -738,6 +963,50 @@ def pedido_por_armar_como_json(pedido: PedidoPorArmar) -> dict:
                 "detalle": linea.detalle,
             }
             for linea in pedido.lineas
+        ],
+    }
+
+
+def captura_como_json(captura: Captura, se_puede_enviar: bool) -> dict:
+    """La captura de un pedido como la pantalla la lee (ticket 22).
+
+    Los conteos y las dos frases viajan **hechos**: el JavaScript ni filtra ni
+    suma. Es la misma razón por la que los conteos de descartados salen del
+    servidor desde el ticket 10 —dos pestañas abiertas bastan para que un número
+    que el navegador va sumando se separe de la verdad—, y aquí además es el
+    número que decide si la pantalla invita a enviar.
+    """
+    return {
+        "proveedor": captura.proveedor,
+        "nombre": captura.nombre,
+        "cuantos": captura.cuantos,
+        "capturados": captura.capturados,
+        "faltan": captura.faltan,
+        "todo_capturado": captura.todo_capturado,
+        "sin_clave": captura.sin_clave,
+        "descartados_dentro": captura.descartados_dentro,
+        "frase": frase_del_avance(captura),
+        "invitacion": invitacion_a_enviar(captura, se_puede_enviar),
+        "lineas": [
+            {
+                "renglon_id": linea.renglon_id,
+                "clave": linea.clave,
+                "tiene_clave": linea.tiene_clave,
+                "descripcion": linea.descripcion,
+                "cantidad": linea.cantidad,
+                # Cadena o `null`, jamás un número de JSON ni un cero.
+                "precio": _cadena(linea.precio),
+                "tiene_precio": linea.tiene_precio,
+                "motivo": linea.motivo,
+                "esta_capturado": linea.esta_capturado,
+                # La firma viaja para el `title` de la casilla: quién la tachó y
+                # cuándo. Es una firma, nunca un permiso (regla 3).
+                "capturado_por": linea.capturado_por,
+                "capturado_en": (
+                    linea.capturado_en.isoformat() if linea.capturado_en else None
+                ),
+            }
+            for linea in captura.lineas
         ],
     }
 

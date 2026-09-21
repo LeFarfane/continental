@@ -75,7 +75,7 @@
 -- se corren a mano con credenciales de dueño (ADR 0003) y ninguno de los dos
 -- lo toca el código de arranque.
 --
--- Hoy hay cinco, y se corren en orden:
+-- Hoy hay siete, y se corren en orden:
 --
 --   1. `sql/migraciones/0001-renglon-quien-descarto-y-cuando.sql` (ticket 10),
 --      que agrega `descartado_por` y `descartado_en`.
@@ -92,8 +92,13 @@
 --      admitir nulos, le da a `renglon` la elección firmada, y aprieta dos
 --      restricciones que ya existían. NO crea ninguna tabla: siguen siendo
 --      cinco.
+--   6. `sql/migraciones/0006-enviar-el-pedido.sql` (ticket 21, ADR 0009), que
+--      le da a `pedido` el estado `enviado` y su firma. NO crea tabla.
+--   7. `sql/migraciones/0007-el-avance-de-la-captura.sql` (ticket 22, ADR
+--      0010), que le da a `renglon` la marca de captura firmada. NO crea
+--      tabla.
 --
--- Las cinco son idempotentes, así que correrlas sobre una base que ya las
+-- Las siete son idempotentes, así que correrlas sobre una base que ya las
 -- tiene -o sobre una recién creada con este archivo- no rompe nada.
 --
 -- **La 0003 y la 0004 son distintas de las dos primeras y hay que decirlo**:
@@ -523,6 +528,8 @@ CREATE TABLE IF NOT EXISTS pedidos.renglon (
     proveedor_elegido    text,
     elegido_por          text,
     elegido_en           timestamptz,
+    capturado_por        text,
+    capturado_en         timestamptz,
 
     CONSTRAINT pk_renglon
         PRIMARY KEY (renglon_id),
@@ -677,6 +684,27 @@ CREATE TABLE IF NOT EXISTS pedidos.renglon (
         CHECK ((proveedor_elegido IS NOT NULL)
                = (elegido_por IS NOT NULL AND elegido_en IS NOT NULL)),
 
+    -- LA MARCA DE CAPTURA (ticket 22, ADR 0010): una persona dice que ya
+    -- tecleó este renglón en el portal del proveedor de su pedido. Es el
+    -- avance de la pantalla de captura, y vive AQUÍ y no en el navegador: con
+    -- `localStorage` dos pestañas divergen en silencio, cambiar de máquina a la
+    -- mitad lo pierde entero, y la marca que lleva a enviar no diría quién la
+    -- puso.
+    --
+    -- NO ES UN ESTADO, y es a propósito. Un renglón dentro de un borrador sigue
+    -- 'abierto' (ticket 20), y cuatro sentencias -- asignar, soltar, descartar
+    -- y ajustar-- llevan `estado = 'abierto'` en su WHERE: un estado nuevo las
+    -- dejaría saltárselo en silencio.
+    --
+    -- Pareada como las otras cuatro firmas del esquema, pero contra NADA más:
+    -- tachar no depende del estado, así que el CHECK solo dice "quién y cuándo
+    -- van juntos".
+    CONSTRAINT ck_renglon_capturado_por
+        CHECK (capturado_por <> ''),
+
+    CONSTRAINT ck_renglon_captura
+        CHECK ((capturado_por IS NULL) = (capturado_en IS NULL)),
+
     CONSTRAINT fk_renglon_sugerido
         FOREIGN KEY (pedido_sugerido_id, negocio)
         REFERENCES pedidos.pedido_sugerido (pedido_sugerido_id, negocio),
@@ -826,6 +854,16 @@ COMMENT ON COLUMN pedidos.renglon.elegido_por IS
 
 COMMENT ON COLUMN pedidos.renglon.elegido_en IS
     'Cuándo se eligió, instante con zona. NULL si nadie eligió.';
+
+-- FIRMA, NO PERMISO, igual que las otras cuatro. Es la palabra de una persona
+-- sobre lo que tecleó en un portal que Continental no ve (ADR 0010).
+COMMENT ON COLUMN pedidos.renglon.capturado_por IS
+    'Quién dijo haberlo tecleado ya en el portal del proveedor de su pedido, '
+    'según Cf-Access-Authenticated-User-Email. Es una FIRMA, no un permiso. '
+    'NULL = nadie lo ha tachado. No es un estado: el renglón sigue abierto.';
+
+COMMENT ON COLUMN pedidos.renglon.capturado_en IS
+    'Cuándo lo dijo, instante con zona. NULL = nadie lo ha tachado.';
 
 
 -- --------------------------------------------------------------------------
