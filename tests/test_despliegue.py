@@ -36,7 +36,9 @@ empiezan a revisar de verdad.
 from __future__ import annotations
 
 import importlib.util
+import os
 import re
+import shutil
 import socket
 import subprocess
 from pathlib import Path
@@ -797,6 +799,232 @@ def test_el_script_limpia_el_estado_failed_antes_de_reiniciar():
     este script va a encontrar cuando más falta haga.
     """
     assert "reset-failed" in _desplegar()
+
+
+# ---------------------------------------------------------------------------
+# Si el pull cambió `desplegar.sh`, se corre la versión NUEVA
+# ---------------------------------------------------------------------------
+#
+# Medido el 2026-09-21: `37abad2` pasó el script de seis pasos a siete y el
+# dueño lo corrió en atlas. La salida decía "1/6 … 4/6 reinicio": el pull trajo
+# la versión de siete y bash siguió corriendo la de seis, que ya tenía abierta.
+# El filtro de la forma (ADR 0017) no corrió en el despliegue que lo traía.
+
+
+def test_el_relanzamiento_va_despues_del_pull_y_antes_del_paso_dos():
+    """El pull, la comparación y el `exec` en una función; la llamada, en una
+    sola línea entre el rótulo del paso 1 y el del paso 2.
+
+    Se mide sobre líneas de CÓDIGO (regex anclada), no sobre la primera
+    aparición del texto: los comentarios que lo explican nombran todo esto antes.
+    """
+    texto = _desplegar()
+
+    llamada = re.search(r'^actualizar_y_relanzarse "\$@"$', texto, re.MULTILINE)
+    assert llamada, (
+        "Falta la llamada `actualizar_y_relanzarse \"$@\"` como línea propia. "
+        "Sin ella, un pull que cambia este script corre la versión VIEJA."
+    )
+    assert texto.index('paso "1/7') < llamada.start() < texto.index('paso "2/7'), (
+        "El relanzamiento tiene que ir en el paso 1, justo después del pull y "
+        "antes de compilar: más tarde, ya corrió código de la versión vieja."
+    )
+
+    funcion = re.search(
+        r"^actualizar_y_relanzarse\(\) \{\n(.*?)^\}$", texto, re.MULTILINE | re.DOTALL
+    )
+    assert funcion, "Falta la función `actualizar_y_relanzarse`."
+    cuerpo = funcion.group(1)
+    assert funcion.start() < llamada.start(), "La función se usa antes de definirse."
+
+    antes = cuerpo.index("hash-object")
+    pull = cuerpo.index("pull -q")
+    despues = cuerpo.index("hash-object", pull)
+    relanza = cuerpo.index("exec ")
+    assert antes < pull < despues < relanza, (
+        "El orden dentro de la función es: hash, pull, hash, y solo entonces "
+        "`exec` si cambió."
+    )
+
+    # Un solo pull en TODO el script, y es el de la función. Un pull fuera de
+    # ella deja la comparación leyéndose del archivo que el pull acaba de
+    # tocar: exactamente la lectura por partes que la función evita.
+    assert len(re.findall(r"^\s*git [^\n]*\bpull\b", texto, re.MULTILINE)) == 1, (
+        "Hay un `git pull` fuera de `actualizar_y_relanzarse`. El pull tiene "
+        "que vivir DENTRO de la función, junto con la comparación y el exec."
+    )
+
+
+def test_el_relanzamiento_usa_exec_conserva_los_argumentos_y_no_hace_bucle():
+    texto = _desplegar()
+    cuerpo = re.search(
+        r"^actualizar_y_relanzarse\(\) \{\n(.*?)^\}$", texto, re.MULTILINE | re.DOTALL
+    ).group(1)
+
+    assert 'exec bash "$YO" "$@"' in cuerpo, (
+        "El relanzamiento tiene que ser `exec bash \"$YO\" \"$@\"`: `exec` para "
+        "que no siga corriendo la versión vieja al volver, `bash` para no "
+        "depender del bit de ejecución (commit 00f79e0), y `\"$@\"` para no "
+        "perder los argumentos."
+    )
+    guarda = cuerpo.index("CONTINENTAL_DESPLEGAR_RELANZADO:-")
+    assert guarda < cuerpo.index("pull -q"), (
+        "La guarda contra el bucle va ANTES del pull: la versión relanzada no "
+        "vuelve a jalar, así que no tiene nada que comparar ni por qué relanzarse."
+    )
+    assert "return 0" in cuerpo[guarda : cuerpo.index("pull -q")]
+    assert cuerpo.index("export CONTINENTAL_DESPLEGAR_RELANZADO=1") < cuerpo.index("exec "), (
+        "Sin exportar la variable antes del exec, la versión nueva no sabe que "
+        "es la relanzada y se relanzaría otra vez."
+    )
+    assert 'rm -f "$SALIDA_PRUEBAS"' in cuerpo, (
+        "`exec` no corre el trap de EXIT: el temporal quedaría tirado."
+    )
+
+
+def test_la_ruta_propia_se_resuelve_antes_del_cd():
+    """Con `desplegar.sh` o `./desplegar.sh` relativos, después del `cd` a la
+    raíz la ruta ya no apunta al archivo. `$YO` se calcula antes, absoluta."""
+    texto = _desplegar()
+    yo = re.search(r"^YO=.*BASH_SOURCE", texto, re.MULTILINE)
+    cd = re.search(r'^cd "\$RAIZ"$', texto, re.MULTILINE)
+    assert yo and cd and yo.start() < cd.start()
+
+
+def _bash_de_verdad() -> str | None:
+    """Git Bash en la torre; el `bash` del PATH en Linux.
+
+    En Windows NO se usa el del PATH: suele ser `System32\\bash.exe`, el de WSL,
+    que vive en otro sistema de archivos y no ve las rutas de `tmp_path`.
+    """
+    if os.name == "nt":
+        for base in (os.environ.get("ProgramFiles"), os.environ.get("ProgramW6432")):
+            if base and (Path(base) / "Git" / "bin" / "bash.exe").exists():
+                return str(Path(base) / "Git" / "bin" / "bash.exe")
+        return None
+    return shutil.which("bash")
+
+
+BASH = _bash_de_verdad()
+_sin_bash = pytest.mark.skipif(
+    BASH is None or shutil.which("git") is None,
+    reason="hace falta un bash real (Git Bash en Windows) y git para correr el script",
+)
+
+
+def _git(*args: str, cwd: Path) -> str:
+    r = subprocess.run(
+        ["git", "-c", "user.name=prueba", "-c", "user.email=prueba@local",
+         "-c", "core.autocrlf=false", "-c", "init.defaultBranch=main", *args],
+        cwd=cwd, capture_output=True,
+    )
+    assert r.returncode == 0, r.stderr.decode("utf-8", "replace")
+    return r.stdout.decode("utf-8", "replace")
+
+
+def _con_marca(marca: str) -> bytes:
+    """El `desplegar.sh` REAL, cortado antes del paso 2 con una marca.
+
+    Se prueba el paso 1 de verdad —la función, la guarda, el `exec`— y se
+    corta ahí porque del paso 2 en adelante hacen falta el venv, Postgres y
+    systemd de atlas. La marca dice qué versión corrió y con qué argumentos.
+    """
+    real = DESPLEGAR.read_bytes()
+    corte = b'paso "2/7'
+    assert real.count(corte) == 1
+    return real.replace(
+        corte,
+        f'echo "    {marca} args=$# [$*]"; exit 0\n'.encode() + corte,
+    )
+
+
+@pytest.fixture
+def atlas_de_juguete(tmp_path):
+    """Un "GitHub" local con la versión vieja y un clon que hace de atlas."""
+    origen = tmp_path / "origen"
+    (origen / "scripts").mkdir(parents=True)
+    _git("init", "-q", cwd=origen)
+    (origen / "scripts" / "desplegar.sh").write_bytes(_con_marca("VERSION-VIEJA"))
+    _git("add", ".", cwd=origen)
+    _git("commit", "-qm", "vieja", cwd=origen)
+
+    atlas = tmp_path / "atlas"
+    _git("clone", "-q", str(origen), str(atlas), cwd=tmp_path)
+    _git("config", "core.autocrlf", "false", cwd=atlas)
+    return origen, atlas
+
+
+def _correr(script: str, cwd: Path, *args: str, extra_env: dict | None = None):
+    env = {k: v for k, v in os.environ.items() if k != "CONTINENTAL_DESPLEGAR_RELANZADO"}
+    env.update(extra_env or {})
+    r = subprocess.run(
+        [BASH, script, *args], cwd=cwd, capture_output=True, env=env, timeout=60,
+    )
+    return r.returncode, (r.stdout + r.stderr).decode("utf-8", "replace")
+
+
+@_sin_bash
+@pytest.mark.parametrize("como", ["absoluta", "relativa"])
+def test_si_el_pull_cambia_el_script_corre_la_version_nueva_una_sola_vez(
+    atlas_de_juguete, como
+):
+    """La trampa del 2026-09-21, reproducida: el pull trae otra versión de
+    `desplegar.sh`. Tiene que decir que se relanza, correr la NUEVA una sola
+    vez, con los mismos argumentos, y la vieja nunca pasar del paso 1."""
+    origen, atlas = atlas_de_juguete
+    (origen / "scripts" / "desplegar.sh").write_bytes(_con_marca("VERSION-NUEVA"))
+    _git("commit", "-qam", "nueva", cwd=origen)
+
+    if como == "absoluta":
+        script, cwd = str(atlas / "scripts" / "desplegar.sh"), atlas.parent
+    else:
+        script, cwd = "desplegar.sh", atlas / "scripts"
+    codigo, salida = _correr(script, cwd, "uno", "dos dos")
+
+    assert codigo == 0, salida
+    assert salida.count("me vuelvo a lanzar con la versi") == 1, salida
+    assert salida.count("VERSION-NUEVA") == 1, salida
+    assert "VERSION-VIEJA" not in salida, salida
+    assert "args=2 [uno dos dos]" in salida, "Se perdieron los argumentos:\n" + salida
+    assert salida.count("1/7") == 2, "El paso 1 tiene que verse dos veces:\n" + salida
+    assert "sin git pull" in salida, "La relanzada no dijo que se salta el pull:\n" + salida
+    assert _git("log", "--format=%s", "-1", cwd=atlas).strip() == "nueva"
+
+
+@_sin_bash
+def test_si_el_pull_no_toca_el_script_no_se_relanza(atlas_de_juguete):
+    origen, atlas = atlas_de_juguete
+    (origen / "otro.txt").write_bytes(b"cambia otra cosa\n")
+    _git("add", ".", cwd=origen)
+    _git("commit", "-qm", "otra cosa", cwd=origen)
+
+    codigo, salida = _correr(str(atlas / "scripts" / "desplegar.sh"), atlas.parent)
+
+    assert codigo == 0, salida
+    assert "me vuelvo a lanzar" not in salida, salida
+    assert salida.count("VERSION-VIEJA") == 1, salida
+    assert (atlas / "otro.txt").exists(), "El pull no corrió."
+
+
+@_sin_bash
+def test_con_la_guarda_puesta_no_jala_ni_se_relanza(atlas_de_juguete):
+    """La guarda contra el bucle: con la variable puesta no hay pull, así que
+    tampoco hay cambio que detectar. Una versión nueva esperando en el remoto
+    se queda ahí."""
+    origen, atlas = atlas_de_juguete
+    (origen / "scripts" / "desplegar.sh").write_bytes(_con_marca("VERSION-NUEVA"))
+    _git("commit", "-qam", "nueva", cwd=origen)
+
+    codigo, salida = _correr(
+        str(atlas / "scripts" / "desplegar.sh"), atlas.parent,
+        extra_env={"CONTINENTAL_DESPLEGAR_RELANZADO": "1"},
+    )
+
+    assert codigo == 0, salida
+    assert "me vuelvo a lanzar" not in salida, salida
+    assert "sin git pull" in salida, salida
+    assert "VERSION-VIEJA" in salida and "VERSION-NUEVA" not in salida, salida
+    assert _git("log", "--format=%s", "-1", cwd=atlas).strip() == "vieja"
 
 
 # ---------------------------------------------------------------------------

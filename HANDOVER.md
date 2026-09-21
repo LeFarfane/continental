@@ -679,7 +679,10 @@ python -m continental.verificar   # los datos de producción, no el código (tic
 python -m continental.lote        # el lote nocturno, a mano (ticket 18)
 python -m continental.lote --tope-minutos 5   # ...con tope corto, para mirarlo
 python -m continental.verificar --forma   # solo la forma de la base (ADR 0017)
-pytest                # 1698 pruebas, 0 saltadas, ~17 s (2026-09-21, enmienda del
+pytest                # 1705 pruebas, 0 saltadas, ~25 s (2026-09-21): 7 nuevas en
+                      # `test_despliegue.py`, desplegar.sh se relanza si el pull
+                      # lo cambia (4 corren el script de verdad en Git Bash).
+                      # 1698 antes, ~17 s (2026-09-21, enmienda del
                       # ADR 0006: "orden cumplido" es falso solo si NINGÚN
                       # renglón trae clase ABC). 1693 antes (1691 de ADR 0017
                       # más 2 de `56ee59f`). Las 5 nuevas: 4 de

@@ -26,7 +26,7 @@ número de pruebas, tres veces más lento, que es lo que se espera de ese CPU.
 | Pieza | Dónde | Qué lo prueba |
 |---|---|---|
 | La unidad de systemd | `scripts/systemd/continental-web.service` | `tests/test_despliegue.py` (7 casos) |
-| El script de despliegue | `scripts/desplegar.sh` | `tests/test_despliegue.py` (8 casos) |
+| El script de despliegue | `scripts/desplegar.sh` | `tests/test_despliegue.py` (20 casos; 4 corren el paso 1 de verdad en un repo temporal con un bash real) |
 | `--servicio` sin navegador y sin mudarse de puerto | `iniciar.py` | `tests/test_despliegue.py` (4 casos) |
 | La interfaz de escucha, configurable | `iniciar.py`, `.env.example` | `tests/test_despliegue.py` (3 casos) |
 | LF y no CRLF en `.sh` y `.service` | los archivos mismos | `tests/test_compila.py` |
@@ -454,7 +454,8 @@ El `-t` es para que `sudo` pueda pedir la contraseña: el script corre como
 
 `desplegar.sh` hace siete pasos y **se detiene en el primero que falla**:
 
-1. `git pull`
+1. `git pull` — y si el pull cambió el propio `desplegar.sh`, **se vuelve a
+   lanzar** con la versión nueva antes de seguir (ver abajo)
 2. compila **todos** los módulos, incluido `iniciar.py` —el archivo que el
    servicio ejecuta y que ninguna prueba importa—
 3. corre el suite completo con el venv de atlas
@@ -476,6 +477,35 @@ se detiene, el código nuevo ya quedó en disco por el `git pull`; el lote de la
 22:00 lo va a ver, revisa la forma por su cuenta y **se niega a correr** (sale
 distinto de cero y late `down` en Kuma con la migración que falta) hasta que la
 base cuadre.
+
+**Si el pull cambia `desplegar.sh`, el script se relanza.** Medido el
+2026-09-21: `37abad2` pasó el script de seis pasos a siete (el 4, la forma) y
+la corrida en atlas imprimió esto —los rótulos, tal cual—:
+
+```
+==> 1/6  git pull
+    rama: main
+37abad2 (HEAD -> main, origin/pedido-sugerido, origin/main, origin/HEAD) Mezcla verificar-forma-base...
+==> 2/6  compilan todos los módulos
+...
+==> 4/6  reinicio de continental-web.service
+```
+
+El pull trajo la versión de siete pasos y **bash siguió corriendo la de
+seis**, que ya tenía abierta: el filtro de la forma, que existe para impedir
+justo ese reinicio, no corrió en el despliegue que lo traía. Pasaría cada vez
+que cambie el script. Desde entonces el paso 1 compara el hash del archivo
+antes y después del pull y, si cambió, dice
+`==> desplegar.sh cambió con este pull: me vuelvo a lanzar con la versión nueva`
+y hace `exec` de la nueva. La relanzada lleva
+`CONTINENTAL_DESPLEGAR_RELANZADO=1` y **no vuelve a jalar** (dice
+`sin git pull: ...`), así que no puede relanzarse otra vez. El porqué de que
+el pull, la comparación y el `exec` vivan juntos en una función está en el
+comentario del script: bash lee el archivo por partes.
+
+> **El primer despliegue que trae este arreglo todavía cae en la trampa**: lo
+> corre la versión anterior, que no sabe relanzarse. Ese, córrelo **dos
+> veces**; el segundo ya es la versión de siete pasos completa.
 
 El orden es el punto entero. El 2026-09-08 Marlowe desplegó un `app.py` que no
 compilaba con "pull, reinicia y ojalá": el servicio entró en bucle de reinicio
@@ -715,6 +745,8 @@ URL completa y la URL completa **es** el token— y la corrida vale lo que valí
 | `active (running)` pero nada contesta en el 8585 | Arrancó en otro puerto. **No debería poder**: `--servicio` se niega. Si pasa, mirar `ExecStart` |
 | La pantalla dice `sin-identificar` entrando por el túnel | Falta la aplicación de Access, o está sobre otro dominio (B.3) |
 | El despliegue se detiene en "1/7 git pull" | No hay remoto configurado (A.1) |
+| Los rótulos dicen otro total de pasos que el script que acabas de empujar | Corrió la versión vieja del script: el pull la cambió debajo de bash. Desde el 2026-09-21 se relanza sola; si no viste "me vuelvo a lanzar", la que corrió aún no sabía hacerlo: vuelve a correrlo (Parte C) |
+| El paso 1 dice "sin git pull" y no trajo nada | Tienes `CONTINENTAL_DESPLEGAR_RELANZADO` exportada en tu sesión: esa variable es solo para la corrida relanzada. `unset` y vuelve a correr |
 | El despliegue se detiene en "4/7 la base tiene la forma..." | Falta una migración. El servicio sigue con el código anterior. Corre con credenciales de dueño las que nombra la salida, en su orden, y vuelve a desplegar (ADR 0017) |
 | El despliegue se detiene en "7/7 invariantes" | Los datos, no el código: el servicio ya está arriba. Lee cada falla con su comando en la salida del paso 7 |
 | El lote sale con 1 sin armar lista y Kuma dice "la base no cuadra" | Se desplegó (o se hizo `pull`) código que nombra columnas que la base no tiene. El journal del lote trae la migración y su comando |

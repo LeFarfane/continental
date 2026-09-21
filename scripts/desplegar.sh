@@ -86,6 +86,9 @@ set -euo pipefail
 # sustitución para que un fallo al resolver la raíz sea un fallo y no un viaje
 # silencioso a `/`.
 RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Esta misma ruta, absoluta y antes del `cd`: el paso 1 la compara antes y
+# después del pull para saber si hay que relanzarse (ver más abajo).
+YO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 cd "$RAIZ"
 export PYTHONPATH="${PYTHONPATH:-$PWD/src}"
 
@@ -101,6 +104,85 @@ SALIDA_PRUEBAS="$(mktemp)"
 trap 'rm -f "$SALIDA_PRUEBAS"' EXIT
 
 paso() { printf '\n==> %s\n' "$*"; }
+
+# SI ESTE MISMO ARCHIVO CAMBIÓ CON EL PULL, SE VUELVE A LANZAR — medido.
+#
+# El 2026-09-21 el commit `37abad2` pasó este script de seis pasos a siete (el
+# de la forma de la base, ADR 0017). El dueño lo corrió en atlas y la salida
+# fue, textual salvo los rótulos, que aquí se escriben con palabras para no
+# confundir a las pruebas que cuentan los pasos:
+#
+#     ==> 1 de 6  git pull
+#         rama: main
+#     37abad2 (HEAD -> main, ...) Mezcla verificar-forma-base...
+#     ==> 2 de 6  compilan todos los módulos
+#     ...
+#     ==> 4 de 6  reinicio de continental-web.service
+#
+# El pull trajo la versión de siete pasos y **corrió la de seis**: bash ya
+# tenía abierto el archivo viejo (git no lo reescribe, lo reemplaza por otro,
+# y bash sigue leyendo del que abrió). O sea que el filtro de la forma, que
+# existe justo para impedir un reinicio contra la base equivocada, no corrió
+# en el despliegue que lo traía. Y pasa CADA VEZ que cambia este archivo: el
+# primer despliegue con el cambio corre sin el cambio.
+#
+# Y este arreglo no se salva de sí mismo: el despliegue que TRAE esta
+# función lo corre todavía una versión que no la tiene. Ese primero hay que
+# correrlo dos veces; de ahí en adelante, ya no.
+#
+# El arreglo: guardar el hash de este archivo antes del pull, compararlo
+# después y, si cambió, `exec` de la versión nueva con los mismos argumentos.
+#
+# SIN BUCLE: el relanzamiento exporta CONTINENTAL_DESPLEGAR_RELANZADO=1, y con
+# esa variable puesta el script NO vuelve a hacer `git pull` (el código ya es
+# el que trajo el pull de la versión anterior) y por tanto no tiene nada que
+# comparar ni motivo para relanzarse. Se eligió saltar el pull y no "jalar
+# otra vez pero sin relanzarse": un segundo pull podría traer OTRA versión de
+# este archivo, y se correría la vieja sin decirlo — la misma trampa, de
+# vuelta. Consecuencia: si alguien exporta esa variable a mano en su sesión,
+# el despliegue deja de jalar. El paso 1 lo dice en voz alta cuando pasa.
+#
+# POR QUÉ UNA FUNCIÓN Y UNA SOLA LÍNEA QUE LA LLAMA — no "simplificar".
+#
+# Bash no lee un script entero antes de correrlo: lee un comando, lo ejecuta,
+# lee el siguiente. Lo que haya en el archivo DESPUÉS del pull se lee de disco
+# cuando ya pasó el pull. Hoy git reemplaza el archivo (otro inodo) y bash
+# sigue leyendo el viejo, que es la trampa de arriba; si algún día el archivo
+# se reescribiera en su lugar, bash leería el nuevo desde la posición en bytes
+# del viejo: media línea de una versión pegada a media línea de la otra.
+#
+# Por eso el pull, la comparación y el `exec` viven los tres dentro de esta
+# función, que bash termina de leer ENTERA antes de ejecutar nada de ella, y
+# se llaman desde UNA línea del paso 1. Si el archivo no cambió, lo que se lee
+# después es idéntico y da igual de dónde venga; si cambió, el `exec` ocurre
+# sin que bash lea ni un byte más de este archivo. Sacar el pull de la función
+# y dejar la comparación "justo abajo" parece lo mismo y no lo es: esa
+# comparación la estaría leyendo bash del archivo que el pull acaba de tocar.
+#
+# `bash "$YO"` y no `"$YO"` a secas: el `exec` no depende de que la versión
+# nueva conserve el bit de ejecución (ya se perdió una vez, commit `00f79e0`).
+# `$YO` es la ruta ABSOLUTA de este archivo, calculada arriba junto a `RAIZ`
+# y ANTES del `cd`: da igual si se invocó por ruta absoluta, relativa o por
+# `ssh ... '~/...'`.
+
+actualizar_y_relanzarse() {
+    if [[ -n "${CONTINENTAL_DESPLEGAR_RELANZADO:-}" ]]; then
+        echo "    sin git pull: esta es la versión que trajo el pull de la corrida"
+        echo "    anterior (CONTINENTAL_DESPLEGAR_RELANZADO=$CONTINENTAL_DESPLEGAR_RELANZADO)"
+        return 0
+    fi
+    local antes despues
+    antes="$(git hash-object --no-filters "$YO")"
+    git -c pull.rebase=true pull -q
+    despues="$(git hash-object --no-filters "$YO")"
+    if [[ "$antes" != "$despues" ]]; then
+        paso "desplegar.sh cambió con este pull: me vuelvo a lanzar con la versión nueva"
+        # `exec` no corre el `trap ... EXIT`: el temporal se borra a mano.
+        rm -f "$SALIDA_PRUEBAS"
+        export CONTINENTAL_DESPLEGAR_RELANZADO=1
+        exec bash "$YO" "$@"
+    fi
+}
 
 paso "1/7  git pull"
 # DOS PREGUNTAS DISTINTAS, DOS MENSAJES DISTINTOS. Antes había uno solo, y el
@@ -122,7 +204,8 @@ if ! git remote | grep -q .; then
     echo "         git remote add origin git@github.com:LeFarfane/continental.git"
     exit 1
 fi
-git -c pull.rebase=true pull -q
+# Pull, comparación y relanzamiento en UNA línea: ver `actualizar_y_relanzarse`.
+actualizar_y_relanzarse "$@"
 echo "    rama: $(git rev-parse --abbrev-ref HEAD)"
 git log --oneline -1
 
