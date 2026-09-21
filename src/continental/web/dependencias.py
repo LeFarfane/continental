@@ -13,6 +13,8 @@ pruebas.
 
 from __future__ import annotations
 
+import datetime as dt
+
 from continental.almacen import AlmacenPostgres, LecturaDelAlmacen, motor
 from continental.almacenamiento import AlmacenamientoDelPedido, AlmacenamientoPostgres
 from continental.config import cargar
@@ -104,3 +106,19 @@ def obtener_consultas() -> RegistroDeConsultas:
     y el `ahora` de `consultas.consultar_a_doyle`.
     """
     return _CONSULTAS
+
+
+def reloj() -> dt.datetime:
+    """El instante de ahora, con zona. **El reloj también es un borde.**
+
+    Vive aquí y no en `app.py` a propósito: `app.py` tiene prohibido mirar el
+    reloj (`test_sugerido.test_el_calculo_no_menciona_el_reloj_en_ninguna_parte`),
+    porque ahí se deciden las **fechas de venta** y ésas salen de `max(fecha)`
+    del almacén, nunca de aquí.
+
+    Lo que sí necesita un reloj es decir **hace cuánto pasó algo** — "pedido el
+    martes, sin recibir" (ticket 24): compara el instante en que alguien apretó
+    "Enviar" contra éste, y los dos son del reloj. `app._ahora` lo envuelve para
+    que una prueba lo fije.
+    """
+    return dt.datetime.now(dt.UTC)

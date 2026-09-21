@@ -65,10 +65,21 @@ sistema a partir de lo que se vendió. No se le envía a nadie.
 - `abierto` — está propuesto y nadie lo ha atendido.
 - `en tránsito` — ya se le pidió a un proveedor y todavía no llega. **No se
   vuelve a proponer mientras esté así**, porque eso sería pedirlo dos veces.
+  Se ve igual en la pantalla, atenuado y con cuándo se pidió y a quién.
 - `recibido` — llegó completo.
 - `recibido parcial` — llegó menos de lo pedido. Lo que faltó vuelve a
   proponerse.
 - `descartado` — una persona decidió no pedirlo.
+
+> **Lo que se vende mientras un renglón está `en tránsito` no se pierde.** El
+> producto no se propone, pero sus ventas se siguen contando, y **cuando el
+> renglón pasa a `recibido` o `recibido parcial`** la siguiente lista las trae
+> — aunque las listas de en medio se hayan cerrado. El renglón que vuelve dice
+> desde qué día cuenta. Ver el ADR 0012.
+>
+> **Y solo sabe de lo que pasó por Continental.** Un pedido que se capturó en
+> un portal sin marcarlo aquí como enviado no está `en tránsito`, y su
+> mercancía se va a proponer otra vez.
 
 **Pedido** — lo que se le pide a **un** proveedor: nace de renglones de un
 pedido sugerido. Un pedido sugerido puede repartirse en varios pedidos, uno por

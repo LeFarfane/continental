@@ -104,15 +104,47 @@ RENGLON_DESCARTADO = "descartado"
 #: comentarios y pruebas.
 RENGLON_EN_TRANSITO = "en tránsito"
 
+#: Los dos de la recepción (tickets 26 y 27). Hoy **ningún código los
+#: escribe**; son constantes desde el ticket 24 porque ya hay código que los
+#: LEE: son los que cierran un tránsito. Ver `ESTADOS_QUE_CIERRAN_EL_TRANSITO`.
+RENGLON_RECIBIDO = "recibido"
+RENGLON_RECIBIDO_PARCIAL = "recibido parcial"
+
 #: Los cinco del glosario, con el acento de `en tránsito`. Hoy se escriben tres:
 #: `abierto` al nacer, `descartado` desde el ticket 10 y `en tránsito` desde el
 #: 21. El 26 pone los dos de recepción.
 ESTADOS_DEL_RENGLON: tuple[str, ...] = (
     "abierto",
     RENGLON_EN_TRANSITO,
-    "recibido",
-    "recibido parcial",
+    RENGLON_RECIBIDO,
+    RENGLON_RECIBIDO_PARCIAL,
     "descartado",
+)
+
+#: **El enganche que el ticket 24 les deja a los tickets 26 y 27** (ADR 0012).
+#:
+#: Un renglón en uno de estos estados **ya no viene en camino**, y lo que se
+#: vendió de su producto mientras venía **vuelve a proponerse**: la siguiente
+#: lista lo cuenta desde el día siguiente al que repuso su pedido, aunque el
+#: corte haya avanzado encima. Quien escriba cualquiera de los dos no tiene que
+#: hacer nada más para que eso pase — ya está aquí y en `_LO_YA_PEDIDO`, que
+#: repite la tupla con sus acentos y tiene una prueba que los compara.
+#:
+#: Lo que NO está aquí, a propósito: **cancelar** (ticket 25). Un renglón que
+#: vuelve a `abierto` porque su pedido nunca se capturó no se recibió nunca, así
+#: que lo que tiene que volver es **también** lo que repuso, no solo lo de
+#: después. Esa regla es otra y la decide ese ticket; ver el ADR 0012.
+ESTADOS_QUE_CIERRAN_EL_TRANSITO: tuple[str, ...] = (
+    RENGLON_RECIBIDO,
+    RENGLON_RECIBIDO_PARCIAL,
+)
+
+#: Lo que ya se le pidió a un proveedor, llegara o no: `en tránsito` más los dos
+#: que lo cierran. Es la definición de "otra lista ya atendió este producto" en
+#: `_LO_YA_PEDIDO`.
+ESTADOS_YA_PEDIDOS: tuple[str, ...] = (
+    RENGLON_EN_TRANSITO,
+    *ESTADOS_QUE_CIERRAN_EL_TRANSITO,
 )
 
 CLASIFICACIONES = (MEDICAMENTO, ABARROTE, SIN_CLASIFICAR)
@@ -718,6 +750,66 @@ class PedidoEnviado:
 
 
 @dataclass(frozen=True, slots=True)
+class LoYaPedido:
+    """Un renglón que ya se le pidió a un proveedor, con lo que hace falta saber (24).
+
+    Es lo que `lo_ya_pedido` lee y lo que `transito.py` usa para dos cosas: la
+    **memoria** con la que se arma la lista —qué no se vuelve a proponer, y
+    desde qué día vuelve lo que ya llegó— y el **bloque** de la pantalla que
+    enseña lo que viene en camino.
+
+    `renglon` es el `RenglonGuardado` **entero**, y la composición es a
+    propósito, igual que `RenglonGuardado.propuesto`: `cantidad_a_pedir` —lo
+    que de verdad se le pidió— ya vive ahí, probada, y reescribirla con un
+    `coalesce` en la consulta sería la misma regla dos veces.
+
+    **`ventas_hasta` es el ancla, y es la decisión del ticket** (ADR 0012): el
+    último día de ventas que ese renglón repuso, que es la
+    `ventas_consideradas_hasta` de su lista y existe desde el ticket 08. Lo que
+    se venda del producto **después** de ese día es lo que se retiene mientras
+    viene en camino y lo que vuelve al recibirlo. No se copia ninguna venta: se
+    vuelven a leer de `marts.fct_ventas`, que es donde ya estaban — y así las
+    que llegan tarde (el sábado, que llega el lunes) entran solas.
+
+    `proveedor`, `enviado_por` y `enviado_en` son del **pedido**, y valen `None`
+    solo en un estado que ningún código escribe: un renglón en tránsito sin
+    pedido enviado. Se dicen así en vez de tronar, porque este dato se enseña
+    y esconder el renglón es justo lo que la casilla 4 prohíbe.
+    """
+
+    renglon: RenglonGuardado
+    pedido_sugerido_id: int
+    fecha_del_pedido: dt.date
+    ventas_hasta: dt.date
+    proveedor: str | None
+    enviado_por: str | None
+    enviado_en: dt.datetime | None
+
+    @property
+    def producto_id(self) -> int:
+        return self.renglon.propuesto.producto_id
+
+    @property
+    def esta_en_transito(self) -> bool:
+        return self.renglon.esta_en_transito
+
+    @property
+    def ya_se_cerro(self) -> bool:
+        """Si llegó: el tránsito se cerró y lo retenido vuelve a proponerse."""
+        return self.renglon.estado in ESTADOS_QUE_CIERRAN_EL_TRANSITO
+
+    @property
+    def retiene_desde(self) -> dt.date:
+        """El primer día de ventas que ese pedido NO cubrió: el siguiente al ancla."""
+        return self.ventas_hasta + dt.timedelta(days=1)
+
+    @property
+    def nombre_del_proveedor(self) -> str | None:
+        """Cómo se escribe el proveedor, según el glosario. `None` si no quedó escrito."""
+        return None if self.proveedor is None else nombre_del_proveedor(self.proveedor)
+
+
+@dataclass(frozen=True, slots=True)
 class PedidoSugeridoGuardado:
     """La lista de un día, tal como quedó guardada (`CONTEXT.md`).
 
@@ -941,6 +1033,11 @@ def columnas_del_renglon(
         # las relaciona.
         "capturado_por": None,
         "capturado_en": None,
+        # DESDE QUÉ DÍA SE SUMARON SUS VENTAS, si no es el principio de la
+        # lista (ticket 24, ADR 0012). Casi siempre `None`. Es un dato del
+        # CÁLCULO —lo decide la memoria de lo ya pedido al armar— y por eso
+        # viene en el renglón propuesto y no se inventa aquí.
+        "ventas_desde": renglon.ventas_desde,
     }
 
 
@@ -966,6 +1063,10 @@ def renglon_desde_columnas(fila) -> Renglon:
             else float(fila["dias_de_cobertura"])
         ),
         clasificacion=fila["clasificacion"],
+        # Con `.get` por la misma razón que las columnas de los tickets 20 y
+        # 22: sin la migración 0008 la fila no la trae, y eso es "desde el
+        # principio de la lista", no un KeyError que tumbe la pantalla.
+        ventas_desde=fila.get("ventas_desde"),
     )
 
 
@@ -1774,6 +1875,28 @@ class AlmacenamientoDelPedido(Protocol):
         """
         ...
 
+    def lo_ya_pedido(
+        self, negocio: str, antes_de: dt.date
+    ) -> tuple[LoYaPedido, ...]:
+        """Lo que ya se le pidió a un proveedor y todavía le importa a la lista (24).
+
+        **Solo lectura.** Dos clases de renglón, de listas anteriores a
+        `antes_de`:
+
+        - **todo lo `en tránsito`** — no se vuelve a proponer y se enseña;
+        - **lo recibido que ninguna lista posterior ha atendido** — lo que se
+          vendió mientras venía en camino todavía no se propuso, y la siguiente
+          lista lo tiene que traer (ADR 0012).
+
+        Es el tercer dato con el que se abre el día, junto al corte y al piso,
+        y es de la misma familia: los tres dicen **qué ventas ya se atendieron**
+        y los tres salen de `pedidos`, nunca del reloj. La diferencia es de
+        grano: el corte y el piso son de la lista entera; esto es por producto.
+
+        En el orden de las listas y, dentro de cada una, de los renglones.
+        """
+        ...
+
     def cerrar(
         self, negocio: str, pedido_sugerido_id: int
     ) -> PedidoSugeridoGuardado | None:
@@ -2247,7 +2370,7 @@ _LEER_RENGLONES = text(
            descartado_por, descartado_en,
            cantidad_final, ajustada_por, ajustada_en,
            pedido_id, proveedor_elegido, elegido_por, elegido_en,
-           capturado_por, capturado_en
+           capturado_por, capturado_en, ventas_desde
     from pedidos.renglon
     where negocio = :negocio and pedido_sugerido_id = :pedido_sugerido_id
     order by renglon_id
@@ -2266,7 +2389,7 @@ _LEER_RENGLON_POR_ID = text(
            descartado_por, descartado_en,
            cantidad_final, ajustada_por, ajustada_en,
            pedido_id, proveedor_elegido, elegido_por, elegido_en,
-           capturado_por, capturado_en
+           capturado_por, capturado_en, ventas_desde
     from pedidos.renglon
     where negocio = :negocio and renglon_id = :renglon_id
     """
@@ -2326,6 +2449,75 @@ _PISO_SIN_PEDIR = text(
     """
 )
 
+# LO YA PEDIDO (ticket 24, ADR 0012): la memoria con la que se arma la lista y
+# lo que la pantalla enseña como "en camino".
+#
+# Dos clases de fila, y la diferencia entre las dos es la decisión del ticket:
+#
+#   - **Todo lo `en tránsito`, siempre.** No se vuelve a proponer mientras esté
+#     así, y se ve en la pantalla. No lleva ninguna otra condición: esconder un
+#     tránsito porque otra lista trae el mismo producto sería esconder lo que
+#     la casilla 4 dice que no se esconde.
+#   - **Lo `recibido` o `recibido parcial` que ninguna lista posterior ha
+#     atendido todavía.** Sus ventas retenidas —las de después de su ancla—
+#     siguen sin proponerse, así que hay que recordarlo. "Atendido" es que una
+#     lista posterior **cerrada** trajo el producto (sus ventas ya se
+#     propusieron), o que el producto se **volvió a pedir** (el ancla nueva
+#     manda). En cuanto pasa, esta fila deja de salir: recordarla más
+#     propondría esas ventas dos veces.
+#
+# Los dos estados de la recepción van escritos a mano y con acento, igual que
+# `'en tránsito'`: son el enganche de los tickets 26 y 27 y hay una prueba que
+# los compara contra `ESTADOS_QUE_CIERRAN_EL_TRANSITO`.
+#
+# `s.fecha_del_pedido < :antes_de` —la lista del día NO entra— y `:antes_de`
+# sale del dato (`max(fecha)`), nunca del reloj. La lista del día se está
+# armando justo con esto, y lo que ella misma envíe se ve en su propia tabla.
+#
+# `left join` al pedido y no `join`: un tránsito sin pedido no lo escribe
+# ningún código, pero si existe se ENSEÑA diciendo que no tiene proveedor, en
+# vez de desaparecer de la pantalla por culpa de un `join`.
+#
+# El negocio va en CADA unión, no solo en el `WHERE` de afuera (regla 7): un id
+# de lista o de pedido de otra farmacia no puede colarse por un `join`.
+_LO_YA_PEDIDO = text(
+    """
+    select r.renglon_id, r.pedido_sugerido_id, r.producto_id, r.clave,
+           r.descripcion, r.piezas_vendidas, r.cantidad_propuesta,
+           r.esta_en_el_catalogo, r.existencia, r.dias_de_cobertura,
+           r.clasificacion, r.estado, r.descartado_por, r.descartado_en,
+           r.cantidad_final, r.ajustada_por, r.ajustada_en,
+           r.pedido_id, r.proveedor_elegido, r.elegido_por, r.elegido_en,
+           r.capturado_por, r.capturado_en, r.ventas_desde,
+           s.fecha_del_pedido, s.ventas_consideradas_hasta,
+           p.proveedor, p.enviado_por, p.enviado_en
+    from pedidos.renglon as r
+    join pedidos.pedido_sugerido as s
+      on s.pedido_sugerido_id = r.pedido_sugerido_id
+     and s.negocio = r.negocio
+    left join pedidos.pedido as p
+      on p.pedido_id = r.pedido_id
+     and p.negocio = r.negocio
+    where r.negocio = :negocio
+      and s.fecha_del_pedido < :antes_de
+      and (r.estado = 'en tránsito'
+           or (r.estado in ('recibido', 'recibido parcial')
+               and not exists (
+                   select 1
+                   from pedidos.renglon as r2
+                   join pedidos.pedido_sugerido as s2
+                     on s2.pedido_sugerido_id = r2.pedido_sugerido_id
+                    and s2.negocio = r2.negocio
+                   where r2.negocio = r.negocio
+                     and r2.producto_id = r.producto_id
+                     and s2.fecha_del_pedido > s.fecha_del_pedido
+                     and s2.fecha_del_pedido < :antes_de
+                     and (s2.estado = 'cerrado'
+                          or r2.estado in ('en tránsito', 'recibido', 'recibido parcial')))))
+    order by s.fecha_del_pedido, r.renglon_id
+    """
+)
+
 # `ON CONFLICT ON CONSTRAINT ux_pedido_sugerido_dia DO NOTHING` es el corazón
 # de "nunca se duplica", y por eso nombra la restricción en vez de las
 # columnas: si alguien la renombra en el DDL, esto falla ruidoso en lugar de
@@ -2359,11 +2551,12 @@ _INSERTAR_RENGLONES = text(
     insert into pedidos.renglon
         (negocio, pedido_sugerido_id, producto_id, clave, descripcion,
          piezas_vendidas, cantidad_propuesta, esta_en_el_catalogo, existencia,
-         dias_de_cobertura, clasificacion, estado)
+         dias_de_cobertura, clasificacion, estado, ventas_desde)
     values
         (:negocio, :pedido_sugerido_id, :producto_id, :clave, :descripcion,
          :piezas_vendidas, :cantidad_propuesta, :esta_en_el_catalogo,
-         :existencia, :dias_de_cobertura, :clasificacion, :estado)
+         :existencia, :dias_de_cobertura, :clasificacion, :estado,
+         :ventas_desde)
     """
 )
 
@@ -3147,6 +3340,20 @@ class AlmacenamientoPostgres:
             )
         return None if fila is None else fila["piso"]
 
+    def lo_ya_pedido(
+        self, negocio: str, antes_de: dt.date
+    ) -> tuple[LoYaPedido, ...]:
+        # `connect` y no `begin`: solo lee.
+        with self._motor().connect() as conexion:
+            filas = (
+                conexion.execute(
+                    _LO_YA_PEDIDO, {"negocio": negocio, "antes_de": antes_de}
+                )
+                .mappings()
+                .all()
+            )
+        return tuple(lo_ya_pedido_desde_columnas(f) for f in filas)
+
     def leer_renglon(self, negocio: str, renglon_id: int) -> RenglonGuardado | None:
         with self._motor().connect() as conexion:
             fila = (
@@ -3643,4 +3850,22 @@ def renglon_guardado_desde_columnas(fila) -> RenglonGuardado:
         # migración 0007 es "nadie tachó", no un KeyError.
         capturado_por=fila.get("capturado_por"),
         capturado_en=fila.get("capturado_en"),
+    )
+
+
+def lo_ya_pedido_desde_columnas(fila) -> LoYaPedido:
+    """Una fila de `_LO_YA_PEDIDO` → `LoYaPedido`. La usan Postgres y el doble.
+
+    El renglón se arma con `renglon_guardado_desde_columnas`, **el mismo** que
+    arma la lista: dos caminos que arman el mismo objeto se separan a la
+    tercera columna nueva.
+    """
+    return LoYaPedido(
+        renglon=renglon_guardado_desde_columnas(fila),
+        pedido_sugerido_id=int(fila["pedido_sugerido_id"]),
+        fecha_del_pedido=fila["fecha_del_pedido"],
+        ventas_hasta=fila["ventas_consideradas_hasta"],
+        proveedor=fila["proveedor"],
+        enviado_por=fila["enviado_por"],
+        enviado_en=fila["enviado_en"],
     )

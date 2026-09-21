@@ -83,12 +83,24 @@ from continental.particion import (
 from continental.precios import NOMBRES_DE_PROVEEDOR, nombre_del_proveedor
 from continental.proveedores import puente_como_json, puente_configurado
 from continental.sugerido import armar_la_lista
+from continental.transito import (
+    MemoriaDeLoPedido,
+    en_camino,
+    en_camino_como_json,
+    en_camino_con_hueco,
+    frase_de_la_ventana_propia,
+    frase_de_ya_en_camino,
+    frase_del_transito,
+    memoria_de_lo_pedido,
+    vendido_desde_que_se_pidio,
+)
 from continental.vistas import VISTAS
 from continental.web.dependencias import (
     obtener_almacen,
     obtener_almacenamiento,
     obtener_consultas,
     obtener_doyle,
+    reloj,
 )
 
 ESTATICOS = Path(__file__).parent / "static"
@@ -96,6 +108,19 @@ ESTATICOS = Path(__file__).parent / "static"
 log = logging.getLogger("continental")
 
 app = FastAPI(title="Continental", version=__version__, docs_url="/docs")
+
+
+def _ahora() -> dt.datetime:
+    """El instante de ahora, con zona. **Solo para decir hace cuánto pasó algo.**
+
+    Lo usa el ticket 24 para escribir "pedido el martes": compara el instante
+    en que alguien apretó "Enviar" contra éste, y los dos son del reloj. Ninguna
+    **fecha de venta** sale de aquí —ésas salen de `max(fecha)` del almacén—, y
+    por eso el reloj de verdad vive en `dependencias.reloj`, con los otros
+    bordes: este archivo tiene prohibido mirarlo. Es una función aparte para
+    que una prueba la fije.
+    """
+    return reloj()
 
 
 def quien(request: Request) -> str:
@@ -319,7 +344,16 @@ def pedido_sugerido(
             negocio,
             ultima,
             ventana,
-            lambda: _armar(almacen, ventana).renglones,
+            # LA MEMORIA DE LO YA PEDIDO (ticket 24) se lee DENTRO de `armar`:
+            # solo cuesta la consulta el día que la lista de verdad se arma. Y
+            # si falla, falla la lista entera — con su hueco y su motivo. Armar
+            # sin ella sería volver a proponer lo que ya viene en camino, en
+            # silencio y guardado para todo el día.
+            lambda: _armar(
+                almacen,
+                ventana,
+                memoria_de_lo_pedido(almacenamiento.lo_ya_pedido(negocio, ultima)),
+            ).renglones,
         )
     except Exception as exc:  # noqa: BLE001 — los dos bordes caídos son un hueco, no un 500
         log.exception("No se pudo abrir el pedido sugerido del %s", ultima)
@@ -383,11 +417,79 @@ def pedido_sugerido(
         )
         pedidos = None
 
+    # LO QUE VIENE EN CAMINO DE LISTAS ANTERIORES (ticket 24, casillas 2, 4 y
+    # 5). Viaja en la MISMA respuesta que la lista por la razón de siempre: dos
+    # lecturas en dos momentos pueden no coincidir. Su falla es un hueco dentro
+    # del bloque y NO tumba la lista — la lista ya está armada y guardada, y lo
+    # que se pierde es enseñar lo que viene en camino, no la protección.
+    bloque, ya_en_camino = _lo_que_viene_en_camino(
+        almacen, almacenamiento, negocio, guardado
+    )
+
     return _como_json(
         guardado,
         precios,
         _ultima_corrida(almacenamiento, negocio, guardado.pedido_sugerido_id),
         pedidos,
+        en_camino=bloque,
+        ya_en_camino=ya_en_camino,
+    )
+
+
+def _lo_que_viene_en_camino(
+    almacen: LecturaDelAlmacen,
+    almacenamiento: AlmacenamientoDelPedido,
+    negocio: str,
+    guardado: PedidoSugeridoGuardado,
+):
+    """El bloque de lo que viene en camino, y lo que ya viene de cada producto.
+
+    **Dos lecturas, y cada una falla por su lado.** Lo ya pedido sale de
+    `pedidos`; lo que se ha vendido desde entonces sale de `marts`. Si falla la
+    primera, el bloque entero es un hueco con su motivo. Si falla la segunda,
+    los renglones se enseñan igual y lo vendido dice que no se pudo leer — un
+    `null`, nunca un cero (regla 4).
+
+    La lectura de ventas **solo ocurre si hay algo en camino**, y va desde el
+    ancla más vieja hasta el último día con ventas: del orden de unos días, no
+    de los 28 del ritmo. Es la única lectura del almacén que esta pantalla hace
+    cuando la lista ya existía, y existe para decir la tercera casilla con
+    números: *eso que se vendió mientras tanto no se pierde*.
+
+    Devuelve también `ya_en_camino`, por producto: los renglones **de hoy** cuyo
+    producto viene en camino desde una lista anterior lo dicen en su fila. Es
+    el borde que la memoria no alcanza (ver `transito.frase_de_ya_en_camino`).
+    """
+    try:
+        ya_pedidos = almacenamiento.lo_ya_pedido(negocio, guardado.fecha_del_pedido)
+    except Exception as exc:  # noqa: BLE001 — sin el bloque, la lista sigue sirviendo
+        log.exception("No se pudo leer lo que viene en camino para %s", negocio)
+        return (
+            en_camino_con_hueco(
+                f"no se pudo leer lo que viene en camino ({type(exc).__name__})"
+            ),
+            {},
+        )
+
+    viajando = en_camino(ya_pedidos)
+    vendido = {}
+    if viajando:
+        try:
+            vendido = vendido_desde_que_se_pidio(
+                almacen.ventas(
+                    min(ya.retiene_desde for ya in viajando), guardado.ventana.hasta
+                ),
+                viajando,
+                hasta=guardado.ventana.hasta,
+            )
+        except Exception:  # noqa: BLE001 — lo vendido es un hueco, no un 500
+            log.exception("No se pudo leer lo vendido desde que se pidió")
+            vendido = None
+
+    ahora = _ahora()
+    return (
+        en_camino_como_json(viajando, vendido, ahora),
+        {ya.producto_id: ya for ya in viajando},
     )
 
 
@@ -1950,7 +2052,7 @@ def _mover_el_renglon(
     return {
         "ok": True,
         "pedido_sugerido_id": guardado.pedido_sugerido_id,
-        "renglon": _renglon_como_json(movido, precios),
+        "renglon": _renglon_como_json(movido, precios, ventana=guardado.ventana),
         # Los conteos salen del servidor y no de una cuenta del navegador: dos
         # pestañas abiertas en el mostrador bastan para que un número que el
         # JavaScript va sumando se separe de la verdad, y ese número es el que
@@ -2025,7 +2127,9 @@ def _mover_el_renglon(
     }
 
 
-def _armar(almacen: LecturaDelAlmacen, ventana: Ventana):
+def _armar(
+    almacen: LecturaDelAlmacen, ventana: Ventana, memoria: MemoriaDeLoPedido
+):
     """Las dos lecturas y el cálculo. Solo corre cuando la lista **no** existía.
 
     El cuerpo vive en `sugerido.armar_la_lista` desde el ticket 18, y no por
@@ -2040,8 +2144,11 @@ def _armar(almacen: LecturaDelAlmacen, ventana: Ventana):
     del YAML —`cargar()` está cacheado, así que no relee el archivo por
     petición— y se las pasa hacia adentro, porque el cálculo no abre archivos
     igual que no mira el reloj.
+
+    `memoria` es lo ya pedido (ticket 24): lo que viene en camino no se
+    propone, y lo que ya llegó trae lo que se vendió mientras venía.
     """
-    return armar_la_lista(almacen, ventana, reglas=reglas_configuradas())
+    return armar_la_lista(almacen, ventana, memoria, reglas=reglas_configuradas())
 
 
 def _como_json(
@@ -2049,6 +2156,8 @@ def _como_json(
     precios: dict | None = None,
     corrida: CorridaDelLote | None = None,
     pedidos: tuple | None = None,
+    en_camino: dict | None = None,
+    ya_en_camino: dict | None = None,
 ) -> dict:
     """La lista guardada, como la pantalla la lee.
 
@@ -2087,6 +2196,8 @@ def _como_json(
         r.renglon_id: comparar((precios or {}).get(r.renglon_id, ()), r.cantidad_a_pedir)
         for r in guardado.renglones
     }
+    por_pedido = {p.pedido_id: p for p in (pedidos or ())}
+    ahora = _ahora()
     return {
         "ok": True,
         "pedido_sugerido_id": guardado.pedido_sugerido_id,
@@ -2112,6 +2223,10 @@ def _como_json(
                 (precios or {}).get(r.renglon_id, ()),
                 comparaciones.get(r.renglon_id),
                 corrida,
+                ventana=guardado.ventana,
+                pedido=por_pedido.get(r.pedido_id),
+                ya_en_camino=ya_en_camino,
+                ahora=ahora,
             )
             for r in guardado.renglones
         ],
@@ -2217,6 +2332,11 @@ def _como_json(
         ),
         "puente": puente_como_json(puente_configurado()),
         "vistas": _vistas(),
+        # LO QUE VIENE EN CAMINO DE LISTAS ANTERIORES (ticket 24). Solo lo trae
+        # la carga de la lista: `null` en las respuestas de partir, enviar,
+        # tachar y cerrar, que no lo cambian — la pantalla conserva el de la
+        # carga en vez de leerlo otra vez por cada clic.
+        "en_camino": en_camino,
     }
 
 
@@ -2361,7 +2481,15 @@ def _corrida_como_json(corrida: CorridaDelLote | None) -> dict | None:
 
 
 def _renglon_como_json(
-    renglon, precios=(), comparacion=None, corrida: CorridaDelLote | None = None
+    renglon,
+    precios=(),
+    comparacion=None,
+    corrida: CorridaDelLote | None = None,
+    *,
+    ventana: Ventana | None = None,
+    pedido: PedidoGuardado | None = None,
+    ya_en_camino: dict | None = None,
+    ahora: dt.datetime | None = None,
 ) -> dict:
     """Un renglón guardado, como la pantalla lo lee.
 
@@ -2484,7 +2612,51 @@ def _renglon_como_json(
         # columna: un renglón pertenece a un solo pedido.
         "pedido_id": renglon.pedido_id,
         **_porque_no_hay_lectura_como_json(renglon, comparacion, precios, corrida),
+        **_transito_del_renglon_como_json(renglon, ventana, pedido, ya_en_camino, ahora),
     }
+
+
+def _transito_del_renglon_como_json(
+    renglon, ventana, pedido, ya_en_camino, ahora
+) -> dict:
+    """Las tres frases del ticket 24 que cuelgan de un renglón de la lista.
+
+    - **`frase_del_transito`** — el renglón de hoy que ya se envió: *"Pedido
+      hoy a NADRO, sin recibir."* Necesita su pedido (a quién y cuándo); sin él
+      va `null` y la pantalla dice lo que ya decía desde el ticket 21.
+    - **`frase_de_la_ventana`** — el renglón cuyas ventas no empiezan donde
+      empieza la lista: trae lo que se vendió mientras venía en camino, o se
+      salta lo que ya venía pedido. Sin esta frase, "pide 4" en una lista de
+      un día con una venta no se puede verificar.
+    - **`ya_viene_en_camino`** — un renglón abierto de hoy cuyo producto ya se
+      pidió desde una lista anterior. **La llave solo va cuando se calculó**
+      (la carga de la lista): las rutas de un solo renglón no la mandan, y la
+      pantalla conserva la de la carga.
+
+    Todas se componen en `transito.py`, en Python y con pruebas: el JavaScript
+    las pinta y no decide ni una palabra (la lección del ticket 15).
+    """
+    ahora = ahora or _ahora()
+    salida: dict = {
+        "frase_del_transito": (
+            frase_del_transito(pedido.nombre, pedido.enviado_en, ahora)
+            if renglon.esta_en_transito and pedido is not None
+            else None
+        ),
+        "frase_de_la_ventana": (
+            None
+            if ventana is None
+            else frase_de_la_ventana_propia(renglon.propuesto.ventas_desde, ventana)
+        ),
+    }
+    if ya_en_camino is not None:
+        ya = ya_en_camino.get(renglon.propuesto.producto_id)
+        salida["ya_viene_en_camino"] = (
+            frase_de_ya_en_camino(ya, ahora)
+            if ya is not None and renglon.se_puede_repartir
+            else None
+        )
+    return salida
 
 
 def _porque_no_hay_lectura_como_json(

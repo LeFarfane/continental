@@ -443,6 +443,26 @@
   .descartados li { flex-wrap: wrap; gap: .3rem .7rem; }
   .descartados .quien { color: var(--tenue); font-size: .8rem; flex: 1 1 100%; }
   .descartados .accion { margin-left: auto; }
+  /* EN TRÁNSITO (ticket 24, casilla 4): ATENUADO, NO ESCONDIDO. Un hueco
+     visible es información: lo que viene en camino tiene que seguir leyéndose,
+     con su frase entera, porque es la razón por la que no está en la lista.
+     Opacidad y no `display: none`, y una clase —no un color suelto— para que
+     se distinga también sin distinguir colores. */
+  tr.transito, li.transito { opacity: .62; }
+  tr.transito:hover, li.transito:hover { opacity: 1; }
+  /* El bloque de lo que viene de listas anteriores. Debajo de la tabla y
+     siempre visible con una lista: un bloque vacío dice "nada en camino", y
+     callar dejaría el silencio con dos significados. */
+  .en-camino { margin: 1.25rem 0 0; border-top: 1px dashed var(--linea); padding-top: .9rem; }
+  .en-camino .resumen { margin: 0 0 .35rem; color: var(--tenue); font-size: .9rem; }
+  .en-camino .advertencia { margin: 0 0 .6rem; color: var(--aviso); font-size: .82rem; }
+  .en-camino .resumen.mal { color: var(--mal); }
+  .en-camino ul { margin: .35rem 0 0; }
+  .en-camino li { flex-wrap: wrap; gap: .1rem .7rem; }
+  .en-camino .que { flex: 1 1 60%; }
+  .en-camino .cuanto { color: var(--tenue); font-variant-numeric: tabular-nums; }
+  .en-camino .cuando, .en-camino .vendido-desde { flex: 1 1 100%; font-size: .82rem; }
+  .en-camino .vendido-desde { color: var(--tenue); }
   /* Existencia y cobertura: a la derecha y con cifras de ancho fijo, que es lo
      que deja comparar dos renglones sin leerlos. */
   td.numero, th.numero { text-align: right; width: 6.5rem; }
@@ -565,6 +585,12 @@
          primero se decide a quién se le pide cada renglón y después se mira en
          cuántos pedidos queda y cuánto suma cada uno. Lo de dentro se pinta
          entero desde el servidor: ni un total se calcula aquí. -->
+    <!-- LO QUE VIENE EN CAMINO DE LISTAS ANTERIORES (ticket 24). Pegado a la
+         tabla porque explica lo que NO está en ella: esos productos se
+         vendieron y no se proponen porque ya se pidieron. Atenuado, no
+         escondido. Se pinta una sola vez, al cargar: partir, enviar y tachar
+         no lo cambian. -->
+    <div class="en-camino" id="en-camino" hidden></div>
     <div class="particion" id="particion" hidden></div>
     <details class="descartados" id="descartados" hidden>
       <summary id="descartados-resumen"></summary>
@@ -1125,6 +1151,8 @@ const celdaDePrecios = (r, acciones) => {
 
 const renglon = (r, acciones) => {
   const tr = document.createElement('tr');
+  // YA SE PIDIÓ (ticket 24, casilla 4): atenuado y no escondido.
+  if (r.esta_en_transito) tr.classList.add('transito');
 
   const clave = document.createElement('td');
   clave.className = 'clave';
@@ -1164,11 +1192,38 @@ const renglon = (r, acciones) => {
   // mirar qué pidió. Lo que cambia es que se dice —y que deja de poder
   // tocarse—: `en tránsito` significa "ya se le pidió a un proveedor y todavía
   // no llega" (CONTEXT.md), y de ahí sale que no se vuelva a proponer mañana.
+  //
+  // Desde el ticket 24 la frase llega HECHA de Python —"Pedido hoy a NADRO,
+  // sin recibir."—, con a quién y cuándo. Lo de abajo es solo lo que se dice
+  // cuando el servidor no la mandó (una respuesta de un solo renglón): la
+  // misma de antes, que no afirma ni proveedor ni día.
   if (r.esta_en_transito) {
     const marca = document.createElement('span');
     marca.className = 'marca tenue';
-    marca.textContent = 'Ya se pidió: en tránsito. No se vuelve a proponer '
-      + 'mientras esté así.';
+    marca.textContent = r.frase_del_transito
+      || ('Ya se pidió: en tránsito. No se vuelve a proponer '
+          + 'mientras esté así.');
+    producto.append(marca);
+  }
+
+  // LO QUE SE VENDIÓ MIENTRAS VENÍA EN CAMINO (ticket 24, casilla 3). El
+  // renglón que vuelve después de recibirse trae ventas de antes de la lista,
+  // y sin decirlo "pide 4" en una lista de un día con una venta no se podría
+  // verificar. La frase es de Python.
+  if (r.frase_de_la_ventana) {
+    const marca = document.createElement('span');
+    marca.className = 'marca tenue';
+    marca.textContent = r.frase_de_la_ventana;
+    producto.append(marca);
+  }
+
+  // EL BORDE QUE LA MEMORIA NO ALCANZA (ticket 24): este producto ya viene en
+  // camino desde una lista anterior que se envió DESPUÉS de armar ésta. La
+  // lista guardada no se recalcula; se avisa en ámbar, con la frase de Python.
+  if (r.ya_viene_en_camino) {
+    const marca = document.createElement('span');
+    marca.className = 'marca';
+    marca.textContent = r.ya_viene_en_camino;
     producto.append(marca);
   }
 
@@ -1600,6 +1655,24 @@ async function cargarPedido() {
     corte.append(' ', cuantos);
   }
 
+  // LO QUE SOLO TRAE LA CARGA (ticket 24). Partir, enviar y tachar devuelven
+  // la lista ENTERA y la pantalla la sustituye, pero esas respuestas no leen
+  // lo que viene en camino —no lo cambian—, así que el bloque y los avisos de
+  // "ya viene en camino" se conservan de la carga en vez de borrarse al primer
+  // clic. Esto copia datos, no compone ni una palabra.
+  const conservarLoDeLaCarga = (nuevo, anterior) => {
+    if (!nuevo.en_camino) nuevo.en_camino = anterior.en_camino;
+    const avisos = new Map((anterior.renglones || [])
+      .filter(r => r.ya_viene_en_camino)
+      .map(r => [r.renglon_id, r.ya_viene_en_camino]));
+    (nuevo.renglones || []).forEach(r => {
+      if (!('ya_viene_en_camino' in r) && avisos.has(r.renglon_id)) {
+        r.ya_viene_en_camino = avisos.get(r.renglon_id);
+      }
+    });
+    return nuevo;
+  };
+
   // Qué hacer cuando la lista se cierre. Se declara aquí, vacío, porque
   // `pintarCierre` va ANTES de que exista `repintar` —una lista sin renglones
   // también se puede cerrar y sale por la puerta de abajo— y llamar a `repintar`
@@ -1609,6 +1682,10 @@ async function cargarPedido() {
 
   // Antes de cualquier salida temprana: una lista sin renglones también se
   // guardó, también tiene hora de armado y también se puede cerrar.
+  //
+  // Y lo que viene en camino (ticket 24) también va antes: un día sin nada que
+  // reponer puede tener, igual, tres renglones de ayer que no han llegado.
+  pintarEnCamino(datos.en_camino);
   pintarCabecera(datos);
   pintarCierre(datos, (boton, detalle) =>
     cerrarLista(datos.pedido_sugerido_id, boton, detalle, (cerrada) => alCerrarse(cerrada)));
@@ -1727,7 +1804,13 @@ async function cargarPedido() {
   // nuevo, ni la firma ni la hora.
   const aplicar = (respuesta) => {
     const i = datos.renglones.findIndex(r => r.renglon_id === respuesta.renglon.renglon_id);
-    if (i >= 0) datos.renglones[i] = respuesta.renglon;
+    if (i >= 0) {
+      // El aviso de "ya viene en camino" solo lo trae la carga (ticket 24).
+      if (!('ya_viene_en_camino' in respuesta.renglon)) {
+        respuesta.renglon.ya_viene_en_camino = datos.renglones[i].ya_viene_en_camino;
+      }
+      datos.renglones[i] = respuesta.renglon;
+    }
     datos.descartados = respuesta.descartados;
     datos.tiene_renglones_sin_atender = respuesta.tiene_renglones_sin_atender;
     // El conteo viene recalculado porque descartar y devolver lo mueven: el
@@ -1842,7 +1925,7 @@ async function cargarPedido() {
       return;
     }
 
-    datos = respuesta;
+    datos = conservarLoDeLaCarga(respuesta, datos);
     if (Array.isArray(datos.puente)) PROVEEDORES = datos.puente;
     conteoEnvejecido = false;
     repintar();
@@ -1889,7 +1972,7 @@ async function cargarPedido() {
       return;
     }
 
-    datos = respuesta;
+    datos = conservarLoDeLaCarga(respuesta, datos);
     if (Array.isArray(datos.puente)) PROVEEDORES = datos.puente;
     conteoEnvejecido = false;
     repintar();
@@ -1946,7 +2029,7 @@ async function cargarPedido() {
       return;
     }
 
-    datos = respuesta;
+    datos = conservarLoDeLaCarga(respuesta, datos);
     if (Array.isArray(datos.puente)) PROVEEDORES = datos.puente;
     repintar();
 
@@ -2212,6 +2295,62 @@ async function cargarPedido() {
 // "el interruptor los escondió" de "no se vendieron": son dos cosas que en
 // pantalla se ven idénticas —el renglón no está— y solo una se arregla
 // moviendo el interruptor.
+// LO QUE VIENE EN CAMINO DE LISTAS ANTERIORES (ticket 24, casillas 2, 4 y 5).
+//
+// Ninguna frase se compone aquí: el encabezado, "Pedido el martes a NADRO, sin
+// recibir.", lo vendido desde entonces y la advertencia de que esto solo sabe
+// de lo que pasó por Continental llegan hechos de `transito.py`, con pruebas.
+// Aquí se acomodan.
+//
+// Se pinta SIEMPRE que hay lista, también sin nada en camino: "nada viene en
+// camino" es un dato, y la advertencia importa justo entonces — un bloque vacío
+// se lee "no hay nada pedido" y puede que sí, capturado por fuera.
+//
+// Un servidor viejo que no mande el bloque no pinta nada, en vez de inventar
+// "nada en camino". Falla hacia no decir, nunca hacia decir de más.
+const pintarEnCamino = (en_camino) => {
+  const caja = document.getElementById('en-camino');
+  if (!en_camino) { caja.hidden = true; caja.replaceChildren(); return; }
+
+  const resumen = document.createElement('p');
+  resumen.className = 'resumen' + (en_camino.ok === false ? ' mal' : '');
+  resumen.textContent = en_camino.frase
+    + (en_camino.ok === false && en_camino.detalle ? ' (' + en_camino.detalle + ')' : '');
+
+  const advertencia = document.createElement('p');
+  advertencia.className = 'advertencia';
+  advertencia.textContent = en_camino.advertencia;
+
+  const lista = document.createElement('ul');
+  (en_camino.renglones || []).forEach(v => {
+    const li = document.createElement('li');
+    li.className = 'transito';
+    const que = document.createElement('span');
+    que.className = 'que';
+    que.textContent = (v.clave ? v.clave + ' · ' : '') + v.descripcion;
+    const cuanto = document.createElement('span');
+    cuanto.className = 'cuanto';
+    cuanto.textContent = plural(v.cantidad, 'pieza', 'piezas');
+    const cuando = document.createElement('span');
+    cuando.className = 'cuando';
+    cuando.textContent = v.frase;
+    // La firma —quién, a qué hora, de qué lista— a la vista y no en un
+    // `title`, que en una pantalla táctil no se ve nunca. Hecha en Python: la
+    // primera versión se armaba aquí y escribía "a.m..", igual que en el 21.
+    const firma = document.createElement('span');
+    firma.className = 'vendido-desde';
+    firma.textContent = v.firma || '';
+    const vendido = document.createElement('span');
+    vendido.className = 'vendido-desde';
+    vendido.textContent = v.frase_de_lo_vendido;
+    li.append(que, cuanto, cuando, vendido, firma);
+    lista.append(li);
+  });
+
+  caja.replaceChildren(resumen, advertencia, ...(lista.children.length ? [lista] : []));
+  caja.hidden = false;
+};
+
 const pintarRenglones = (visibles, total, otra, descartados, acciones) => {
   const escondidos = total - visibles.length;
   // LOS QUE YA SE PIDIERON NO SON "POR ATENDER" (ticket 21). Siguen en la

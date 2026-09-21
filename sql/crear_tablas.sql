@@ -530,6 +530,11 @@ CREATE TABLE IF NOT EXISTS pedidos.renglon (
     elegido_en           timestamptz,
     capturado_por        text,
     capturado_en         timestamptz,
+    -- Desde qué día se sumaron sus ventas cuando NO es el principio de la
+    -- ventana de su lista (ticket 24, ADR 0012, migración 0008). NULL en casi
+    -- todos. Sin CHECK: la regla que lo relaciona con la ventana es de OTRA
+    -- tabla, y un CHECK no puede mirar otra fila.
+    ventas_desde         date,
 
     CONSTRAINT pk_renglon
         PRIMARY KEY (renglon_id),
@@ -864,6 +869,16 @@ COMMENT ON COLUMN pedidos.renglon.capturado_por IS
 
 COMMENT ON COLUMN pedidos.renglon.capturado_en IS
     'Cuándo lo dijo, instante con zona. NULL = nadie lo ha tachado.';
+
+-- LA VENTANA PROPIA DEL RENGLÓN QUE VUELVE (ticket 24, ADR 0012). Lo que se
+-- vendió mientras un producto venía en camino no se pierde: al recibirlo, la
+-- siguiente lista lo cuenta desde el día siguiente al que repuso su pedido. El
+-- renglón lo dice aquí para que "se vendieron tres, se piden tres" se pueda
+-- seguir verificando mirando la pantalla.
+COMMENT ON COLUMN pedidos.renglon.ventas_desde IS
+    'Desde qué día se sumaron las ventas de este renglón cuando no es el '
+    'principio de la ventana de su lista: el producto venía en camino y ya '
+    'llegó (ADR 0012). NULL = desde ventas_consideradas_desde de su lista.';
 
 
 -- --------------------------------------------------------------------------

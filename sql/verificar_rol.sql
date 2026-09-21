@@ -607,6 +607,25 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
          END),
  NULL),
 
+-- LA VENTANA PROPIA DEL RENGLÓN (ticket 24, ADR 0012). Sin la columna -- si la
+-- migración 0008 no se corrió-- la primera lectura de la lista rebota en atlas
+-- con "column ventas_desde does not exist", porque `_LEER_RENGLONES` y
+-- `_LO_YA_PEDIDO` la nombran: la pantalla entera se queda en "no se pudo
+-- armar el pedido sugerido". Es `date` y admite nulos: NULL es "desde el
+-- principio de la lista", que es la verdad de todo renglón anterior a esto.
+(30,
+ 'El renglón que vuelve dice desde qué día cuenta sus ventas',
+ 'date, admite nulos',
+ (SELECT coalesce(
+           (SELECT format_type(a.atttypid, a.atttypmod)
+                   || CASE WHEN a.attnotnull THEN ', NOT NULL' ELSE ', admite nulos' END
+              FROM pg_attribute a
+             WHERE a.attrelid = to_regclass('pedidos.renglon')
+               AND NOT a.attisdropped
+               AND a.attname = 'ventas_desde'),
+           'NO EXISTE ventas_desde')),
+ NULL),
+
 -- AVISO y no MAL: una tabla temporal vive en la sesión, no puede leer nada que
 -- el rol no pueda leer ya, y desaparece al desconectarse. El permiso llega por
 -- el TEMPORARY que PUBLIC tiene sobre la base por omisión, y quitarlo sería

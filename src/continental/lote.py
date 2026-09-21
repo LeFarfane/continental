@@ -121,6 +121,7 @@ from continental.doyle import ClienteDeDoyle
 from continental.latido import ABAJO, ARRIBA, ResultadoDelLatido, mandar_el_latido
 from continental.precios import SIN_TIEMPO, explicacion_del_motivo
 from continental.sugerido import armar_la_lista
+from continental.transito import memoria_de_lo_pedido
 
 log = logging.getLogger("continental")
 
@@ -1077,8 +1078,18 @@ def correr_el_lote(
             ventana,
             # El catálogo ya está leído: se lo pasamos para no recorrer las
             # 3,429 filas dos veces en la misma corrida.
+            #
+            # Y LA MEMORIA DE LO YA PEDIDO (ticket 24), leída aquí dentro igual
+            # que en la pantalla: lo que viene en camino no se propone, y lo
+            # que ya llegó trae lo que se vendió mientras venía. Si no se
+            # puede leer, la corrida se corta con su motivo — armar sin ella
+            # dejaría guardada toda la noche una lista que pide dos veces.
             lambda: armar_la_lista(
-                almacen, ventana, reglas=reglas, catalogo=catalogo
+                almacen,
+                ventana,
+                memoria_de_lo_pedido(almacenamiento.lo_ya_pedido(negocio, ultima)),
+                reglas=reglas,
+                catalogo=catalogo,
             ).renglones,
         )
 

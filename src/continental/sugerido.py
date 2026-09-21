@@ -43,7 +43,7 @@ from __future__ import annotations
 import datetime as dt
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from continental.almacen import LecturaDelAlmacen, LineaDeVenta, Producto
@@ -57,7 +57,10 @@ if TYPE_CHECKING:  # pragma: sin cobertura — solo para el tipo de `armar_la_li
     # `almacenamiento` importa de aquí, así que importarlo de vuelta en tiempo
     # de ejecución sería un ciclo. Con `from __future__ import annotations` las
     # anotaciones no se evalúan, así que esto alcanza para que el tipo se lea.
+    # `transito` importa `almacenamiento`, así que está en el mismo caso: aquí
+    # solo se le llaman métodos a la memoria que llega por argumento.
     from continental.almacenamiento import Ventana
+    from continental.transito import MemoriaDeLoPedido
 
 #: Decimales a los que se redondea la suma de piezas antes de subirla al entero
 #: siguiente. `1.1 + 2.2 + 0.7` da `4.000000000000001` en coma flotante, y sin
@@ -142,6 +145,21 @@ class Renglon:
     - `dias_de_cobertura is None` — no se sabe cuánto dura: o no se sabe qué
       queda, o no se vendió en la ventana del ritmo y no hay entre qué dividir.
       **Nunca cero**, que se leería "agotado" justo cuando es lo contrario.
+
+    **`ventas_desde` es desde qué día se sumaron las ventas de ESTE renglón,
+    cuando no es el principio de la ventana de su lista** (ticket 24, ADR
+    0012). `None` —el caso de casi todos— quiere decir "desde donde empieza la
+    lista". Deja de serlo en un solo caso: el producto venía en camino y ya se
+    recibió, así que su cuenta arranca el día siguiente al que repuso aquel
+    pedido. Puede quedar **antes** de la ventana —trae lo vendido mientras
+    venía en camino, que de otro modo se perdería al avanzar el corte— o
+    **después** —la lista de aquel pedido no se cerró, y lo de esos días ya
+    estaba pedido—.
+
+    Se guarda con el renglón por la razón de todo este dataclass: "se vendieron
+    tres, se piden tres" es aritmética que el encargado verifica de un vistazo,
+    y un renglón que pide 4 en una lista de un solo día con 1 venta no se
+    podría verificar sin saber que sus ventas empiezan el martes.
     """
 
     producto_id: int
@@ -153,6 +171,7 @@ class Renglon:
     existencia: float | None
     dias_de_cobertura: float | None
     clasificacion: str
+    ventas_desde: dt.date | None = None
 
     @property
     def esta_agotado(self) -> bool:
@@ -458,6 +477,7 @@ def _piezas_a_pedir(piezas: float) -> int:
 def armar_la_lista(
     almacen: LecturaDelAlmacen,
     ventana: "Ventana",
+    memoria: "MemoriaDeLoPedido",
     reglas: ReglasDeClasificacion | None = None,
     catalogo: Sequence[Producto] | None = None,
 ) -> PedidoSugerido:
@@ -493,6 +513,25 @@ def armar_la_lista(
     El `- 1` es el rango completo menos el propio día: de `hasta - 27` a
     `hasta` son 28 días, porque el almacén incluye los dos extremos.
 
+    ## La memoria de lo ya pedido (ticket 24, ADR 0012)
+
+    `memoria` es **obligatoria y sin valor por omisión, a propósito**: armar
+    sin ella es volver a proponer lo que ya se le pidió a un proveedor, y un
+    `None` por omisión lo haría en silencio el día que alguien agregue un
+    tercer lugar que arma la lista. Quien de verdad no tiene nada pedido pasa
+    `MemoriaDeLoPedido()`, vacía, y eso se lee en la llamada.
+
+    Hace tres cosas, y ninguna es un filtro nuevo sobre la reposición 1 a 1:
+
+    - lo que **viene en camino** no se propone (primera casilla del ticket);
+    - lo que **ya se recibió** se cuenta desde el día siguiente al que repuso su
+      pedido, aunque eso quede antes de la ventana —las ventas que se hicieron
+      mientras venía en camino **vuelven**, que es la tercera casilla— o
+      después —lo de esos días ya venía pedido—;
+    - y por eso **la lectura se estira** hasta ese día, y sigue siendo una.
+
+    El renglón que sale con una ventana propia lo dice en `ventas_desde`.
+
     `catalogo` se puede pasar ya leído, y ése es el único argumento nuevo
     respecto de lo que hacía la pantalla. El lote nocturno lee el catálogo una
     vez —lo necesita además para la clase ABC del orden de importancia— y
@@ -500,13 +539,22 @@ def armar_la_lista(
     corrida. `None` es "léelo tú", que es lo que hace la pantalla.
     """
     desde_del_ritmo = ventana.hasta - dt.timedelta(days=DIAS_DE_RITMO - 1)
-    leidas = almacen.ventas(min(ventana.desde, desde_del_ritmo), ventana.hasta)
+    leidas = almacen.ventas(
+        min(memoria.desde_de_la_lectura(ventana), desde_del_ritmo), ventana.hasta
+    )
     if catalogo is None:
         catalogo = almacen.catalogo()
 
-    return calcular_pedido_sugerido(
-        ventas=[v for v in leidas if ventana.desde <= v.fecha <= ventana.hasta],
+    lista = calcular_pedido_sugerido(
+        ventas=memoria.recortar(leidas, ventana),
         catalogo=catalogo,
         ventas_del_ritmo=[v for v in leidas if v.fecha >= desde_del_ritmo],
         reglas=reglas,
+    )
+    return PedidoSugerido(
+        fecha_de_ventas=lista.fecha_de_ventas,
+        renglones=tuple(
+            replace(r, ventas_desde=memoria.ventas_desde(r.producto_id, ventana))
+            for r in lista.renglones
+        ),
     )

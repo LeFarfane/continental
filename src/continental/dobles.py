@@ -29,8 +29,11 @@ from continental.almacenamiento import (
     RENGLON_ABIERTO,
     RENGLON_DESCARTADO,
     RENGLON_EN_TRANSITO,
+    ESTADOS_QUE_CIERRAN_EL_TRANSITO,
+    ESTADOS_YA_PEDIDOS,
     VENCIDO,
     CorridaDelLote,
+    LoYaPedido,
     PedidoEnviado,
     PedidoSugeridoDuplicado,
     PedidoSugeridoGuardado,
@@ -44,6 +47,7 @@ from continental.almacenamiento import (
     columnas_del_precio,
     columnas_del_renglon,
     corrida_desde_columnas,
+    lo_ya_pedido_desde_columnas,
     precio_desde_columnas,
     renglon_guardado_desde_columnas,
     pedido_desde_columnas,
@@ -494,6 +498,79 @@ class AlmacenamientoFalso:
             and lista["fecha_del_pedido"] < antes_de
         ]
         return min(pisos) if pisos else None
+
+    def lo_ya_pedido(
+        self, negocio: str, antes_de: dt.date
+    ) -> tuple[LoYaPedido, ...]:
+        """`_LO_YA_PEDIDO`, en memoria y con las mismas condiciones (ticket 24).
+
+        - **Todo lo `en tránsito`** de listas anteriores a `antes_de`, sin más
+          condición.
+        - **Lo recibido que nadie ha atendido**: el `NOT EXISTS` de allá. Una
+          lista posterior (y anterior a `antes_de`) lo atendió si está
+          **cerrada** y trae el producto, o si trae el producto **ya pedido**
+          otra vez.
+
+        El negocio se mira en la lista **y** en el renglón, que son las dos
+        uniones del lado real; y el pedido se busca con su negocio, que es la
+        tercera. En el mismo orden: por día de la lista y luego por renglón.
+        """
+        self._revisar()
+        propias = sorted(
+            (
+                lista
+                for lista in self.listas
+                if lista["negocio"] == negocio and lista["fecha_del_pedido"] < antes_de
+            ),
+            key=lambda lista: lista["fecha_del_pedido"],
+        )
+
+        def atendido_despues(producto_id: int, fecha: dt.date) -> bool:
+            return any(
+                otra["fecha_del_pedido"] > fecha
+                and fila["negocio"] == negocio
+                and fila["producto_id"] == producto_id
+                and (otra["estado"] == CERRADO or fila["estado"] in ESTADOS_YA_PEDIDOS)
+                for otra in propias
+                for fila in otra["renglones"]
+            )
+
+        resultado = []
+        for lista in propias:
+            for fila in sorted(lista["renglones"], key=lambda f: f["renglon_id"]):
+                if fila["negocio"] != negocio:
+                    continue
+                if fila["estado"] == RENGLON_EN_TRANSITO:
+                    pass
+                elif fila["estado"] in ESTADOS_QUE_CIERRAN_EL_TRANSITO:
+                    if atendido_despues(fila["producto_id"], lista["fecha_del_pedido"]):
+                        continue
+                else:
+                    continue
+                pedido = next(
+                    (
+                        p
+                        for p in self.pedidos
+                        if p["pedido_id"] == fila.get("pedido_id")
+                        and p["negocio"] == negocio
+                    ),
+                    None,
+                )
+                resultado.append(
+                    lo_ya_pedido_desde_columnas(
+                        {
+                            **fila,
+                            "fecha_del_pedido": lista["fecha_del_pedido"],
+                            "ventas_consideradas_hasta": lista[
+                                "ventas_consideradas_hasta"
+                            ],
+                            "proveedor": pedido["proveedor"] if pedido else None,
+                            "enviado_por": pedido.get("enviado_por") if pedido else None,
+                            "enviado_en": pedido.get("enviado_en") if pedido else None,
+                        }
+                    )
+                )
+        return tuple(resultado)
 
     # ----------------------------------------------------------- escritura
 
