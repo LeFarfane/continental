@@ -510,6 +510,33 @@ pedido antes de poner sus CHECK. No crea tabla ni toca `pedidos.pedido`:
 **`crear_rol.sql` no se vuelve a correr.** `verificar_rol.sql` gana la 36 y la
 37.
 
+**Y desde el ticket 28 la pantalla se lee: una hoja de estilos propia, claro y
+oscuro, 40 renglones sin cansarse y el teléfono sin desplazar hacia los lados.**
+`index.html` son ahora **tres archivos** en `src/continental/web/static/`
+—`index.html` (el marcado), `continental.css` y `continental.js`—, servidos tal
+cual, sin compilar nada y sin nada de fuera. **Ningún color se escribe fuera de
+las dos listas de `:root`** de la hoja, y el oscuro redefine las once. A 1366 px
+la tabla de 47 renglones del recorrido pasó de 19,306 px de alto a 8,962 (de
+409 a 189 px por renglón): cada proveedor es una línea, con su marca, su
+diferencia o el motivo de su hueco en una cuarta columna y no colgando debajo.
+La tabla se apila por debajo de **76rem** y no de 34: a 768 px la de antes
+desplazaba la página 190 px. Lo que se distinguía solo por color lleva además
+una forma —barra continua lo agotado, punteada lo que está en tránsito, doble
+lo atrasado; recuadro el ahorro, punteado lo que cuesta de más; un signo en
+cada marca (`?` sin clasificar, `!` hay que mirar, `✓` punteado probablemente
+recibido)—. **El comportamiento no cambió**: el JavaScript es el del 27 salvo
+clases CSS y un `append` (ver el ticket).
+
+**Dos cosas del 28 que conviene no redescubrir.** (1) **Ninguna prueba lee
+`index.html` a secas**: todas piden `conftest.pantalla_completa()` o
+`pantalla_servida(cliente)`, que arman la pantalla como era antes —la hoja y el
+script dentro, en su sitio—. Una guardia de "el JavaScript NO compone esta
+frase" que leyera solo el HTML pasaría por vacío; `test_pasada_visual` lo
+vigila, y el ayudante exige exactamente una hoja y un script. (2) **`/` y
+`/static/*` salen con `Cache-Control: no-cache`** (`EstaticosQueSeRevalidan`
+en `web/app.py`): sin eso un despliegue podía dejar al mostrador con el HTML
+nuevo y el JavaScript de ayer. El navegador revalida y Starlette contesta 304.
+
 **Lo sugerido NO se guarda y lo decidido SÍ, y ésa es la decisión del ticket.**
 Es la misma pregunta que el 11 resolvió con `cantidad_propuesta` /
 `cantidad_final`, y **aquí la respuesta es distinta a propósito**: la sugerencia
@@ -550,7 +577,19 @@ python iniciar.py     # http://127.0.0.1:8585
 python -m continental.verificar   # los datos de producción, no el código (ticket 17)
 python -m continental.lote        # el lote nocturno, a mano (ticket 18)
 python -m continental.lote --tope-minutos 5   # ...con tope corto, para mirarlo
-pytest                # 1395 pruebas, 0 saltadas, 4.87-5.10 s (2026-09-21, ticket 27)
+pytest                # 1442 pruebas, 0 saltadas, 5.20-5.26 s (2026-09-21, ticket 28)
+                      # 1395 en el 27. Las 47 nuevas son todas de
+                      # `test_pasada_visual.py` (los tres archivos y nada de
+                      # fuera, los colores solo en `:root`, el oscuro completo,
+                      # el fondo explícito, las cifras a la derecha, 16
+                      # distinciones que no dependen solo del color, el apilado
+                      # bajo 76rem, `no-cache` y el 304, y que ninguna prueba lea
+                      # `index.html` a secas). Veinte archivos de pruebas que
+                      # leían la pantalla pasaron a `conftest.pantalla_completa`
+                      # / `pantalla_servida` SIN tocar una sola afirmación.
+                      # NINGUNA TOCA POSTGRES ni abre un navegador.
+                      #
+                      # 1395 pruebas, 0 saltadas, 4.87-5.10 s (2026-09-21, ticket 27)
                       # 1285 en el 26. Las 110 nuevas son 109 de `test_parcial.py`
                       # (lo puro: cuánto faltó, cómo vuelve —por piezas, aparte
                       # de lo vendido—, las piezas escritas, el estado del pedido
@@ -729,6 +768,10 @@ pytest                # 1395 pruebas, 0 saltadas, 4.87-5.10 s (2026-09-21, ticke
 | `sql/migraciones/` | **once** archivos numerados: lo que le falta a una base donde las tablas YA existen: `crear_tablas.sql` usa `CREATE TABLE IF NOT EXISTS` y calla si la tabla ya está con otra forma. También a mano y con credenciales de dueño |
 | `config/continental.yml` | puertos de los módulos y los parámetros del pedido |
 | `src/continental/web/app.py` | `/api/salud`, `/api/modulos`, el pedido sugerido y su cierre, la portada |
+| `src/continental/web/static/index.html` | la pantalla, solo el marcado: enlaza la hoja y el script (ticket 28) |
+| `src/continental/web/static/continental.css` | la hoja de estilos. **Los colores solo en las dos listas de `:root`** (claro y oscuro); la tabla se apila por debajo de 76rem. El porqué de cada regla va en su comentario |
+| `src/continental/web/static/continental.js` | todo el JavaScript de la pantalla. Pinta lo que el servidor manda hecho: **no compone frases que afirman** (lección de los tickets 15 y 21) |
+| `tests/conftest.py` | los dobles y, desde el 28, `pantalla_completa()` / `pantalla_servida()`: la pantalla entera tal como la ve el navegador, que es lo único que las pruebas de la pantalla leen |
 | `src/continental/almacenamiento.py` | donde el pedido sugerido se guarda: el `Protocol`, el SQL real y las reglas de la tabla en un solo lugar |
 | `src/continental/precios.py` | funciones puras: lo que Doyle contestó + la clave buscada -> precio `Decimal` o motivo de rechazo. Ahí vive `emparejar`, la regla por proveedor. No toca la red ni el reloj |
 | `src/continental/consultas.py` | quién espera a Doyle y dónde queda el resultado si nadie está mirando |

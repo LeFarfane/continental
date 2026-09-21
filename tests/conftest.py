@@ -395,6 +395,9 @@ qué más estaba cargando la torre, y el volcado real con
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -407,6 +410,78 @@ from continental.web.dependencias import (
     obtener_consultas,
     obtener_doyle,
 )
+
+
+# --------------------------------------------------------------- la pantalla
+#
+# DESDE EL TICKET 28 LA PANTALLA SON TRES ARCHIVOS: `index.html`, la hoja de
+# estilos `continental.css` y el JavaScript `continental.js`. Hasta el 27 era
+# uno solo, y más de cuarenta pruebas leían ese archivo —o lo pedían a `/`—
+# para afirmar dos clases de cosas: que algo ESTÁ (una ruta, una frase que
+# llega hecha de Python, una regla de CSS) y que algo NO está (una frase que el
+# JavaScript no puede componer, un cálculo que no puede hacer).
+#
+# Las dos se debilitarían en silencio si siguieran leyendo solo `index.html`:
+# lo que "está" se iría a otro archivo y la prueba se pondría roja —eso es
+# ruidoso y no preocupa—, pero lo que "no está" se volvería verdad por vacío,
+# porque el texto que revisa ya no trae ni el CSS ni el JavaScript. Por eso
+# ninguna prueba lee `index.html` a secas: todas piden **la pantalla entera**,
+# armada como la ve el navegador —la hoja y el script puestos en el mismo sitio
+# donde estaban cuando iban dentro—, y así cada guardia sigue revisando
+# exactamente el mismo texto que revisaba antes de separar.
+
+ESTATICOS = Path(__file__).resolve().parents[1] / "src" / "continental" / "web" / "static"
+
+#: Cómo se enlazan los dos archivos. Se buscan con una expresión y no con la
+#: etiqueta escrita a mano para que `pantalla_servida` pida la MISMA ruta que
+#: pide el navegador, sea cual sea.
+_HOJA = re.compile(r'<link rel="stylesheet" href="([^"]+)">')
+_SCRIPT = re.compile(r'<script src="([^"]+)"></script>')
+
+
+def _armar(html: str, leer) -> str:
+    """El HTML con su hoja y su script puestos donde el navegador los pone.
+
+    Exige que haya **exactamente una** hoja y **exactamente un** script: si
+    alguien agrega un tercer archivo, esta función se pone roja en vez de
+    dejarlo fuera de todas las guardias sin avisar.
+    """
+    hojas = _HOJA.findall(html)
+    scripts = _SCRIPT.findall(html)
+    assert len(hojas) == 1, f"la pantalla enlaza {len(hojas)} hojas de estilo y no una"
+    assert len(scripts) == 1, f"la pantalla enlaza {len(scripts)} scripts y no uno"
+    html = _HOJA.sub(lambda m: "<style>\n" + leer(m.group(1)) + "</style>", html)
+    return _SCRIPT.sub(lambda m: "<script>\n" + leer(m.group(1)) + "</script>", html)
+
+
+def _del_disco(ruta_publica: str) -> str:
+    """Un archivo estático leído del disco a partir de su ruta pública.
+
+    En binario y decodificando a mano, igual que los `_texto` de cada prueba:
+    si alguien lo guarda en latin1, esto se pone rojo aquí.
+    """
+    assert ruta_publica.startswith("/static/"), ruta_publica
+    return (ESTATICOS / ruta_publica.removeprefix("/static/")).read_bytes().decode("utf-8")
+
+
+def pantalla_completa() -> str:
+    """La pantalla entera —HTML, CSS y JavaScript— leída del disco."""
+    return _armar(_del_disco("/static/index.html"), _del_disco)
+
+
+def pantalla_servida(cliente: TestClient) -> str:
+    """La pantalla entera **como la sirve la aplicación**: `/` y lo que enlaza.
+
+    Para las pruebas que ya pedían `/` a propósito —"se comprueba sobre el HTML
+    servido, que es lo que el navegador recibe"—: los dos archivos se piden
+    también por HTTP, y un 404 en cualquiera de ellos pone roja la prueba.
+    """
+    def pedir(ruta: str) -> str:
+        respuesta = cliente.get(ruta)
+        assert respuesta.status_code == 200, f"{ruta} contestó {respuesta.status_code}"
+        return respuesta.text
+
+    return _armar(pedir("/"), pedir)
 
 
 @pytest.fixture(autouse=True)

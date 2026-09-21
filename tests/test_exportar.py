@@ -52,6 +52,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import pantalla_completa
 from continental.almacen import LineaDeVenta, Producto
 from continental.almacenamiento import (
     BORRADOR,
@@ -85,7 +86,9 @@ from continental.sugerido import Renglon
 
 RAIZ = Path(__file__).resolve().parent.parent
 EXPORTAR = RAIZ / "src" / "continental" / "exportar.py"
-PANTALLA = RAIZ / "src" / "continental" / "web" / "static" / "index.html"
+# La pantalla entera —HTML, CSS y JavaScript— sale de `conftest.pantalla_completa`
+# desde el ticket 28, que la separó en tres archivos: leer solo `index.html`
+# dejaría las guardias de "esto NO está" revisando un texto sin el JavaScript.
 GITIGNORE = RAIZ / ".gitignore"
 
 RUTA = "/api/pedido-sugerido"
@@ -811,7 +814,7 @@ def test_la_pantalla_pinta_el_enlace_con_la_url_del_servidor():
     `Content-Disposition`. En otra pestaña, para que un error se lea ahí y no
     tire la pantalla de trabajo — y sin `download`, que haría guardar el JSON
     del error con nombre de CSV."""
-    texto = PANTALLA.read_text(encoding="utf-8")
+    texto = pantalla_completa()
     bloque = texto[texto.index("const enlaceCsv"):]
     bloque = bloque[: bloque.index("\n};") + 3]
     assert "pedido.csv" in bloque, "la URL es la que manda el servidor"

@@ -3595,9 +3595,35 @@ def _vistas() -> list[dict]:
     return [dataclasses.asdict(v) for v in VISTAS]
 
 
+#: LA PANTALLA SE REVALIDA CADA VEZ QUE SE ABRE (ticket 28). Desde que son tres
+#: archivos —`index.html`, `continental.css` y `continental.js`— una versión
+#: nueva desplegada en atlas puede encontrarse en el navegador del mostrador con
+#: la hoja o el script de ayer: sin `Cache-Control`, el navegador calcula solo
+#: cuánto le cree a su copia (una fracción de lo viejo que es el archivo) y en
+#: ese rato no pregunta. Un HTML nuevo con un JavaScript viejo es la peor de las
+#: mezclas: pinta llaves que el servidor ya no manda, o no pinta las nuevas.
+#:
+#: `no-cache` NO quiere decir "no guardes": quiere decir "pregunta antes de
+#: usar lo guardado". El navegador manda su `ETag`, Starlette contesta 304 sin
+#: cuerpo si no cambió, y el costo es una ida y vuelta corta por archivo al
+#: abrir la pantalla. Se descartó ponerle la versión a la URL
+#: (`continental.css?v=…`): obligaría a plantillar el HTML, que hoy se sirve
+#: tal cual del disco, para ahorrarse tres 304 al día.
+SIN_CADUCAR = {"Cache-Control": "no-cache"}
+
+
+class EstaticosQueSeRevalidan(StaticFiles):
+    """`StaticFiles` con `Cache-Control: no-cache` en cada archivo que sirve."""
+
+    def file_response(self, *args: Any, **kwargs: Any) -> Response:
+        respuesta = super().file_response(*args, **kwargs)
+        respuesta.headers.update(SIN_CADUCAR)
+        return respuesta
+
+
 @app.get("/")
 async def inicio():
-    return FileResponse(ESTATICOS / "index.html")
+    return FileResponse(ESTATICOS / "index.html", headers=SIN_CADUCAR)
 
 
-app.mount("/static", StaticFiles(directory=ESTATICOS), name="static")
+app.mount("/static", EstaticosQueSeRevalidan(directory=ESTATICOS), name="static")

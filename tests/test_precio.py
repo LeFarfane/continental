@@ -47,6 +47,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import pantalla_servida
 from continental.almacen import LineaDeVenta, Producto
 from continental.almacenamiento import (
     PrecioDeProveedor,
@@ -259,7 +260,7 @@ def test_los_cuatro_proveedores_quedan_guardados_aunque_solo_uno_de_precio(
 
 def test_la_pantalla_trae_el_boton_de_consultar_precio_por_renglon(cliente):
     """Lo que se puede afirmar sobre el HTML sin ejecutar su JavaScript."""
-    pagina = cliente.get("/").text
+    pagina = pantalla_servida(cliente)
 
     assert "Consultar precio" in pagina
     assert "Volver a consultar" in pagina

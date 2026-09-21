@@ -35,6 +35,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import pantalla_completa
 from continental.almacenamiento import PrecioDeProveedor
 from continental.comparacion import (
     AHORRO_SIN_CANTIDAD,
@@ -168,9 +169,7 @@ def _consultar(cliente, renglon_id: int):
 
 
 def _pantalla() -> str:
-    return (RAIZ / "src" / "continental" / "web" / "static" / "index.html").read_text(
-        encoding="utf-8"
-    )
+    return pantalla_completa()
 
 
 # ====================================================================

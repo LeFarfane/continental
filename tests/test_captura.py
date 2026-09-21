@@ -44,6 +44,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import pantalla_completa
 from continental.almacen import LineaDeVenta, Producto
 from continental.almacenamiento import (
     BORRADOR,
@@ -77,7 +78,9 @@ CREAR_TABLAS = SQL / "crear_tablas.sql"
 VERIFICAR_ROL = SQL / "verificar_rol.sql"
 MIGRACION = SQL / "migraciones" / "0007-el-avance-de-la-captura.sql"
 ALMACENAMIENTO = RAIZ / "src" / "continental" / "almacenamiento.py"
-PANTALLA = RAIZ / "src" / "continental" / "web" / "static" / "index.html"
+# La pantalla entera —HTML, CSS y JavaScript— sale de `conftest.pantalla_completa`
+# desde el ticket 28, que la separó en tres archivos: leer solo `index.html`
+# dejaría las guardias de "esto NO está" revisando un texto sin el JavaScript.
 ADR = RAIZ / "docs" / "decisiones" / "0010-el-avance-de-la-captura-vive-en-la-tabla-del-renglon.md"
 
 RUTA = "/api/pedido-sugerido"
@@ -998,7 +1001,7 @@ def test_la_ruta_no_deja_tachar_un_pedido_enviado(cliente, almacen, almacenamien
 
 def test_la_pantalla_sabe_pintar_la_captura():
     """HTML+JS plano: lo que cabe probar es que el archivo lo diga."""
-    pantalla = _texto(PANTALLA)
+    pantalla = pantalla_completa()
     for pedazo in (
         "'/capturado'",
         "pintarCaptura",
@@ -1014,7 +1017,7 @@ def test_la_pantalla_sabe_pintar_la_captura():
 def test_la_clave_se_copia_de_un_clic():
     """**Casilla 4.** Con el portapapeles del navegador y, si no está, con el
     camino viejo — y si ninguno sirve, se DICE (regla 4), no se calla."""
-    pantalla = _texto(PANTALLA)
+    pantalla = pantalla_completa()
     assert "navigator.clipboard" in pantalla
     assert "copiarClave" in pantalla
     assert "execCommand('copy')" in pantalla
@@ -1024,7 +1027,7 @@ def test_la_clave_se_copia_de_un_clic():
 def test_el_avance_NO_vive_en_el_navegador():
     """**Casilla 3, la decisión del ADR 0010 fijada.** Nada de la captura se
     escribe en `localStorage` ni en `sessionStorage`."""
-    pantalla = _texto(PANTALLA)
+    pantalla = pantalla_completa()
     inicio = pantalla.index("const pintarCaptura")
     fin = pantalla.index("const pintarParticion")
     bloque = pantalla[inicio:fin]
@@ -1034,7 +1037,7 @@ def test_el_avance_NO_vive_en_el_navegador():
 
 def test_la_pantalla_no_cuenta_lo_que_falta_ella_sola():
     """El número de arriba viene de Python: el JavaScript no filtra ni suma."""
-    pantalla = _texto(PANTALLA)
+    pantalla = pantalla_completa()
     inicio = pantalla.index("const pintarCaptura")
     fin = pantalla.index("const pintarParticion")
     bloque = pantalla[inicio:fin]
@@ -1046,7 +1049,7 @@ def test_la_pantalla_no_cuenta_lo_que_falta_ella_sola():
 def test_lo_tachado_se_distingue_con_una_clase_y_no_solo_con_color():
     """**Casilla 2.** Tachado de verdad —`line-through`— y atenuado: se ve sin
     distinguir colores."""
-    pantalla = _texto(PANTALLA)
+    pantalla = pantalla_completa()
     assert ".captura li.hecho" in pantalla
     assert "line-through" in pantalla
 
@@ -1054,6 +1057,6 @@ def test_lo_tachado_se_distingue_con_una_clase_y_no_solo_con_color():
 def test_la_captura_no_apaga_el_boton_de_enviar():
     """**Casilla 5.** El botón se apaga por `se_puede_enviar` y por nada más:
     en el JavaScript no puede aparecer una condición de captura sobre él."""
-    pantalla = _texto(PANTALLA)
+    pantalla = pantalla_completa()
     assert "boton.disabled = !guardado.se_puede_enviar;" in pantalla
     assert "todo_capturado && " not in pantalla.split("boton.disabled")[1].split("\n")[0]

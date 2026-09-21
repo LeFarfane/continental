@@ -30,6 +30,7 @@ from __future__ import annotations
 import datetime as dt
 from pathlib import Path
 
+from conftest import pantalla_servida
 from continental.almacen import LineaDeVenta, Producto
 from continental.clasificacion import ABARROTE, MEDICAMENTO, SIN_CLASIFICAR
 from continental.vistas import VISTAS, Vista
@@ -251,7 +252,7 @@ def test_la_pantalla_trae_el_interruptor_con_los_dos_nombres(cliente):
     interruptor y sus dos nombres sigan ahí. Los nombres se pintan desde el
     JSON, así que lo que se busca en el archivo es el armado, no el texto.
     """
-    portada = cliente.get("/").text
+    portada = pantalla_servida(cliente)
 
     assert 'id="vistas"' in portada
     assert "cuerpo.vistas" in portada or "datos.vistas" in portada
@@ -316,7 +317,7 @@ def test_la_pantalla_recuerda_la_eleccion_y_aguanta_un_localStorage_roto(cliente
     El otro caso es la basura: una clave con un valor que ya no existe —o que
     alguien editó a mano— no puede dejar la lista sin ninguna vista activa.
     """
-    portada = cliente.get("/").text
+    portada = pantalla_servida(cliente)
 
     assert "localStorage" in portada
     assert portada.count("try {") >= 2  # leer y escribir, cada uno con el suyo
@@ -333,7 +334,7 @@ def test_la_pantalla_no_reinventa_la_regla_de_que_esconde_cada_vista(cliente):
     JavaScript recibe las clasificaciones de cada vista como dato y solo
     pregunta si la del renglón está en la lista.
     """
-    portada = cliente.get("/").text
+    portada = pantalla_servida(cliente)
 
     assert "clasificaciones.includes" in portada
     # Ni una clasificación escrita a mano en el filtro. `'medicamento'` sí

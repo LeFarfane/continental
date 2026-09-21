@@ -27,6 +27,7 @@ import datetime as dt
 
 import pytest
 
+from conftest import pantalla_servida
 from continental.almacen import LineaDeVenta, Producto
 from continental.almacenamiento import (
     VENCIDO,
@@ -545,7 +546,7 @@ def test_la_pantalla_dice_el_rango_de_ventas_y_no_solo_la_fecha_final(cliente):
     lo que se comprueba barato es que el extremo izquierdo de la ventana llegue
     al navegador y se pinte con su conector.
     """
-    portada = cliente.get("/").text
+    portada = pantalla_servida(cliente)
 
     assert "ventas_consideradas_desde" in portada
     assert "' al '" in portada
@@ -650,7 +651,7 @@ def test_la_pantalla_avisa_cuando_la_lista_trae_mas_de_un_dia(cliente):
     cerro -- y ahi NO hay ningun cierre del cual acumular. La frase vieja
     nombraba algo que en ese caso no existe.
     """
-    pagina = cliente.get("/").text
+    pagina = pantalla_servida(cliente)
 
     assert "días de ventas en esta lista, no uno" in pagina
     # Sobre lo que se PINTA y no sobre el archivo entero: la frase vieja sigue

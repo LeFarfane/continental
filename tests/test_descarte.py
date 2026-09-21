@@ -34,6 +34,7 @@ from pathlib import Path
 import pytest
 import sqlalchemy
 
+from conftest import pantalla_servida
 from continental.almacen import LineaDeVenta, Producto
 from continental.almacenamiento import (
     ESTADOS_DEL_RENGLON,
@@ -731,7 +732,7 @@ def test_la_pantalla_descarta_de_un_clic_y_sin_pedir_confirmacion(cliente):
     ticket dice un clic, y lo que hace segura la operación es poder deshacerla,
     no un diálogo que se aprende a cerrar sin leer.
     """
-    pagina = cliente.get("/").text
+    pagina = pantalla_servida(cliente)
 
     assert "Descartar" in pagina
     assert "/descartar" in pagina
@@ -743,7 +744,7 @@ def test_la_pantalla_descarta_de_un_clic_y_sin_pedir_confirmacion(cliente):
 
 def test_la_pantalla_muestra_los_descartados_aparte_y_deja_devolverlos(cliente):
     """Las dos direcciones, y el conteo del día."""
-    pagina = cliente.get("/").text
+    pagina = pantalla_servida(cliente)
 
     assert "descartados" in pagina
     assert "/devolver" in pagina
@@ -757,7 +758,7 @@ def test_la_pantalla_sigue_cabiendo_en_un_telefono(cliente):
     de ancho sigue ahí y que el botón tiene su tamaño mínimo tocable—; el
     recorrido con el ojo a 375 px está en el reporte del ticket.
     """
-    pagina = cliente.get("/").text
+    pagina = pantalla_servida(cliente)
 
     assert "@media (max-width: 34rem)" in pagina
     assert "td.acciones" in pagina
@@ -935,7 +936,7 @@ def test_la_pantalla_no_ofrece_descartar_si_la_lista_no_esta_abierta(cliente):
     a un proveedor—. Los dos entran en `editable`, que se calcula una vez por
     renglon y lo usan los tres controles: la cantidad, el proveedor y este.
     """
-    pagina = cliente.get("/").text
+    pagina = pantalla_servida(cliente)
 
     assert "const editable = acciones.editable && !r.esta_en_transito" in pagina, (
         "El renglon no mira las dos cosas: el estado de la lista y el suyo."

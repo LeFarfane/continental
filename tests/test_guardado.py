@@ -30,6 +30,7 @@ from pathlib import Path
 import pytest
 import sqlalchemy
 
+from conftest import pantalla_servida
 from continental.almacen import LineaDeVenta, Producto
 from continental.almacenamiento import (
     ABIERTO,
@@ -485,7 +486,7 @@ def test_la_pantalla_muestra_cuando_se_armo_y_deja_cerrar_la_lista(cliente):
     la fecha con hora **no** se arma con el constructor que ya costó una
     trampa de zona horaria del lado del cliente.
     """
-    pagina = cliente.get("/").text
+    pagina = pantalla_servida(cliente)
 
     assert "armado_en" in pagina
     assert "cerrar" in pagina

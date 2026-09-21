@@ -41,6 +41,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import pantalla_completa
 from continental import verificar as v
 from continental.almacen import LineaDeVenta, Producto
 from continental.almacenamiento import (
@@ -67,7 +68,9 @@ CREAR_ROL = SQL / "crear_rol.sql"
 VERIFICAR_ROL = SQL / "verificar_rol.sql"
 MIGRACION = SQL / "migraciones" / "0006-enviar-el-pedido.sql"
 ALMACENAMIENTO = RAIZ / "src" / "continental" / "almacenamiento.py"
-PANTALLA = RAIZ / "src" / "continental" / "web" / "static" / "index.html"
+# La pantalla entera —HTML, CSS y JavaScript— sale de `conftest.pantalla_completa`
+# desde el ticket 28, que la separó en tres archivos: leer solo `index.html`
+# dejaría las guardias de "esto NO está" revisando un texto sin el JavaScript.
 
 RUTA = "/api/pedido-sugerido"
 NEGOCIO = "farmacia_01"
@@ -729,7 +732,7 @@ def test_la_pantalla_sabe_pintar_el_envio():
     Se busca lo que **no se puede deducir de otra cosa**: el botón, la ruta, la
     frase que viene hecha y el total dentro del botón.
     """
-    pantalla = _texto(PANTALLA)
+    pantalla = pantalla_completa()
     for pedazo in (
         "'/enviar'",
         "enviarPedido",
@@ -748,7 +751,7 @@ def test_la_pantalla_sabe_pintar_el_envio():
 
 def test_la_pantalla_no_compone_la_frase_del_envio_ella_sola():
     """Ni la arma ni la deduce: la escribe. Y el total lo pinta, no lo suma."""
-    pantalla = PANTALLA.read_text(encoding="utf-8")
+    pantalla = pantalla_completa()
     bloque = pantalla[pantalla.index("const pintarParticion") :]
     bloque = bloque[: bloque.index("// Los descartados, aparte")]
 
@@ -810,7 +813,7 @@ def test_el_pedido_enviado_NO_desaparece_de_la_pantalla(
     assert enviado["renglones"] == 1
     assert CORREO in enviado["frase_del_envio"]
 
-    pantalla = PANTALLA.read_text(encoding="utf-8")
+    pantalla = pantalla_completa()
     assert "fueraDeLaParticion" in pantalla, (
         "La pantalla solo recorre `particion.pedidos`: un pedido enviado se "
         "borraría de la vista en cuanto sus renglones salgan de la partición."
@@ -837,7 +840,7 @@ def test_un_renglon_en_transito_sigue_en_la_tabla_pero_no_se_puede_tocar(
     assert len(despues["renglones"]) == 1
     assert despues["renglones"][0]["esta_en_transito"] is True
 
-    pantalla = PANTALLA.read_text(encoding="utf-8")
+    pantalla = pantalla_completa()
     assert "const editable = acciones.editable && !r.esta_en_transito" in pantalla
     assert "Ya se pidió: en tránsito." in pantalla
 
@@ -851,7 +854,7 @@ def test_una_lista_ya_pedida_entera_no_dice_que_falta_elegir_proveedor():
     partir" son dos situaciones opuestas y decirlas con la misma frase manda a
     rehacer un trabajo que ya está hecho.
     """
-    pantalla = PANTALLA.read_text(encoding="utf-8")
+    pantalla = pantalla_completa()
     assert "Esta lista ya se pidió entera" in pantalla
     assert "No queda nada por repartir" in pantalla
 
@@ -863,7 +866,7 @@ def test_lo_ya_pedido_no_cuenta_como_renglon_por_atender():
     pagado por la misma lección: cuando el número baja, la razón tiene que estar
     donde se lee el número.
     """
-    pantalla = PANTALLA.read_text(encoding="utf-8")
+    pantalla = pantalla_completa()
     assert "const enTransito = visibles.filter(r => r.esta_en_transito).length" in pantalla
     assert "ya se pidió y sigue aquí, marcado como en tránsito." in pantalla
 
@@ -875,7 +878,7 @@ def test_la_hora_no_se_escribe_con_dos_puntos_al_final():
     del navegador. Es cosmético y aun así se fija: el repo ya aprendió que lo
     que no tiene prueba vuelve.
     """
-    pantalla = PANTALLA.read_text(encoding="utf-8")
+    pantalla = pantalla_completa()
     assert "instanteEnPalabras(guardado.armado_en) + '.'" not in pantalla
     assert "instanteEnPalabras(guardado.enviado_en) + '.'" not in pantalla
     assert "instanteEnPalabras(g.enviado_en) + '.'" not in pantalla

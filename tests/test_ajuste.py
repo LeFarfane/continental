@@ -33,6 +33,7 @@ from pathlib import Path
 import pytest
 import sqlalchemy
 
+from conftest import pantalla_servida
 from continental.almacen import LineaDeVenta, Producto
 from continental.almacenamiento import (
     RENGLON_ABIERTO,
@@ -795,7 +796,7 @@ def test_la_pantalla_deja_cambiar_la_cantidad_con_la_lista_abierta(cliente):
     afirmar es que los pedazos están: el campo de número con su mínimo de una
     pieza y la ruta a la que escribe.
     """
-    pagina = cliente.get("/").text
+    pagina = pantalla_servida(cliente)
 
     assert "/cantidad" in pagina
     assert "type = 'number'" in pagina or "type=\"number\"" in pagina
@@ -812,7 +813,7 @@ def test_la_pantalla_no_deja_cambiar_la_cantidad_si_la_lista_no_esta_abierta(cli
     campo es comodidad, no la garantía. Pero una pantalla que deja teclear algo
     que el servidor va a rechazar enseña a ignorar los avisos.
     """
-    pagina = cliente.get("/").text
+    pagina = pantalla_servida(cliente)
 
     assert "editable" in pagina
     assert "estado === 'abierto'" in pagina
@@ -820,7 +821,7 @@ def test_la_pantalla_no_deja_cambiar_la_cantidad_si_la_lista_no_esta_abierta(cli
 
 def test_la_pantalla_dice_que_el_cero_no_descarta(cliente):
     """El camino correcto se dice donde se comete el error, no solo en el 422."""
-    pagina = cliente.get("/").text
+    pagina = pantalla_servida(cliente)
 
     assert "Descartar" in pagina
     assert re.search(r"cero.{0,120}[Dd]escarta", pagina, re.S), (
@@ -834,7 +835,7 @@ def test_la_pantalla_muestra_la_propuesta_cuando_la_cantidad_se_cambio(cliente):
     La decisión de si difieren viene del servidor (`difiere_de_la_propuesta`);
     aquí solo se comprueba que el HTML la use y tenga dónde pintarla.
     """
-    pagina = cliente.get("/").text
+    pagina = pantalla_servida(cliente)
 
     assert "difiere_de_la_propuesta" in pagina
     assert "propuso" in pagina

@@ -34,6 +34,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import pantalla_completa
 from continental.almacen import LineaDeCompra, LineaDeVenta, Producto
 from continental.almacenamiento import (
     ENVIADO,
@@ -427,7 +428,7 @@ def test_las_frases_de_los_grupos_concuerdan_en_numero():
 
 def test_la_pantalla_no_cuenta_lo_recibido_como_por_atender():
     """Lo cazó el recorrido: un renglón recibido seguía en "por atender"."""
-    pantalla = _texto(RAIZ / "src" / "continental" / "web" / "static" / "index.html")
+    pantalla = pantalla_completa()
     assert "visibles.length - enTransito - cancelados - recibidos" in pantalla
     assert "marcado como recibido" in pantalla
 
@@ -1109,7 +1110,9 @@ from continental.precios import LecturaDePrecio  # noqa: E402
 
 RUTA = "/api/pedido-sugerido"
 FIRMA = {"Cf-Access-Authenticated-User-Email": CORREO}
-PANTALLA = RAIZ / "src" / "continental" / "web" / "static" / "index.html"
+# La pantalla entera —HTML, CSS y JavaScript— sale de `conftest.pantalla_completa`
+# desde el ticket 28, que la separó en tres archivos: leer solo `index.html`
+# dejaría las guardias de "esto NO está" revisando un texto sin el JavaScript.
 
 
 def _venta(fecha: dt.date, producto_id: int, cantidad: float) -> LineaDeVenta:
@@ -1549,7 +1552,7 @@ def test_sin_nada_en_camino_la_recepcion_lo_dice_y_no_lee_compras(
 
 
 def _pantalla() -> str:
-    return _texto(PANTALLA)
+    return pantalla_completa()
 
 
 def test_la_pantalla_tiene_el_bloque_de_la_recepcion_y_sus_dos_botones():

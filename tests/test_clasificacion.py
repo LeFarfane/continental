@@ -25,6 +25,7 @@ from pathlib import Path
 
 import yaml
 
+from conftest import pantalla_servida
 from continental.almacen import LineaDeVenta, Producto
 from continental.clasificacion import (
     ABARROTE,
@@ -338,7 +339,7 @@ def test_la_pantalla_marca_el_renglon_que_no_es_medicamento(cliente):
     Se comprueba sobre el código de la pantalla porque es HTML+JS a mano, sin
     framework ni build: atlas es un Athlon II X4 de 2010.
     """
-    portada = cliente.get("/").text
+    portada = pantalla_servida(cliente)
 
     assert "r.clasificacion" in portada
     assert "sin clasificar" in portada

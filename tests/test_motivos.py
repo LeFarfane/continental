@@ -44,6 +44,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import pantalla_completa
 from continental.almacen import LineaDeVenta, Producto
 from continental.almacenamiento import (
     FINALES_DE_LA_CORRIDA,
@@ -269,9 +270,7 @@ def _por_clave(cliente) -> dict[str, dict]:
 
 
 def _pantalla() -> str:
-    return (RAIZ / "src" / "continental" / "web" / "static" / "index.html").read_text(
-        encoding="utf-8"
-    )
+    return pantalla_completa()
 
 
 # =========================================================================

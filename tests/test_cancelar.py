@@ -42,6 +42,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import pantalla_completa
 from continental.almacen import LineaDeVenta, Producto
 from continental.almacenamiento import (
     BORRADOR,
@@ -94,7 +95,9 @@ VERIFICAR_ROL = SQL / "verificar_rol.sql"
 MIGRACION = SQL / "migraciones" / "0009-cancelar-y-devolver-lo-atrasado.sql"
 CONFIG = RAIZ / "config" / "continental.yml"
 ALMACENAMIENTO = RAIZ / "src" / "continental" / "almacenamiento.py"
-PANTALLA = RAIZ / "src" / "continental" / "web" / "static" / "index.html"
+# La pantalla entera —HTML, CSS y JavaScript— sale de `conftest.pantalla_completa`
+# desde el ticket 28, que la separó en tres archivos: leer solo `index.html`
+# dejaría las guardias de "esto NO está" revisando un texto sin el JavaScript.
 GLOSARIO = RAIZ / "CONTEXT.md"
 ADR = RAIZ / "docs" / "decisiones" / (
     "0013-cancelar-suelta-el-transito-y-lo-que-vuelve-es-el-producto.md"
@@ -1526,7 +1529,7 @@ def test_el_lote_de_la_noche_tambien_trae_lo_cancelado(almacen, almacenamiento):
 
 
 def test_la_pantalla_llama_a_las_dos_rutas():
-    pantalla = _texto(PANTALLA)
+    pantalla = pantalla_completa()
 
     assert "'/cancelar'" in pantalla
     assert "'/devolver-atrasado'" in pantalla
@@ -1534,7 +1537,7 @@ def test_la_pantalla_llama_a_las_dos_rutas():
 
 def test_la_pantalla_pinta_las_frases_que_llegan_hechas():
     """Lección del ticket 15: las frases que afirman algo son de Python."""
-    pantalla = _texto(PANTALLA)
+    pantalla = pantalla_completa()
 
     for llave in (
         "frase_del_atraso",
@@ -1553,7 +1556,7 @@ def test_la_pantalla_pinta_las_frases_que_llegan_hechas():
 def test_la_captura_solo_se_pinta_para_un_borrador():
     """Un cancelado no es enviado ni borrador: `!fue_enviado` le pintaría la
     lista de captura con sus casillas a un pedido que ya no existe."""
-    pantalla = _texto(PANTALLA)
+    pantalla = pantalla_completa()
 
     assert "!guardado.fue_enviado && guardado.captura" not in pantalla
     assert "!g.fue_enviado && g.captura" not in pantalla

@@ -53,6 +53,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import pantalla_completa
 from continental.almacen import LineaDeVenta, Producto
 from continental.almacenamiento import (
     AlmacenamientoDelPedido,
@@ -94,7 +95,9 @@ VERIFICAR_ROL = SQL / "verificar_rol.sql"
 MIGRACION = SQL / "migraciones" / "0008-el-renglon-que-vuelve-dice-desde-cuando.sql"
 ALMACENAMIENTO = RAIZ / "src" / "continental" / "almacenamiento.py"
 TRANSITO = RAIZ / "src" / "continental" / "transito.py"
-PANTALLA = RAIZ / "src" / "continental" / "web" / "static" / "index.html"
+# La pantalla entera —HTML, CSS y JavaScript— sale de `conftest.pantalla_completa`
+# desde el ticket 28, que la separó en tres archivos: leer solo `index.html`
+# dejaría las guardias de "esto NO está" revisando un texto sin el JavaScript.
 ADR = RAIZ / "docs" / "decisiones" / (
     "0012-lo-vendido-en-transito-se-queda-en-el-almacen-y-vuelve-al-recibirse.md"
 )
@@ -1325,7 +1328,7 @@ def test_si_no_se_pueden_leer_las_ventas_lo_vendido_es_un_hueco_y_no_un_cero(
 
 
 def test_la_pantalla_tiene_el_bloque_de_lo_que_viene_en_camino():
-    pagina = _texto(PANTALLA)
+    pagina = pantalla_completa()
 
     assert 'id="en-camino"' in pagina
     assert "pintarEnCamino" in pagina
@@ -1334,7 +1337,7 @@ def test_la_pantalla_tiene_el_bloque_de_lo_que_viene_en_camino():
 
 def test_la_pantalla_atenua_y_no_esconde():
     """Atenuados con una clase, y con opacidad: siguen leyéndose."""
-    pagina = _texto(PANTALLA)
+    pagina = pantalla_completa()
 
     assert ".transito" in pagina
     assert re.search(r"\.transito[^{]*\{[^}]*opacity", pagina)
@@ -1343,7 +1346,7 @@ def test_la_pantalla_atenua_y_no_esconde():
 
 def test_la_pantalla_no_compone_las_frases_que_afirman():
     """"Pedido el martes, sin recibir" llega hecho de Python (lección del 15)."""
-    pagina = _texto(PANTALLA)
+    pagina = pantalla_completa()
     codigo = re.sub(r"//[^\n]*", "", pagina)
 
     assert "sin recibir'" not in codigo
@@ -1356,7 +1359,7 @@ def test_la_pantalla_no_compone_las_frases_que_afirman():
 
 def test_el_bloque_se_pinta_tambien_el_dia_sin_renglones():
     """Una lista vacía no quiere decir que no venga nada en camino."""
-    pagina = _texto(PANTALLA)
+    pagina = pantalla_completa()
     inicio = pagina.index("async function cargarPedido()")
     pintado = pagina.index("pintarEnCamino(", inicio)
     salida = pagina.index("if (!datos.renglones.length)", inicio)

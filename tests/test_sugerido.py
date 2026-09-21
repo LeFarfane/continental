@@ -34,6 +34,7 @@ from pathlib import Path
 
 import sqlalchemy
 
+from conftest import pantalla_servida
 from continental.almacen import LineaDeVenta, Producto
 from continental.sugerido import calcular_pedido_sugerido
 
@@ -293,7 +294,7 @@ def test_la_pantalla_trae_la_lista_con_clave_descripcion_y_cantidad(cliente):
     consulta y los cinco encabezados sigan ahí. Si alguien construye la API y
     se olvida de la pantalla, esto se pone rojo.
     """
-    portada = cliente.get("/").text
+    portada = pantalla_servida(cliente)
 
     assert "Pedido sugerido" in portada
     assert RUTA in portada
@@ -317,7 +318,7 @@ def test_la_pantalla_pinta_la_existencia_del_renglon_y_no_la_vuelve_a_buscar(cli
     pantalla lee `r.existencia` y `r.dias_de_cobertura`, y la única consulta
     del pedido es la de la ruta.
     """
-    portada = cliente.get("/").text
+    portada = pantalla_servida(cliente)
 
     assert "r.existencia" in portada
     assert "r.dias_de_cobertura" in portada

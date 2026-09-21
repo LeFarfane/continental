@@ -33,6 +33,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import pantalla_completa
 from continental import verificar as v
 from continental.almacen import LineaDeVenta, Producto
 from continental.almacenamiento import BORRADOR, ESTADOS_DEL_PEDIDO, Ventana
@@ -47,7 +48,9 @@ CREAR_ROL = SQL / "crear_rol.sql"
 VERIFICAR_ROL = SQL / "verificar_rol.sql"
 MIGRACION = SQL / "migraciones" / "0005-elegir-proveedor-y-partir.sql"
 ALMACENAMIENTO = RAIZ / "src" / "continental" / "almacenamiento.py"
-PANTALLA = RAIZ / "src" / "continental" / "web" / "static" / "index.html"
+# La pantalla entera —HTML, CSS y JavaScript— sale de `conftest.pantalla_completa`
+# desde el ticket 28, que la separó en tres archivos: leer solo `index.html`
+# dejaría las guardias de "esto NO está" revisando un texto sin el JavaScript.
 
 RUTA = "/api/pedido-sugerido"
 NEGOCIO = "farmacia_01"
@@ -930,7 +933,7 @@ def test_la_pantalla_pinta_la_eleccion_y_la_particion():
     proveedor, el bloque de la partición, su botón y las dos frases que
     distinguen una sugerencia de una decisión.
     """
-    pantalla = PANTALLA.read_bytes().decode("utf-8")
+    pantalla = pantalla_completa()
     for pedazo in (
         'id="particion"',
         "celdaDeProveedor",
@@ -954,7 +957,7 @@ def test_la_pantalla_no_calcula_ningun_total():
     de un pedido pasaría por la coma flotante de JavaScript justo después de
     salir de un `numeric(12,2)`.
     """
-    pantalla = PANTALLA.read_text(encoding="utf-8")
+    pantalla = pantalla_completa()
     bloque = pantalla[pantalla.index("const pintarParticion") :]
     bloque = bloque[: bloque.index("// Los descartados, aparte")]
     assert "total_sin_iva" in bloque

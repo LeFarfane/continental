@@ -40,6 +40,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import pantalla_completa
 from continental.almacen import LineaDeCompra, LineaDeVenta, Producto
 from continental.almacenamiento import (
     CANCELADO,
@@ -1068,7 +1069,9 @@ from continental.precios import LecturaDePrecio  # noqa: E402
 
 RUTA = "/api/pedido-sugerido"
 FIRMA = {"Cf-Access-Authenticated-User-Email": CORREO}
-PANTALLA = RAIZ / "src" / "continental" / "web" / "static" / "index.html"
+# La pantalla entera —HTML, CSS y JavaScript— sale de `conftest.pantalla_completa`
+# desde el ticket 28, que la separó en tres archivos: leer solo `index.html`
+# dejaría las guardias de "esto NO está" revisando un texto sin el JavaScript.
 
 
 def _lectura(proveedor: str = "nadro") -> LecturaDePrecio:
@@ -1493,7 +1496,7 @@ def test_regla_5_el_error_no_viaja_al_navegador(cliente, almacen, almacenamiento
 
 
 def _pantalla() -> str:
-    return _texto(PANTALLA)
+    return pantalla_completa()
 
 
 def test_la_pantalla_recibe_a_mano_y_manda_solo_las_piezas():

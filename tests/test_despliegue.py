@@ -42,6 +42,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from conftest import pantalla_servida
 
 RAIZ = Path(__file__).resolve().parent.parent
 UNIDAD = RAIZ / "scripts" / "systemd" / "continental-web.service"
@@ -779,7 +780,7 @@ def test_la_pantalla_pinta_el_correo_de_access(cliente):
     pida `/api/salud`, que use `salud.quien`, y que lo ponga en una lista que
     no esté escondida detrás de un `hidden`.
     """
-    html = cliente.get("/").text
+    html = pantalla_servida(cliente)
 
     assert "/api/salud" in html
     assert "salud.quien" in html, (
