@@ -3,6 +3,14 @@
 **Fecha:** 2026-09-21  ·  **Estado:** aceptada  ·  **Enmienda:** el ADR 0009 en
 un punto (abajo, "Qué cambia del 0009")
 
+> **Aceptada por el dueño el 2026-09-21**, después de la revisión de código que
+> señaló que el ticket 25 decía *"sus renglones vuelven a `abierto`"* y esto hace
+> otra cosa. Su razón, en sus palabras: *mantiene un registro pero da la
+> flexibilidad de mover los artículos por presupuesto o tiempo*. El renglón
+> cancelado queda como constancia de lo que se pidió y no llegó, y el producto
+> vuelve a la lista siguiente para decidirlo otra vez, con el presupuesto y los
+> tiempos de ese día.
+
 ## Contexto
 
 Desde el ticket 24 un renglón `en tránsito` **no se vuelve a proponer** (ADR
