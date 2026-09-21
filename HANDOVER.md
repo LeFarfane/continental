@@ -582,6 +582,62 @@ el pedido capturado leyendo de la pantalla y la recepción propuesta al día
 siguiente—, y eso no ha pasado. Continental ni siquiera está desplegado en
 atlas todavía (`docs/despliegue-en-atlas.md`).
 
+**Y desde el ADR 0016 cerrar avisa lo que se pierde, y el cierre se puede
+deshacer.** Lo pidió el dueño después de una revisión de código de los tickets
+24 y 27: `_LO_YA_PEDIDO` da por atendido un producto en cuanto una lista
+posterior **cerrada** lo trae, aunque ahí siguiera `abierto` o `descartado`; si
+se cerró sin pedirlo, **lo que faltó de un parcial y lo vendido mientras un
+pedido viajaba se perdían sin que nada avisara**. No es un error de la
+sentencia —es lo que cerrar quiere decir desde el ticket 09—, así que se
+resolvió en la pantalla y con un deshacer:
+
+- **Antes de cerrar, un `<dialog>` propio** (nada de `window.confirm()`: con
+  `showModal()` atrapa el foco, Esc lo cierra sin cerrar la lista, el foco va a
+  "Volver" cuando algo se perdería). Dice cuántos renglones quedan sin pedir,
+  cuántos están en un borrador sin enviar, y **en un recuadro ámbar con rótulo
+  "Ojo:" y un `!` por renglón** los que traen algo de otro pedido, con sus
+  piezas: *"PARACETAMOL 500 MG: 10 piezas sin pedir. Trae 4 piezas que
+  faltaron en un pedido anterior y lo vendido desde el martes 15 de septiembre
+  mientras venía en camino: si se cierra así, ninguna lista vuelve a
+  traerlas."* El botón pasa a "Cerrar de todos modos": **avisa, no prohíbe**.
+  Todo sale de `cierre.al_cerrar` (Python, probado) por `GET
+  /api/pedido-sugerido/{id}/al-cerrar`, leído **al apretar** y no en la carga
+  —descartar cambia un renglón sin reenviar la lista—. Si no se puede leer, se
+  dice con su qué hacer y se puede cerrar igual.
+- **Reabrir**: `cerrado → abierto`, firmado (`reabierto_por`, `reabierto_en`),
+  por `POST /api/pedido-sugerido/{id}/reabrir`. **Solo la última lista del
+  negocio, mientras ninguna se haya armado después** —la regla es una cadena,
+  `_NINGUNA_LISTA_DESPUES`, que usan el `WHERE` de `_REABRIR` y la lectura
+  `_SE_PUEDE_REABRIR` con la que se decide si se pinta el botón—. En cuanto el
+  lote o la pantalla arman la siguiente, ésta empezó donde la cerrada terminó y
+  reabrir contesta 409 con su porqué; el botón se esconde. `vencido` no se
+  reabre. **Reabrir no deshace lo enviado ni lo recibido.** El glosario gana
+  la transición y la palabra **cerrar** con lo que implica.
+
+**La 0012 va ANTES de desplegar, y hay que correrla en atlas**:
+`_LEER_LISTA`, `_LEER_LISTA_POR_ID`, `_INSERTAR_LISTA` y `_CERRAR` devuelven
+las dos columnas nuevas. **No rompe el código que hoy corre allá**: las dos
+admiten nulos y no tienen DEFAULT, ningún `INSERT` viejo las nombra, y el CHECK
+pareado no mira el estado — se puede correr primero sin que el servicio lo
+note. No crea tabla: **`crear_rol.sql` no se vuelve a correr**.
+`verificar_rol.sql` gana la 38.
+
+**Tres cosas del 0016 que conviene no redescubrir.** (1) **La regla es
+"ninguna lista después", no "la de hoy"**: lo que hace segura la reapertura es
+que nadie haya leído el corte, y quien lo lee es quien arma una lista. El borde
+—la cadena ya trajo el viernes y nadie abrió el día— deja reabrir, y la
+siguiente carga la vence como a cualquier lista que nadie cerró: el escenario
+con números (3 + 2 + 1 + 1 + 4 = 11 = 10 del jueves + 1 del viernes) está en
+`test_cierre.py`. (2) **Queda una carrera de milisegundos**, dicha en el ADR:
+el `not exists` no ve una lista posterior que se está insertando sin
+confirmar. Se midió qué deja —nada se propone dos veces; lo sin pedir se pierde
+igual que sin reabrir— y no se pagó un candado compartido con `abrir_el_dia`.
+(3) **El recorrido del navegador no cazó nada esta vez** (`recorrer.py` con
+Playwright del venv de Doyle, en el scratchpad): el diálogo centrado a 1280, a
+375 sin desplazar (`scrollWidth == innerWidth`), en oscuro; Esc deja la lista
+abierta; Tab + Enter cierra; la pestaña vieja que reabre después de armarse la
+siguiente recibe el 409 y el botón desaparece.
+
 **Lo sugerido NO se guarda y lo decidido SÍ, y ésa es la decisión del ticket.**
 Es la misma pregunta que el 11 resolvió con `cantidad_propuesta` /
 `cantidad_final`, y **aquí la respuesta es distinta a propósito**: la sugerencia
@@ -622,7 +678,22 @@ python iniciar.py     # http://127.0.0.1:8585
 python -m continental.verificar   # los datos de producción, no el código (ticket 17)
 python -m continental.lote        # el lote nocturno, a mano (ticket 18)
 python -m continental.lote --tope-minutos 5   # ...con tope corto, para mirarlo
-pytest                # 1558 pruebas, 0 saltadas, 6.48-8.04 s (2026-09-21, ticket 29)
+pytest                # 1647 pruebas, 0 saltadas, 6.69-7.27 s (2026-09-21, ADR 0016)
+                      # 1566 antes (el 29 más el commit del CSV de lo que
+                      # llegó). Las 81 nuevas son 75 de `test_cierre.py` (lo
+                      # puro: qué se perdería y sus frases, la reapertura;
+                      # lo que se guarda: el doble, los CHECK, el SQL como
+                      # texto, la 0012 y que no rompe lo de atlas; lo que se
+                      # ve: tres escenarios de varios días con sus números,
+                      # los 409, la regla 5 y la pantalla), 4 que el recorrido
+                      # de `app.routes` de `test_fallas.py` gana solo por las
+                      # dos rutas nuevas, y 2 que `test_compila.py` gana por
+                      # `cierre.py` y la 0012. Se ajustaron los tres censos de
+                      # `fetch('/api/` (16 a 18, por `/al-cerrar` y
+                      # `/reabrir`), con su párrafo; ninguna otra prueba vieja
+                      # se tocó. Las 75 solas, 0.39 s.
+                      #
+                      # 1558 pruebas, 0 saltadas, 6.48-8.04 s (2026-09-21, ticket 29)
                       # 1442 en el 28. Las 116 nuevas son 115 de
                       # `test_fallas.py` (el qué hacer, el estado de las
                       # ventas contra el horario de la cadena, los huecos de la
@@ -821,9 +892,11 @@ pytest                # 1558 pruebas, 0 saltadas, 6.48-8.04 s (2026-09-21, ticke
 | `sql/` | el DDL de las **cinco** tablas, el rol acotado y `verificar_rol.sql`, que mira la **forma** de la base. **Se corren a mano, en ese orden, con credenciales de dueño** — no confundirlo con `continental.verificar`, que mira los **datos** en cada despliegue (la cabecera de ese módulo tiene la tabla que los separa) |
 | `docs/decisiones/0013` | **cancelar suelta el tránsito sin desenviarlo**, y lo que vuelve es el producto, no el renglón. Atrasado es una señal calculada y no se llama "vencido" |
 | `docs/decisiones/0014` | **"probablemente recibido" se calcula cada vez y lo decidido se guarda**: por qué no es un estado, por qué el rechazo guarda qué compra y no una fecha tope, por qué solo se confirma lo que trae al menos lo pedido, qué pasa con una compra que encaja con dos renglones, con el proveedor sin puente, y por qué el día del envío es el de la farmacia y el mismo día cuenta |
+| `docs/decisiones/0016` | **cerrar avisa lo que se pierde, y reabrir vale mientras nadie use el corte**: por qué el deshacer solo sirve mientras ninguna lista se haya armado después (y no una ventana de tiempo, ni rehacer la siguiente, ni pasar lo perdido a la de hoy), la regla en el `WHERE` y escrita una vez, qué NO deshace, los tres escenarios con números, y la carrera que queda, medida |
+| `src/continental/cierre.py` | funciones puras del ADR 0016: qué se da por atendido al cerrar (`al_cerrar`, `lo_que_se_perderia`) y sus frases, el botón de reabrir (`reapertura`), la firma de la reapertura en la hora de la farmacia y por qué no se reabrió |
 | `docs/decisiones/0015` | **lo que faltó vuelve como piezas, lo recibido se dice en total, y el estado del pedido se calcula**: por qué no por fechas (propondría también lo que sí llegó) y por qué eso no rompe la reposición 1 a 1, los escenarios de varios días con sus números, por qué el pedido `recibido` no se guarda, por qué se corrige la cifra solo mientras nadie atendió lo que faltó, y por qué más de lo pedido se acepta |
 | `src/continental/recepcion.py` | funciones puras: lo que está en tránsito + las compras de SICAR -> propuestas de *probablemente recibido* con su evidencia, y los renglones sin propuesta con su motivo (seis). Empareja por proveedor, producto y día; **nunca por folio**. Ahí viven las frases de la recepción, el aviso de la noche de retraso y la regla de la cantidad (ticket 26, ADR 0014). Desde el 27, también **las piezas escritas a mano** (`piezas_escritas`), el estado que sale de ellas, **el estado del pedido calculado** (`estado_del_pedido`) y las frases de lo recibido a mano y parcial (ADR 0015) |
-| `sql/migraciones/` | **once** archivos numerados: lo que le falta a una base donde las tablas YA existen: `crear_tablas.sql` usa `CREATE TABLE IF NOT EXISTS` y calla si la tabla ya está con otra forma. También a mano y con credenciales de dueño |
+| `sql/migraciones/` | **doce** archivos numerados: lo que le falta a una base donde las tablas YA existen: `crear_tablas.sql` usa `CREATE TABLE IF NOT EXISTS` y calla si la tabla ya está con otra forma. También a mano y con credenciales de dueño |
 | `config/continental.yml` | puertos de los módulos y los parámetros del pedido |
 | `src/continental/web/app.py` | `/api/salud`, `/api/modulos`, el pedido sugerido y su cierre, la portada |
 | `src/continental/web/static/index.html` | la pantalla, solo el marcado: enlaza la hoja y el script (ticket 28) |

@@ -60,6 +60,25 @@ sistema a partir de lo que se vendió. No se le envía a nadie.
 > encargado, una lista cerrada que todavía se deja modificar es una lista que no
 > está cerrada.
 
+**Cerrar** — decir que ya se pidió lo que se iba a pedir. La siguiente lista
+arranca al día siguiente de lo que ésta consideró, y **lo que quedó sin pedir
+se da por atendido**: la siguiente no lo vuelve a proponer. Antes de cerrar la
+pantalla lo enseña, y señala aparte lo que **se perdería** —renglones sin pedir
+o descartados que traen lo que faltó de un parcial o lo vendido mientras un
+pedido venía en camino: su última oportunidad—. Avisa; no prohíbe.
+
+**Reabrir** — deshacer un cierre: `cerrado` → `abierto`, firmado —quién y
+cuándo—. **Solo la lista más reciente, y solo mientras no se haya armado la
+siguiente** (esta noche con el lote, o cuando alguien abra la pantalla con
+ventas nuevas): en cuanto se arma, empezó a contar donde la cerrada terminó y
+ya no hay vuelta. `vencido` no se reabre. Ver el ADR 0016.
+
+> **Reabrir no deshace nada más que el cierre.** Lo que se envió sigue
+> enviado, lo recibido sigue recibido y lo descartado sigue descartado —con la
+> lista abierta otra vez, se puede devolver—. Si se reabre una lista cuyo día
+> ya pasó, la siguiente carga la vence como a cualquiera que nadie cerró, y sus
+> ventas se arrastran a la lista que sigue.
+
 **Renglón** — un producto con su cantidad dentro de un pedido sugerido.
 
 - `abierto` — está propuesto y nadie lo ha atendido.

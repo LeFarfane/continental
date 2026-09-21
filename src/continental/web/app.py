@@ -40,6 +40,13 @@ from continental.almacenamiento import (
     dias_primera_vez_configurados,
     ventana_de_reposicion,
 )
+from continental.cierre import (
+    al_cerrar,
+    al_cerrar_sin_resumen,
+    frase_de_la_reapertura,
+    motivo_para_no_reabrir,
+    reapertura as boton_de_reabrir,
+)
 from continental.clasificacion import reglas_configuradas
 from continental.comparacion import (
     comparacion_como_json,
@@ -649,6 +656,9 @@ def pedido_sugerido(
         recepcion=recepcion,
         con_propuesta=con_propuesta,
         aun_faltan=aun_faltan,
+        # EL DESHACER (ADR 0016): solo de una lista cerrada, y solo si la base
+        # dice que ninguna lista se armó después. Sin su respuesta, no hay botón.
+        reapertura=_la_reapertura(almacenamiento, negocio, guardado),
     )
     # LO QUE SOLO TRAE LA CARGA (ticket 29), igual que `en_camino`: partir,
     # enviar y tachar no lo cambian y la pantalla lo pinta una vez.
@@ -934,7 +944,169 @@ def cerrar_pedido_sugerido(
         cerrado.fecha_del_pedido,
         cerrado.ventana.hasta,
     )
-    return _como_json(cerrado)
+    # El botón de deshacer aparece en cuanto se cierra (ADR 0016) — si la base
+    # dice que se puede: una pestaña vieja pudo cerrar una lista que ya no es
+    # la última, y ahí el botón contestaría 409.
+    return _como_json(
+        cerrado, reapertura=_la_reapertura(almacenamiento, negocio, cerrado)
+    )
+
+
+def _la_reapertura(
+    almacenamiento: AlmacenamientoDelPedido,
+    negocio: str,
+    guardado: PedidoSugeridoGuardado,
+) -> dict | None:
+    """El botón de reabrir y su frase (`cierre.reapertura`). `None` si no está cerrada.
+
+    Una lectura solo con la lista cerrada. Si falla, no hay botón y se dice
+    que no se pudo saber, con qué hacer (regla 4) — y el TIPO de la falla,
+    nunca su texto (regla 5). La lista se sigue viendo.
+    """
+    if guardado.estado != "cerrado":
+        return None
+    try:
+        se_puede = almacenamiento.se_puede_reabrir(negocio, guardado.pedido_sugerido_id)
+    except Exception as exc:  # noqa: BLE001 — sin la respuesta, no hay botón
+        log.exception(
+            "No se pudo saber si la lista %s se puede reabrir",
+            guardado.pedido_sugerido_id,
+        )
+        return boton_de_reabrir(
+            guardado,
+            None,
+            falla={
+                "detalle": (
+                    f"no se pudo saber si se puede reabrir ({type(exc).__name__})"
+                ),
+                "que_hacer": _que_hacer(AL_LEER),
+            },
+        )
+    return boton_de_reabrir(guardado, se_puede)
+
+
+@app.get("/api/pedido-sugerido/{pedido_sugerido_id}/al-cerrar")
+def antes_de_cerrar(
+    pedido_sugerido_id: int,
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+):
+    """Lo que la ventana de confirmación enseña antes de cerrar (ADR 0016).
+
+    **Solo lectura.** La lista se lee **en el momento del clic**, por su id: lo
+    que importa es lo que hay al decidir, no lo que había al cargar la página
+    —descartar sustituye un renglón en la pantalla sin reenviar la lista, y
+    otra pestaña pudo haber enviado un pedido—.
+
+    Todo lo que se enseña sale de `cierre.al_cerrar`: cuántos renglones quedan
+    sin pedir, cuántos están en un borrador sin enviar, y **cuáles traen algo
+    de otro pedido que se perdería** —lo que faltó de un parcial, lo vendido
+    mientras viajaba—, con sus piezas y su frase. Avisa, no prohíbe: si esto no
+    se puede leer, la respuesta lo dice y cerrar sigue disponible.
+    """
+    negocio = cargar().negocio
+    try:
+        lista = almacenamiento.leer_por_id(negocio, pedido_sugerido_id)
+    except Exception as exc:  # noqa: BLE001 — sin resumen se cierra igual, avisado
+        log.exception(
+            "No se pudo leer la lista %s para confirmar el cierre", pedido_sugerido_id
+        )
+        return JSONResponse(
+            status_code=200,
+            content=al_cerrar_sin_resumen(
+                f"no se pudo leer la lista ({type(exc).__name__})",
+                _que_hacer(AL_LEER),
+            ),
+        )
+    if lista is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "ok": False,
+                "detalle": (
+                    "No hay una lista con ese número en este negocio. Vuelve a "
+                    "cargar la página."
+                ),
+            },
+        )
+    return al_cerrar(lista)
+
+
+@app.post("/api/pedido-sugerido/{pedido_sugerido_id}/reabrir")
+def reabrir_pedido_sugerido(
+    pedido_sugerido_id: int,
+    request: Request,
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+):
+    """Deshacer un cierre: `cerrado` → `abierto`, firmado (ADR 0016).
+
+    **Solo la última lista del negocio**, mientras ninguna se haya armado
+    después: la condición vive en el `WHERE` de `_REABRIR`, no aquí. Cero filas
+    es un 409, y la lista se lee otra vez para decir por qué —ya estaba
+    abierta, está vencida, o ya se armó la siguiente—.
+
+    **Reabrir no deshace nada más**: lo enviado sigue enviado, lo recibido
+    sigue recibido. Solo vuelve a dejar la lista abierta, que es lo que deja
+    trabajar sus renglones.
+
+    **Quién reabre es una firma, no un permiso** (regla 3): el correo de Access
+    queda en `reabierto_por`. Se guarda en la fila —al revés que el cierre, que
+    solo va a la bitácora— porque reabrir es deshacer una decisión, y "¿quién
+    la reabrió?" es la pregunta que alguien va a hacer.
+    """
+    negocio = cargar().negocio
+    firma = quien(request)
+
+    try:
+        reabierta = almacenamiento.reabrir(negocio, pedido_sugerido_id, firma)
+    except Exception as exc:  # noqa: BLE001 — el almacenamiento caído es un hueco
+        log.exception("No se pudo reabrir el pedido sugerido %s", pedido_sugerido_id)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "detalle": f"no se pudo reabrir la lista ({type(exc).__name__})",
+                "que_hacer": _que_hacer(AL_GUARDAR),
+            },
+        )
+
+    if reabierta is None:
+        try:
+            como_quedo = almacenamiento.leer_por_id(negocio, pedido_sugerido_id)
+        except Exception as exc:  # noqa: BLE001 — sin el porqué, se dice que no se pudo
+            log.exception(
+                "No se pudo leer la lista %s para decir por qué no se reabrió",
+                pedido_sugerido_id,
+            )
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "ok": False,
+                    "detalle": (
+                        "La lista no se reabrió, y no se pudo leer por qué "
+                        f"({type(exc).__name__})."
+                    ),
+                    "que_hacer": _que_hacer(AL_LEER),
+                },
+            )
+        log.info(
+            "%s quiso reabrir el pedido sugerido %s y no se pudo (%s).",
+            firma,
+            pedido_sugerido_id,
+            como_quedo.estado if como_quedo else "no existe",
+        )
+        return JSONResponse(
+            status_code=409,
+            content={"ok": False, "detalle": motivo_para_no_reabrir(como_quedo)},
+        )
+
+    log.info(
+        "%s reabrió el pedido sugerido %s (%s), con ventas hasta el %s.",
+        firma,
+        reabierta.pedido_sugerido_id,
+        reabierta.fecha_del_pedido,
+        reabierta.ventana.hasta,
+    )
+    return _como_json(reabierta)
 
 
 @app.post("/api/renglon/{renglon_id}/descartar")
@@ -3075,6 +3247,7 @@ def _como_json(
     recepcion: dict | None = None,
     con_propuesta: frozenset[int] = frozenset(),
     aun_faltan: frozenset[int] | None = None,
+    reapertura: dict | None = None,
 ) -> dict:
     """La lista guardada, como la pantalla la lee.
 
@@ -3137,6 +3310,17 @@ def _como_json(
         "cerrado_en": (
             guardado.cerrado_en.isoformat() if guardado.cerrado_en else None
         ),
+        # LA ÚLTIMA REAPERTURA (ADR 0016): la firma, y su frase hecha en Python
+        # en la hora de la farmacia. `reapertura` es el botón de deshacer —solo
+        # lo traen la carga y el cierre, que son las que preguntan a la base—.
+        "reabierto_por": guardado.reabierto_por,
+        "reabierto_en": (
+            guardado.reabierto_en.isoformat() if guardado.reabierto_en else None
+        ),
+        "frase_de_la_reapertura": frase_de_la_reapertura(
+            guardado.reabierto_por, guardado.reabierto_en
+        ),
+        "reapertura": reapertura,
         "tiene_renglones_sin_atender": guardado.tiene_renglones_sin_atender,
         # **Van TODOS los renglones, descartados incluidos**, y con su estado.
         # Mandar solo los de trabajo dejaría a la pantalla sin con qué pintar el

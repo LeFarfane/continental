@@ -1100,29 +1100,141 @@ const pintarCabecera = (datos) => {
     // sigue ahí para verse.
     armado.append(' · Su día pasó y nadie la cerró.');
   }
+  // La firma de la última reapertura (ADR 0016), hecha en Python con la hora
+  // de la farmacia. Se queda aunque la lista se vuelva a cerrar.
+  if (datos.frase_de_la_reapertura) armado.append(' · ' + datos.frase_de_la_reapertura);
   armado.hidden = false;
 };
 
-const pintarCierre = (datos, alCerrar) => {
+const pintarCierre = (datos, alCerrar, alReabrir) => {
   const caja = document.getElementById('cierre');
   const boton = document.getElementById('cerrar');
+  const reabrir = document.getElementById('reabrir');
   const detalle = document.getElementById('cierre-detalle');
 
   // Solo se cierra lo que está abierto. El servidor lo vuelve a comprobar en
   // el `WHERE` de su UPDATE: esconder el botón es comodidad, no la garantía.
-  if (datos.estado !== 'abierto') {
+  if (datos.estado === 'abierto') {
+    // Se dice de qué día a qué día, y qué implica cerrarla: el corte es desde
+    // donde acumula la siguiente, así que cerrar es decidir que lo de esos días
+    // ya se pidió. Decir solo la fecha final escondería los días de en medio.
+    detalle.textContent = 'Al cerrarla queda guardado que consideró las ventas ' +
+      rangoEnPalabras(datos.ventas_consideradas_desde, datos.ventas_consideradas_hasta) +
+      '. La siguiente arranca al día siguiente. No se borra nada.';
+    boton.hidden = false;
+    boton.disabled = false;
+    boton.onclick = () => alCerrar(boton, detalle);
+    reabrir.hidden = true;
+    caja.hidden = false;
+    return;
+  }
+  boton.hidden = true;
+
+  // DESHACER EL CIERRE (ADR 0016). Todo llega hecho: si se puede, el rótulo y
+  // la frase; si no, por qué; si no se pudo saber, qué hacer. El botón solo se
+  // pinta con `se_puede`: sin la respuesta de la base no se ofrece, y un botón
+  // que contestaría 409 es un botón muerto.
+  const reapertura = datos.reapertura;
+  if (!reapertura) {
+    reabrir.hidden = true;
     caja.hidden = true;
     return;
   }
-  // Se dice de qué día a qué día, y qué implica cerrarla: el corte es desde
-  // donde acumula la siguiente, así que cerrar es decidir que lo de esos días
-  // ya se pidió. Decir solo la fecha final escondería los días de en medio.
-  detalle.textContent = 'Al cerrarla queda guardado que consideró las ventas ' +
-    rangoEnPalabras(datos.ventas_consideradas_desde, datos.ventas_consideradas_hasta) +
-    '. La siguiente arranca al día siguiente. No se borra nada.';
-  boton.disabled = false;
-  boton.onclick = () => alCerrar(boton, detalle);
+  detalle.textContent = reapertura.que_hacer
+    ? fallaEnUnaLinea(reapertura)
+    : (reapertura.frase || '');
+  reabrir.hidden = !reapertura.se_puede;
+  if (reapertura.se_puede) {
+    reabrir.textContent = reapertura.boton;
+    reabrir.disabled = false;
+    reabrir.onclick = () => alReabrir(reabrir, detalle);
+  }
   caja.hidden = false;
+};
+
+// LA CONFIRMACIÓN ANTES DE CERRAR (ADR 0016). Todo lo que dice llega hecho de
+// `cierre.al_cerrar`: cuánto queda sin pedir, y lo que se perdería renglón por
+// renglón con sus piezas. Aquí se acomoda en el <dialog>. Si el resumen no se
+// pudo leer, se dice con su qué hacer y cerrar sigue disponible: avisa, no
+// prohíbe.
+const pintarConfirmacion = (resumen) => {
+  const parte = (nombre) => document.getElementById('confirmar-cierre-' + nombre);
+  const cerrar = parte('cerrar');
+  const volver = parte('volver');
+  // Los rótulos del HTML son los de omisión; el servidor los cambia.
+  if (!cerrar.dataset.porOmision) cerrar.dataset.porOmision = cerrar.textContent;
+  if (resumen.volver) volver.textContent = resumen.volver;
+  if (resumen.titulo) parte('titulo').textContent = resumen.titulo;
+
+  const frase = parte('frase');
+  if (!resumen.ok) {
+    notaDeFalla('confirmar-cierre-frase', resumen);
+    parte('perdidas').hidden = true;
+    parte('deshacer').hidden = true;
+    cerrar.hidden = false;
+    cerrar.textContent = resumen.boton || cerrar.dataset.porOmision;
+    return false;
+  }
+  frase.className = '';
+  frase.textContent = resumen.frase || '';
+
+  const perdidas = resumen.se_perderian || [];
+  parte('perdidas').hidden = !perdidas.length;
+  parte('aviso').textContent = resumen.aviso || '';
+  parte('lista').replaceChildren(...perdidas.map((perdida) => {
+    const li = document.createElement('li');
+    li.textContent = perdida.frase;
+    return li;
+  }));
+  parte('que-hacer').textContent = resumen.que_hacer_con_lo_que_se_perderia || '';
+  parte('deshacer').textContent = resumen.deshacer || '';
+  parte('deshacer').hidden = !resumen.deshacer;
+
+  cerrar.hidden = !resumen.boton;
+  if (resumen.boton) cerrar.textContent = resumen.boton;
+  return perdidas.length > 0;
+};
+
+// Al apretar "Cerrar la lista": se pide el resumen EN ESE MOMENTO —no el de la
+// carga: descartar cambia un renglón sin reenviar la lista, y otra pestaña pudo
+// haber enviado un pedido— y se enseña. Solo "Cerrar" del diálogo cierra; Esc
+// y "Volver" lo dejan como estaba.
+const confirmarCierre = async (id, boton, detalle, alCerrarse) => {
+  boton.disabled = true;
+  const antes = detalle.textContent;
+  const resumen = await respuestaDe(fetch('/api/pedido-sugerido/' + id + '/al-cerrar'));
+  boton.disabled = false;
+  detalle.textContent = antes;
+
+  const dialogo = document.getElementById('confirmar-cierre');
+  const hayPerdidas = pintarConfirmacion(resumen);
+  dialogo.returnValue = '';
+  dialogo.onclose = () => {
+    if (dialogo.returnValue === 'cerrar') cerrarLista(id, boton, detalle, alCerrarse);
+  };
+  dialogo.showModal();
+  // El foco va a la salida segura cuando algo se perdería o no se pudo leer:
+  // un Enter distraído no cierra. En el caso normal, al botón de cerrar.
+  const cerrar = document.getElementById('confirmar-cierre-cerrar');
+  const volver = document.getElementById('confirmar-cierre-volver');
+  (hayPerdidas || !resumen.ok || cerrar.hidden ? volver : cerrar).focus();
+};
+
+// Deshacer el cierre. El servidor decide en su `WHERE` si todavía se puede; si
+// contesta que ya no (un 409 sin qué hacer: la siguiente ya existe), el
+// botón se esconde en vez de quedarse vivo para rebotar otra vez.
+const reabrirLista = async (id, boton, detalle, alReabrirse) => {
+  boton.disabled = true;
+  detalle.textContent = 'Reabriendo…';
+  const datos = await respuestaDe(fetch('/api/pedido-sugerido/' + id + '/reabrir',
+    { method: 'POST' }), 'al_guardar');
+  if (!datos.ok) {
+    boton.disabled = false;
+    boton.hidden = !datos.que_hacer;
+    detalle.textContent = fallaEnUnaLinea(datos);
+    return;
+  }
+  alReabrirse(datos);
 };
 
 const cerrarLista = async (id, boton, detalle, alCerrarse) => {
@@ -1143,13 +1255,12 @@ const cerrarLista = async (id, boton, detalle, alCerrarse) => {
     return;
   }
 
-  pintarCabecera(datos);
-  pintarCierre(datos, null);
-  // La tabla se vuelve a pintar porque el estado de la lista cambió, y con él
-  // cambia lo que se puede hacer: una lista cerrada ya no deja corregir
-  // cantidades. Sin esto, los campos se quedarían editables hasta que alguien
-  // recargara, y cada corrección rebotaría con un 409 — la pantalla diciendo
-  // que se puede algo que el servidor no permite.
+  // La cabecera, el cierre —ahora con su deshacer— y la tabla se vuelven a
+  // pintar porque el estado de la lista cambió, y con él cambia lo que se
+  // puede hacer: una lista cerrada ya no deja corregir cantidades. Sin esto,
+  // los campos se quedarían editables hasta que alguien recargara, y cada
+  // corrección rebotaría con un 409 — la pantalla diciendo que se puede algo
+  // que el servidor no permite.
   alCerrarse(datos);
 };
 
@@ -1292,8 +1403,19 @@ async function cargarPedido() {
   pintarRecepcion(datos.recepcion);
   pintarEnCamino(datos.en_camino);
   pintarCabecera(datos);
-  pintarCierre(datos, (boton, detalle) =>
-    cerrarLista(datos.pedido_sugerido_id, boton, detalle, (cerrada) => alCerrarse(cerrada)));
+  // Cerrar pasa por la confirmación, y cerrar y reabrir terminan igual: la
+  // cabecera, el cierre y la tabla con el estado nuevo (ADR 0016).
+  const alCambiarDeEstado = (nueva) => {
+    pintarCabecera(nueva);
+    pintarElCierre(nueva);
+    alCerrarse(nueva);
+  };
+  const pintarElCierre = (conEstado) => pintarCierre(conEstado,
+    (boton, detalle) => confirmarCierre(
+      datos.pedido_sugerido_id, boton, detalle, alCambiarDeEstado),
+    (boton, detalle) => reabrirLista(
+      datos.pedido_sugerido_id, boton, detalle, alCambiarDeEstado));
+  pintarElCierre(datos);
 
   if (!datos.renglones.length) {
     // La frase llega de Python (ticket 29): "no se vendió nada" era falso —el
@@ -1841,9 +1963,10 @@ async function cargarPedido() {
   }
 
   // Ya hay tabla: cerrar la lista tiene que volver a pintarla con el estado
-  // nuevo, que es lo que apaga los campos de cantidad.
-  alCerrarse = (cerrada) => {
-    datos.estado = cerrada.estado;
+  // nuevo, que es lo que apaga los campos de cantidad. Y reabrirla (ADR 0016),
+  // que los vuelve a encender.
+  alCerrarse = (cambiada) => {
+    datos.estado = cambiada.estado;
     repintar();
   };
 

@@ -369,7 +369,14 @@ def test_la_pantalla_pinta_la_existencia_del_renglon_y_no_la_vuelve_a_buscar(cli
     # La del ticket 29: `/api/doyle`, que pregunta si Doyle contesta APARTE de
     # la lista y al mismo tiempo —la lista no depende de Doyle, y un Doyle
     # colgado no la puede hacer esperar—. No vuelve a pedir la lista.
-    assert portada.count("fetch('/api/") == 16
+    #
+    # Las dos del ADR 0016: `/al-cerrar`, el resumen que la confirmación
+    # enseña, leído AL APRETAR "Cerrar la lista" y no en la carga —descartar
+    # cambia un renglón sin reenviar la lista, y otra pestaña pudo haber
+    # enviado algo—; y `/reabrir`, el deshacer. Ninguna vuelve a pedir la
+    # lista: el resumen es la pregunta de un clic, y reabrir devuelve la lista
+    # entera como cerrar.
+    assert portada.count("fetch('/api/") == 18
     assert portada.count("fetch('/api/pedido-sugerido')") == 1
 
 

@@ -727,6 +727,61 @@ class AlmacenamientoFalso:
             pedido_sugerido_id, CERRADO, cerrado_en=dt.datetime.now(dt.UTC)
         )
 
+    def _ninguna_lista_despues(self, lista: dict) -> bool:
+        """`_NINGUNA_LISTA_DESPUES`, en memoria y escrita una vez (ADR 0016).
+
+        La usan `reabrir` —el `WHERE`— y `se_puede_reabrir` —la lectura—, igual
+        que allá las dos sentencias traen el mismo texto. Con el negocio en la
+        comparación: una lista de otra farmacia no cuenta (regla 7).
+        """
+        return not any(
+            otra["negocio"] == lista["negocio"]
+            and otra["fecha_del_pedido"] > lista["fecha_del_pedido"]
+            for otra in self.listas
+        )
+
+    def _se_puede_reabrir(self, negocio: str, pedido_sugerido_id: int) -> dict | None:
+        """La lista que `_REABRIR` movería, o `None`. Las cuatro condiciones de
+        su `WHERE`, en el mismo orden."""
+        lista = self._por_id(pedido_sugerido_id)
+        if (
+            lista is None
+            or lista["negocio"] != negocio
+            or lista["estado"] != CERRADO
+            or not self._ninguna_lista_despues(lista)
+        ):
+            return None
+        return lista
+
+    def se_puede_reabrir(self, negocio: str, pedido_sugerido_id: int) -> bool:
+        self._revisar()
+        return self._se_puede_reabrir(negocio, pedido_sugerido_id) is not None
+
+    def reabrir(
+        self, negocio: str, pedido_sugerido_id: int, quien: str
+    ) -> PedidoSugeridoGuardado | None:
+        """`_REABRIR`: `cerrado` → `abierto`, `cerrado_en` a `None` y la firma.
+
+        Todo se revisa contra los CHECK **antes** de escribir, igual que
+        `poner_estado`: el doble no puede aceptar lo que la base rechazaría.
+        """
+        self._revisar()
+        lista = self._se_puede_reabrir(negocio, pedido_sugerido_id)
+        if lista is None:
+            return None
+        propuesta = {
+            **lista,
+            "estado": ABIERTO,
+            "cerrado_en": None,
+            "reabierto_por": quien,
+            # El `now()` de la base: un instante real con zona.
+            "reabierto_en": dt.datetime.now(dt.UTC),
+        }
+        revisar_la_lista(propuesta)
+        for columna in ("estado", "cerrado_en", "reabierto_por", "reabierto_en"):
+            lista[columna] = propuesta[columna]
+        return armar_guardado(lista, lista["renglones"])
+
     # ------------------------------------------------ el estado del renglón
 
     def poner_estado_del_renglon(

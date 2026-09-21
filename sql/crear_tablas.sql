@@ -111,8 +111,12 @@
 --      de un pedido anterior y trae de vuelta. NO crea tabla, y NO toca el
 --      estado del pedido: `recibido` y `recibido parcial` del pedido se
 --      calculan.
+--  12. `sql/migraciones/0012-reabrir-la-lista-cerrada.sql` (ADR 0016), que le
+--      da a `pedido_sugerido` la firma de la última reapertura -quién deshizo
+--      un cierre y cuándo-. NO crea tabla, y NO rompe el código de antes: las
+--      dos columnas admiten nulos y no tienen DEFAULT.
 --
--- Las once son idempotentes, así que correrlas sobre una base que ya las
+-- Las doce son idempotentes, así que correrlas sobre una base que ya las
 -- tiene -o sobre una recién creada con este archivo- no rompe nada.
 --
 -- **La 0003 y la 0004 son distintas de las dos primeras y hay que decirlo**:
@@ -187,6 +191,10 @@ CREATE TABLE IF NOT EXISTS pedidos.pedido_sugerido (
     ventas_consideradas_hasta date         NOT NULL,
     armado_en                 timestamptz  NOT NULL DEFAULT now(),
     cerrado_en                timestamptz,
+    -- La firma de la última reapertura (ADR 0016, migración 0012). Admiten
+    -- nulos y no tienen DEFAULT: el `INSERT` de la lista no las nombra.
+    reabierto_por             text,
+    reabierto_en              timestamptz,
 
     CONSTRAINT pk_pedido_sugerido
         PRIMARY KEY (pedido_sugerido_id),
@@ -221,7 +229,21 @@ CREATE TABLE IF NOT EXISTS pedidos.pedido_sugerido (
     -- puede auditar, y una hora de cierre en una lista abierta es una mentira
     -- a la espera de que alguien la lea.
     CONSTRAINT ck_pedido_sugerido_cierre
-        CHECK ((estado = 'cerrado') = (cerrado_en IS NOT NULL))
+        CHECK ((estado = 'cerrado') = (cerrado_en IS NOT NULL)),
+
+    -- REABRIR ES DESHACER UN CIERRE, Y VA FIRMADO (ADR 0016). `cerrado` ->
+    -- `abierto` solo mientras ninguna lista se haya armado después; la regla
+    -- vive en el `WHERE` de `_REABRIR`, porque un CHECK no puede mirar otra
+    -- fila. Aquí solo se amarra la firma: no vacía, y quién con cuándo.
+    --
+    -- El par NO mira el estado, y es a propósito: una lista reabierta y vuelta
+    -- a cerrar conserva la firma -dice que hubo un cierre deshecho-, y el
+    -- `_CERRAR` de antes de la 0012 no tiene que saber de ella.
+    CONSTRAINT ck_pedido_sugerido_reabierto_por
+        CHECK (reabierto_por <> ''),
+
+    CONSTRAINT ck_pedido_sugerido_reapertura
+        CHECK ((reabierto_por IS NULL) = (reabierto_en IS NULL))
 );
 
 COMMENT ON TABLE pedidos.pedido_sugerido IS
@@ -266,6 +288,15 @@ COMMENT ON COLUMN pedidos.pedido_sugerido.ventas_consideradas_desde IS
 COMMENT ON COLUMN pedidos.pedido_sugerido.armado_en IS
     'Cuándo se armó la lista (instante real, con zona). Distinto de '
     'ventas_consideradas_hasta, que es de qué día son los datos.';
+
+COMMENT ON COLUMN pedidos.pedido_sugerido.reabierto_por IS
+    'Quién deshizo el último cierre de esta lista (correo de Cloudflare Access: '
+    'firma, no permiso). NULL si nunca se reabrió. Se queda al volver a cerrar '
+    '(ADR 0016).';
+
+COMMENT ON COLUMN pedidos.pedido_sugerido.reabierto_en IS
+    'Cuándo se deshizo el último cierre (instante real, con zona). La hora del '
+    'cierre deshecho queda en la bitácora: cerrado_en vuelve a NULL al reabrir.';
 
 
 -- --------------------------------------------------------------------------

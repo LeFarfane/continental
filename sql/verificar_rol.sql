@@ -773,6 +773,31 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
          END),
  NULL),
 
+-- LA REAPERTURA (ADR 0016, migración 0012). Sin las columnas la lista del día
+-- no se puede leer -`_LEER_LISTA` las nombra- y la pantalla entera se queda en
+-- "no se pudo armar el pedido sugerido". Deshacer un cierre va firmado.
+(38,
+ 'Una lista reabierta dice quién deshizo el cierre y cuándo',
+ 'las restricciones y las dos columnas',
+ (SELECT CASE
+           WHEN NOT EXISTS (SELECT 1 FROM pg_constraint con
+                             WHERE con.conrelid = to_regclass('pedidos.pedido_sugerido')
+                               AND con.conname = 'ck_pedido_sugerido_reapertura')
+                THEN 'NO EXISTE ck_pedido_sugerido_reapertura'
+           WHEN NOT EXISTS (SELECT 1 FROM pg_constraint con
+                             WHERE con.conrelid = to_regclass('pedidos.pedido_sugerido')
+                               AND con.conname = 'ck_pedido_sugerido_reabierto_por')
+                THEN 'NO EXISTE ck_pedido_sugerido_reabierto_por'
+           WHEN (SELECT count(*) FROM pg_attribute a
+                  WHERE a.attrelid = to_regclass('pedidos.pedido_sugerido')
+                    AND NOT a.attisdropped
+                    AND NOT a.attnotnull
+                    AND a.attname IN ('reabierto_por', 'reabierto_en')) <> 2
+                THEN 'falta reabierto_por o reabierto_en, o no admiten nulos'
+           ELSE 'las restricciones y las dos columnas'
+         END),
+ NULL),
+
 -- AVISO y no MAL: una tabla temporal vive en la sesión, no puede leer nada que
 -- el rol no pueda leer ya, y desaparece al desconectarse. El permiso llega por
 -- el TEMPORARY que PUBLIC tiene sobre la base por omisión, y quitarlo sería

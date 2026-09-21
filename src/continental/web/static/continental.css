@@ -131,6 +131,44 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
   border: 1px solid var(--tinta); border-radius: 999px;
 }
 .cierre button:disabled { cursor: default; opacity: .5; border-color: var(--linea); }
+/* Deshacer el cierre (ADR 0016) va sin relleno: es la salida de un error, no la
+   acción del día, y no debe competir con nada. */
+.cierre button#reabrir { background: transparent; border-style: dashed; }
+
+/* LA CONFIRMACIÓN ANTES DE CERRAR (ADR 0016). Un <dialog> propio: el del
+   navegador no deja decir QUÉ se perdería. El fondo de atrás se oscurece con la
+   tinta del tema y opacidad, no con un color escrito a mano. */
+.confirmar-cierre {
+  max-width: min(36rem, calc(100vw - 2rem)); padding: 1.1rem 1.25rem;
+  color: var(--tinta); background: var(--fondo);
+  border: 1px solid var(--linea); border-radius: .6rem;
+}
+.confirmar-cierre::backdrop { background: var(--tinta); opacity: .35; }
+.confirmar-cierre h3 { margin: 0 0 .6rem; font-size: 1.05rem; }
+.confirmar-cierre p { margin: 0 0 .6rem; font-size: .92rem; }
+.confirmar-cierre .deshacer { color: var(--tenue); font-size: .85rem; }
+/* LO QUE SE PERDERÍA no se distingue solo por el ámbar (ticket 28): va con
+   barra a la izquierda, con el rótulo "Ojo:" escrito, y cada renglón con su
+   signo. */
+.confirmar-cierre .aviso {
+  border-left: 3px solid var(--aviso); padding: .45rem .7rem; margin: 0 0 .7rem;
+  background: var(--aviso-fondo); border-radius: .3rem;
+}
+.confirmar-cierre .aviso .rotulo { color: var(--aviso); }
+.se-perderia li { border-bottom: 0; padding: .2rem 0; font-size: .9rem; }
+.se-perderia li::before {
+  content: "!" / ""; flex: none; font-weight: 700; color: var(--aviso);
+  width: 1.1rem; height: 1.1rem; line-height: 1.1rem; text-align: center;
+  border: 1px solid var(--aviso); border-radius: 50%; font-size: .75rem;
+}
+.confirmar-cierre .botones { display: flex; flex-wrap: wrap; gap: .6rem; justify-content: flex-end; }
+.confirmar-cierre .botones button {
+  font: inherit; font-size: .9rem; padding: .4rem .9rem; cursor: pointer;
+  color: var(--tinta); background: var(--realce);
+  border: 1px solid var(--tinta); border-radius: 999px;
+}
+/* Volver es la salida segura: va con el mismo peso, sin relleno. */
+.confirmar-cierre .botones button[value="volver"] { background: transparent; }
 .nota { margin: 0 0 1rem; color: var(--tenue); font-size: .9rem; }
 .nota.mal { color: var(--mal); }
 .nota.aviso { color: var(--aviso); }

@@ -28,8 +28,33 @@
     <p class="armado" id="armado" hidden></p>
     <div class="cierre" id="cierre" hidden>
       <button type="button" id="cerrar">Cerrar la lista</button>
+      <!-- DESHACER EL CIERRE (ADR 0016). Nace escondido y solo se enseña cuando
+           el servidor dice que se puede: un botón que contestaría 409 es un
+           botón muerto. Su rótulo y la frase de al lado llegan de Python. -->
+      <button type="button" id="reabrir" hidden>Reabrir</button>
       <span class="detalle" id="cierre-detalle"></span>
     </div>
+    <!-- LA CONFIRMACIÓN ANTES DE CERRAR (ADR 0016). Un <dialog> propio y no la
+         ventanita del navegador: con showModal() atrapa el foco, Esc lo cierra sin
+         cerrar la lista, y "Volver" funciona aun sin JavaScript (method=dialog).
+         Todo lo que dice llega hecho del servidor (`cierre.al_cerrar`); lo de
+         aquí es el esqueleto con rótulos por omisión. -->
+    <dialog id="confirmar-cierre" class="confirmar-cierre" aria-labelledby="confirmar-cierre-titulo">
+      <form method="dialog">
+        <h3 id="confirmar-cierre-titulo">¿Cerrar la lista?</h3>
+        <p id="confirmar-cierre-frase"></p>
+        <div class="aviso" id="confirmar-cierre-perdidas" hidden>
+          <p><b class="rotulo">Ojo:</b> <span id="confirmar-cierre-aviso"></span></p>
+          <ul class="se-perderia" id="confirmar-cierre-lista"></ul>
+          <p id="confirmar-cierre-que-hacer"></p>
+        </div>
+        <p class="deshacer" id="confirmar-cierre-deshacer" hidden></p>
+        <div class="botones">
+          <button value="volver" id="confirmar-cierre-volver">Volver a la lista</button>
+          <button value="cerrar" id="confirmar-cierre-cerrar">Cerrar la lista</button>
+        </div>
+      </form>
+    </dialog>
     <div class="vistas" id="vistas" role="radiogroup" aria-label="Qué se muestra en la lista" hidden></div>
     <p class="nota" id="pedido-nota" hidden></p>
     <p class="nota" id="pedido-sin-clasificar" hidden></p>
