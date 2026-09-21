@@ -56,20 +56,22 @@ peor que antes**: lo único que escribe son filas de precio —la tabla que solo
 crece del ADR 0004— más la lista del día si no existía, sin un solo `UPDATE` de
 renglón, y hay una prueba que lo mata a la mitad para demostrarlo.
 
-**Dos casillas del ticket 18 quedaron SIN MARCAR, y las dos por bloqueos
-externos que siguen puestos** (más la del timer, que está escrito y probado
-pero no instalado porque Continental todavía no está en atlas):
+**Dos casillas del ticket 18 siguen SIN MARCAR** (más la del timer, que está
+escrito y probado pero no instalado porque Continental todavía no está en
+atlas):
 
-- **El orden de importancia por clase ABC.** `marts.dim_producto` no tiene
-  `clase_abc` (ADR 0018 de farmacia-data, **aceptado y sin implementar**). El
-  orden está construido entero como función pura y probado con dobles; el lote
-  **no reordena nada** mientras no haya clase —consulta en el orden de urgencia
-  con el que la lista se guardó— y **lo declara en cada corrida**. No se
-  inventó un orden alterno: el propio ADR 0018 descartó "ordenar por la
-  utilidad de la ventana" con su razón escrita. El día que la columna exista,
-  el trabajo es **una línea**: `almacen.LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO =
-  True`. Y nadie tiene que acordarse — `continental.verificar` lo imprime como
-  PENDIENTE en cada despliegue, con esa constante dentro.
+- **El orden de importancia por clase ABC. Ya no es un bloqueo externo.**
+  `marts.dim_producto.clase_abc` ('A'/'B'/'C'/NULL) existe: farmacia-data la
+  materializó el 2026-09-20 (`c989ecb`, su ADR 0018), el rol `continental` la
+  lee, y Continental la usa desde `f3d7120`
+  (`almacen.LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO = True`). Un producto sin ventas
+  en 365 días queda en NULL **a propósito** —el 55% del catálogo— y el lote lo
+  manda al final. La casilla sigue abierta por una decisión de este repo, no
+  por farmacia-data: `Orden.cumple_el_orden` es falso si **un solo** renglón
+  no tiene clase, así que con ese NULL intencional la bitácora puede decir
+  "SIN CUMPLIR" en noches en que el orden es exactamente el del ADR 0018. Está
+  anotado en el ticket 18. No se inventó un orden alterno: el propio ADR 0018
+  descartó "ordenar por la utilidad de la ventana" con su razón escrita.
 - **El navegador reutilizado por proveedor.** Vive en Doyle (su ADR 0008, sin
   hacer) y Continental no abre navegadores nunca (regla 1). Lo único que de
   este lado depende está hecho: el lote es **estrictamente secuencial**, que es
@@ -926,14 +928,11 @@ pytest                # 1647 pruebas, 0 saltadas, 6.69-7.27 s (2026-09-21, ADR 0
    Chrome de Google arranca en ese CPU de 2010—, y descubrirlo mientras además
    se construye la suite mezclaría dos fallas distintas.
 2. **`clase_abc` y `clase_xyz` como columnas de `dim_producto`** en
-   farmacia-data (ADR 0018). El lote nocturno necesita un orden de importancia
-   desde el primer día. **Desde el ticket 18 todo lo de este lado está listo y
-   esperando**: el orden es una función pura probada, `Producto.clase_abc`
-   existe, y el único trabajo del día que llegue la columna es poner
-   `almacen.LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO = True` —la consulta de hoy ni
-   siquiera la nombra, a propósito, porque un `select clase_abc` se llevaría
-   por delante la lista del día entera—. El paso 6 del despliegue lo imprime
-   como PENDIENTE hasta entonces.
+   farmacia-data (ADR 0018). **Hecho del lado de farmacia-data el 2026-09-20
+   (`c989ecb`)**, y Continental lee `clase_abc` desde `f3d7120`
+   (`almacen.LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO = True`). Lo que queda es de
+   este repo: decidir si un renglón sin clase (NULL a propósito, sin ventas en
+   365 días) debe tumbar `Orden.cumple_el_orden` — ver la nota en el ticket 18.
 3. **El módulo de Pedido.** Completo en código desde el ticket 29 (los 29
    tickets); lo que falta es desplegarlo y el día de operación real de abajo.
 4. **Absorber la interfaz de Marlowe**, que pasa a ser API como Doyle. Después

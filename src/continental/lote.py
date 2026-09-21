@@ -199,17 +199,16 @@ FINALES_DEL_RENGLON: tuple[str, ...] = (
 # PURO — EL ORDEN DE IMPORTANCIA
 # =========================================================================
 #
-# **Esta parte está BLOQUEADA por fuera y el código lo dice en vez de
-# disimularlo.** El orden que el ticket 18 pide es por clase ABC del catálogo,
-# y `marts.dim_producto` no tiene esa columna: el ADR 0018 de farmacia-data
-# está aceptado y sin implementar (verificado el 2026-09-19 — `clase_abc` no
-# aparece en un solo modelo de dbt).
+# El orden que el ticket 18 pide es por clase ABC del catálogo, y la clase es
+# la columna `marts.dim_producto.clase_abc` ('A'/'B'/'C'/NULL): la materializó
+# farmacia-data el 2026-09-20 (`c989ecb`, su ADR 0018) y Continental la lee
+# desde entonces (`almacen.LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO = True`). Un
+# producto sin ventas en los últimos 365 días queda en NULL **a propósito** —el
+# 55% del catálogo— y aquí se va al final.
 #
-# Lo que se construyó hoy es la función entera, probada con dobles que sí
-# traen clase. Lo que no se puede hacer hoy es LEERLA, y por eso
 # `ordenar_por_importancia` devuelve, además del orden, **si ese orden es el
-# que el ticket pidió**. Cuando no lo es, el lote lo escribe en la bitácora
-# con todas sus letras y la casilla del ticket se queda sin marcar.
+# que el ticket pidió**. Cuando no lo es —algún renglón sin clase—, el lote lo
+# escribe en la bitácora con todas sus letras.
 #
 # Lo que NO se hizo, a propósito: inventar un orden alterno y llamarlo
 # cumplido. El ADR 0018 consideró exactamente eso —su opción 2, "que
@@ -239,7 +238,7 @@ class Orden:
 
     Las dos cosas van juntas en un solo objeto a propósito. Devolver nada más
     la lista ordenada dejaría que quien la recibe supusiera que se cumplió el
-    orden por clase ABC, que es justo lo que hoy no pasa; y devolver solo el
+    orden por clase ABC aunque algún renglón no tuviera clase; y devolver solo el
     booleano obligaría a ordenar dos veces.
 
     `cumple_el_orden` es **falso mientras un solo renglón no tenga clase**, y
@@ -269,8 +268,8 @@ def clases_del_catalogo(catalogo: Sequence[Producto]) -> dict[int, str]:
     alguien compruebe solo una — es el mismo criterio de
     `precios_de_la_lista`.
 
-    Hoy devuelve el diccionario **vacío** para las 3,429 filas, porque la
-    columna no existe y `Producto.clase_abc` vale `SIN_CLASE_ABC` en todas.
+    Los productos sin ventas en los últimos 365 días —el 55% del catálogo—
+    traen NULL en `dim_producto.clase_abc` a propósito y por eso no entran.
     """
     return {
         p.producto_id: p.clase_abc for p in catalogo if p.clase_abc in CLASES_ABC
@@ -300,9 +299,8 @@ def ordenar_por_importancia(
     clase es mercancía que se queda sin precio sin que nadie se entere, que es
     el daño de la regla 4 de `CLAUDE.md`.
 
-    `clase_por_producto` vacío o `None` es el caso de **hoy**: la columna
-    `clase_abc` no existe en `marts.dim_producto` (ADR 0018 de farmacia-data,
-    aceptado y sin implementar). Entonces esto devuelve los renglones **en el
+    Si **ningún** renglón trae clase —el catálogo no trajo ninguna, o ninguno
+    de los de la lista la tiene—, esto devuelve los renglones **en el
     orden en que llegaron** —el de urgencia, que es el que la lista ya tiene y
     el que el encargado ve en la pantalla— con `cumple_el_orden` en falso y el
     motivo escrito. No es un orden inventado para tapar el hueco: es no
@@ -317,16 +315,38 @@ def ordenar_por_importancia(
     sin_clase = len(renglones) - con_clase
 
     if not con_clase:
+        # El motivo dice solo lo que se sabe aquí: si el catálogo trajo alguna
+        # clase o ninguna. La columna existe desde el 2026-09-20 (farmacia-data
+        # `c989ecb`); culpar a su ausencia sería afirmar algo falso.
+        if not renglones:
+            porque = "la lista no tiene renglones de trabajo, no hay nada que ordenar."
+        elif not clases:
+            porque = (
+                "el orden por clase ABC no se pudo cumplir: el catálogo leído "
+                "no trae clase ABC ('A', 'B' o 'C') para ningún producto. "
+                "`marts.dim_producto.clase_abc` existe desde el 2026-09-20 "
+                "(farmacia-data `c989ecb`, ADR 0018), así que esto no es lo "
+                "esperado: o Continental no la está pidiendo "
+                "(`almacen.LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO`), o la columna "
+                "llegó sin clase en todas las filas."
+            )
+        else:
+            porque = (
+                f"el orden por clase ABC no se pudo cumplir: ninguno de los "
+                f"{len(renglones)} renglones tiene clase ABC en el catálogo "
+                "(dim_producto la deja en NULL, a propósito, en los productos "
+                "sin ventas en los últimos 365 días)."
+            )
+        if renglones:
+            porque += (
+                " Se consulta en el orden de urgencia con el que la lista se "
+                "armó, que es el que la pantalla muestra. NO es el orden que "
+                "pide el ticket 18."
+            )
         return Orden(
             renglones=renglones,
             cumple_el_orden=False,
-            motivo=(
-                "el orden por clase ABC no se pudo cumplir: marts.dim_producto "
-                "todavía no tiene la columna `clase_abc` (ADR 0018 de "
-                "farmacia-data, aceptado y sin implementar). Se consulta en el "
-                "orden de urgencia con el que la lista se armó, que es el que "
-                "la pantalla muestra. NO es el orden que pide el ticket 18."
-            ),
+            motivo=porque,
             con_clase=0,
             sin_clase=sin_clase,
         )
@@ -346,8 +366,9 @@ def ordenar_por_importancia(
             cumple_el_orden=False,
             motivo=(
                 f"{sin_clase} de {len(renglones)} renglones no tienen clase ABC "
-                "en el catálogo y quedaron al final. El orden de esos no es el "
-                "que pide el ticket 18: ponles clase en dim_producto."
+                "en el catálogo y quedaron al final, en orden de urgencia "
+                "(dim_producto la deja en NULL, a propósito, en los productos "
+                "sin ventas en los últimos 365 días)."
             ),
             con_clase=con_clase,
             sin_clase=sin_clase,

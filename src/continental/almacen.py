@@ -45,8 +45,9 @@ class LineaDeVenta:
 
     Grano: ticket × artículo (`detallev` tiene PK `(ven_id, art_id)`), así que
     un producto no aparece dos veces en la misma venta. La reposición 1 a 1
-    suma `cantidad` sobre el rango; `utilidad` es lo que ordena el lote
-    nocturno mientras `clase_abc` no exista.
+    suma `cantidad` sobre el rango. El lote nocturno **no** ordena por
+    `utilidad`: ordena por `dim_producto.clase_abc` (ADR 0018 de farmacia-data
+    descartó a propósito ordenar por la utilidad de la ventana).
 
     `costo` es **sin IVA**. El de mostrador viene con IVA en otra columna:
     restarlos directo es la equivocación que Marlowe ya cometió, con la flecha
@@ -61,14 +62,15 @@ class LineaDeVenta:
     utilidad: float
 
 
-#: Los tres valores que `marts.dim_producto.clase_abc` va a tomar, y el orden
+#: Los tres valores que toma `marts.dim_producto.clase_abc`, y el orden
 #: en que se leen de más a menos importante. Salen del ADR 0018 de
 #: farmacia-data: participación acumulada en la utilidad de 12 meses, A hasta
 #: 80% y B hasta 95%.
 #:
-#: Se escriben aquí y no se deducen porque son el vocabulario de otro repo: el
-#: día que llegue la columna, lo que hay que comparar es **esto** contra lo que
-#: dbt escriba, y una tupla tiene dónde ponerle la comparación.
+#: Se escriben aquí y no se deducen porque son el vocabulario de otro repo: lo
+#: que hay que comparar es **esto** contra lo que dbt escribe (columna
+#: materializada el 2026-09-20, farmacia-data `c989ecb`), y una tupla tiene
+#: dónde ponerle la comparación.
 CLASES_ABC: tuple[str, ...] = ("A", "B", "C")
 
 #: Que un producto no tenga clase conocida. **No es una cuarta clase**: es "no
@@ -132,11 +134,12 @@ class Producto:
     por un lado. Es la columna del ADR 0018 de farmacia-data: A, B o C por
     participación acumulada en la utilidad de 12 meses.
 
-    **Hoy vale `SIN_CLASE_ABC` en las 3,429 filas, y eso no es un valor por
-    omisión inocente: es el bloqueo externo del ticket 18 dicho en el tipo.**
-    La columna todavía no existe en `marts.dim_producto` (ADR 0018 aceptado y
-    sin implementar), así que la consulta real ni siquiera la nombra — ver
-    `LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO`. Nada deduce una clase de otra cosa:
+    La columna existe en `marts.dim_producto` desde el 2026-09-20
+    (farmacia-data `c989ecb`) y la consulta real la pide — ver
+    `LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO`. **Vale `SIN_CLASE_ABC` en los
+    productos sin ventas en los últimos 365 días** (NULL a propósito, el 55%
+    del catálogo), y eso no es un valor por omisión inocente: es "no se sabe".
+    Nada deduce una clase de otra cosa:
     quien ordena por importancia mira si la sabe y **dice que no la sabe**
     cuando no, en vez de inventarse un orden alterno y llamarlo cumplido. El
     ADR 0018 descartó a propósito "ordenar por la utilidad de la ventana" (su
@@ -144,7 +147,7 @@ class Producto:
 
     Va al final y con valor por omisión para que las filas que ya se
     construyen en cien sitios —dobles, pruebas, `AlmacenFalso`— sigan
-    construyéndose igual. El día que la columna exista, el campo ya está.
+    construyéndose igual.
     """
 
     producto_id: int
@@ -162,7 +165,7 @@ class Producto:
 
     @property
     def tiene_clase_abc(self) -> bool:
-        """Si de este producto se sabe cuánto pesa. Hoy: de ninguno."""
+        """Si de este producto se sabe cuánto pesa (no, si no vendió en 365 días)."""
         return self.clase_abc in CLASES_ABC
 
 
@@ -258,10 +261,11 @@ _VENTAS = text(
     """
 )
 
-#: Las once columnas que `marts.dim_producto` tiene **hoy** y que Continental
-#: necesita. Sin `clase_abc`: esa columna no existe (ADR 0018 de farmacia-data,
-#: aceptado y sin implementar) y nombrarla haría que la lista del día entera
-#: rebotara con "column clase_abc does not exist".
+#: Las once columnas de `marts.dim_producto` que Continental necesita siempre.
+#: `clase_abc` va aparte (`COLUMNA_DE_LA_CLASE_ABC`) y se agrega solo si
+#: `LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO`: existe desde el 2026-09-20
+#: (farmacia-data `c989ecb`), pero nombrarla contra una base donde no esté haría
+#: que la lista del día entera rebotara con "column clase_abc does not exist".
 _COLUMNAS_DEL_CATALOGO = (
     "producto_id",
     "clave",
@@ -276,7 +280,7 @@ _COLUMNAS_DEL_CATALOGO = (
     "es_granel",
 )
 
-#: Lo único que se le agrega a la consulta el día que la columna exista.
+#: Lo único que se le agrega a la consulta cuando el interruptor está encendido.
 COLUMNA_DE_LA_CLASE_ABC = "clase_abc"
 
 
@@ -285,8 +289,8 @@ def _sql_del_catalogo(con_la_clase: bool) -> str:
 
     Se arma y no se escribe dos veces entero por la razón de siempre: dos
     consultas casi iguales se separan al primer cambio, y la que nadie corre
-    hoy sería justo la que se quedara vieja. Aquí la que nadie corre hoy es la
-    del día que llegue el ADR 0018, o sea la que más falta hace que esté bien.
+    sería justo la que se quedara vieja. Desde el 2026-09-20 la que corre es la
+    que trae la clase; la otra es la de repliegue si el interruptor se apaga.
 
     No es SQL armado con datos de nadie: los nombres son constantes de este
     archivo y el booleano sale de otra constante de este archivo.
@@ -385,11 +389,11 @@ class AlmacenPostgres:
                 existencia=float(f.existencia or 0),
                 esta_activo=bool(f.esta_activo),
                 es_granel=bool(f.es_granel),
-                # Hoy la fila no trae la columna y esto vale `SIN_CLASE_ABC`
-                # para las 3,429. `getattr` y no `f.clase_abc` porque la
-                # consulta de hoy no la pide: pedirla tronaría. El día que
-                # `LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO` pase a `True`, la misma
-                # línea empieza a leerla sin tocarse.
+                # La consulta pide la columna desde el 2026-09-20
+                # (`LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO = True`); NULL —los
+                # productos sin ventas en 365 días— queda en `SIN_CLASE_ABC`.
+                # `getattr` y no `f.clase_abc` para que, si el interruptor se
+                # apaga y la fila no la trae, esto siga valiendo "no se sabe".
                 clase_abc=clase_abc_normalizada(
                     getattr(f, COLUMNA_DE_LA_CLASE_ABC, None)
                 ),

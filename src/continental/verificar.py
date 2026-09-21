@@ -660,9 +660,9 @@ def revisar_pedidos_enviados(
 #: `continental.almacen`, que es donde se lee el catálogo.
 #:
 #: **Sin `clase_abc`, la segunda casilla del ticket 18 no se puede cumplir.**
-#: El orden de importancia del lote está construido y probado, pero no hay de
-#: dónde leer la clase: `marts.dim_producto` tiene 18 columnas y ninguna es
-#: ésa. Es un bloqueo externo, no un pendiente de este repo.
+#: La columna existe en `marts.dim_producto` desde el 2026-09-20 (farmacia-data
+#: `c989ecb`, su ADR 0018) y Continental la lee; esto vigila que siga ahí en
+#: cada despliegue, porque si desaparece el lote vuelve a ordenar por urgencia.
 COLUMNAS_QUE_EXIGE_EL_ORDEN = (COLUMNA_DE_LA_CLASE_ABC,)
 
 

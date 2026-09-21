@@ -151,9 +151,10 @@ de seguridad no estaba conectada.
       sobre lo del `.env`.
 
 `python -m continental.verificar` entra con las credenciales del servicio y lee
-las cinco tablas de `marts` y las cinco de `pedidos`. Los dos `··` que reporta
-son pendientes conocidos que se encienden solos: `clase_abc` cuando exista la
-columna (ADR 0018 de farmacia-data) y `enviado_por` cuando llegue el ticket 21.
+las cinco tablas de `marts` y las cinco de `pedidos`. Los `··` que reporta son
+pendientes conocidos que se encienden solos: `enviado_por` cuando llegue el
+ticket 21. (El de `clase_abc` se apagó: la columna existe desde el 2026-09-20,
+farmacia-data `c989ecb`, y Continental la lee.)
 
 > ### ⚠️ La trampa de la contraseña mordió, y así se ve por dentro
 >
@@ -343,12 +344,11 @@ journalctl -u continental-lote -n 200 --no-pager
 > avisar.
 
 > **Dos casillas del ticket 18 quedan abiertas aquí y no se cierran
-> instalando nada:** el orden por clase ABC necesita la columna
-> `clase_abc` en `marts.dim_producto` (ADR 0018 de farmacia-data, aceptado y
-> sin implementar), y el navegador reutilizado por proveedor vive en Doyle (su
-> ADR 0008, también sin hacer). El paso 6 del despliegue imprime la primera
-> como PENDIENTE en cada corrida, con la única línea que hay que cambiar el
-> día que la columna exista.
+> instalando nada:** el orden por clase ABC —la columna `clase_abc` ya existe
+> en `marts.dim_producto` desde el 2026-09-20 (farmacia-data `c989ecb`) y
+> Continental la lee; lo que queda abierto es una decisión de este repo, ver
+> el ticket 18—, y el navegador reutilizado por proveedor, que vive en Doyle
+> (su ADR 0008, sin hacer).
 
 ---
 

@@ -302,8 +302,8 @@ def frase_de_la_corrida(corrida: CorridaDelLote | None) -> str:
         )
     if not corrida.orden_cumplido:
         cola.append(
-            "y no fue en orden de importancia: marts.dim_producto todavía no "
-            "tiene la clase ABC"
+            "y no fue en orden de importancia por clase ABC (el motivo está "
+            "en la bitácora del lote)"
         )
 
     return cabeza + (" " + "; ".join(cola) + "." if cola else "")
@@ -428,8 +428,9 @@ def elegir_los_faltantes(
     **El orden es el de la lista y no otro**: es el de urgencia con el que se
     armó y el que el encargado ve en la pantalla, así que si el tope corta el
     completado, corta por donde él esperaría. Reordenar aquí por clase ABC
-    sería inventarse un orden que ni siquiera el lote puede cumplir todavía
-    (ADR 0018 de farmacia-data, sin implementar).
+    sería otro orden distinto al que el encargado ve, y el 55% del catálogo
+    no tiene clase a propósito (NULL en `dim_producto.clase_abc` si no vendió
+    en 365 días).
     """
     faltantes = []
     for renglon in renglones:

@@ -585,8 +585,7 @@ def test_los_faltantes_van_en_el_orden_de_la_lista():
     """El de urgencia con el que se armó, que es el que el encargado ve.
 
     Si el tope corta el completado, corta por donde él esperaría. Reordenar
-    aquí por clase ABC sería inventarse un orden que ni siquiera el lote puede
-    cumplir todavía (ADR 0018 de farmacia-data, sin implementar).
+    aquí por clase ABC sería un orden distinto al que el encargado ve.
     """
     renglones = [_renglon(n, clave=f"750100000000{n}") for n in (1, 2, 3)]
     comparaciones = {

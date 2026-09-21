@@ -19,12 +19,13 @@ Cómo está repartido, que es el mismo reparto que el módulo:
 - **`main`** no se prueba: es lo único que construye bordes de verdad y no
   tiene una sola decisión dentro.
 
-**El bloqueo externo se prueba como bloqueo.** `marts.dim_producto` no tiene
-`clase_abc` (ADR 0018 de farmacia-data, aceptado y sin implementar), así que
-hay dos familias de casos: los que le pasan clase a mano —que demuestran que el
-orden por importancia está construido y funciona— y los que no le pasan
-ninguna, que son **lo que pasa hoy en atlas** y comprueban que el lote lo dice
-en vez de fingir que cumplió.
+**La clase ABC es `marts.dim_producto.clase_abc`**, materializada en
+farmacia-data el 2026-09-20 (`c989ecb`, su ADR 0018) y leída por Continental
+desde entonces; queda en NULL, a propósito, en los productos sin ventas en 365
+días. Hay dos familias de casos: los que le pasan clase —que demuestran el
+orden A, B, C— y los que no le pasan a algún renglón o a ninguno, que
+comprueban que el lote lo dice en vez de fingir que cumplió, **y que el motivo
+dice algo verdadero**.
 """
 
 from __future__ import annotations
@@ -219,16 +220,17 @@ def _correr(almacen, almacenamiento, doyle, **extra):
 
 
 # =========================================================================
-# EL ORDEN DE IMPORTANCIA — la parte bloqueada por el ADR 0018
+# EL ORDEN DE IMPORTANCIA — la clase ABC del ADR 0018 de farmacia-data
 # =========================================================================
 
 
 def test_sin_clase_abc_el_orden_no_se_cumple_y_se_dice():
-    """**El caso de hoy en atlas.** Sin la columna, el orden no se puede cumplir.
+    """Si el catálogo no trajo ni una clase, el orden no se puede cumplir.
 
-    Es la casilla que el ticket deja sin marcar, y aquí está escrita como
-    prueba: `cumple_el_orden` es falso y el motivo nombra la columna y el ADR.
-    Lo que NO pasa es que se invente un orden alterno y se llame cumplido.
+    `cumple_el_orden` es falso y el motivo nombra la columna y el ADR. Lo que
+    NO pasa es que se invente un orden alterno y se llame cumplido, ni que el
+    motivo culpe a farmacia-data de no haber hecho la columna: existe desde el
+    2026-09-20 (`c989ecb`), y el motivo lo dice.
     """
     renglones = [_renglon(n) for n in (3, 1, 2)]
 
@@ -237,8 +239,40 @@ def test_sin_clase_abc_el_orden_no_se_cumple_y_se_dice():
     assert orden.cumple_el_orden is False
     assert "clase_abc" in orden.motivo
     assert "0018" in orden.motivo
+    assert "c989ecb" in orden.motivo
+    assert "LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO" in orden.motivo
+    assert "sin implementar" not in orden.motivo
+    assert "todavía no tiene" not in orden.motivo
     assert orden.con_clase == 0
     assert orden.sin_clase == 3
+
+
+def test_si_ningun_renglon_de_la_lista_tiene_clase_el_motivo_no_culpa_a_la_columna():
+    """El catálogo sí trae clases, pero ninguna de las de la lista.
+
+    Es el NULL a propósito del ADR 0018 (sin ventas en 365 días). El motivo
+    dice eso, cuántos renglones son, y no que la columna falte.
+    """
+    renglones = [_renglon(n) for n in (3, 1, 2)]
+
+    orden = ordenar_por_importancia(renglones, {99: "A"})
+
+    assert orden.cumple_el_orden is False
+    assert [r.renglon_id for r in orden.renglones] == [3, 1, 2]
+    assert "ninguno de los 3 renglones" in orden.motivo
+    assert "365 días" in orden.motivo
+    assert "no trae clase" not in orden.motivo
+    assert "sin implementar" not in orden.motivo
+    assert "NO es el orden que pide el ticket 18" in orden.motivo
+
+
+def test_la_lista_vacia_dice_que_no_hay_nada_que_ordenar():
+    """Sin renglones no hay clase que faltar: el motivo no culpa al catálogo."""
+    orden = ordenar_por_importancia([], {1: "A"})
+
+    assert orden.cumple_el_orden is False
+    assert "no hay nada que ordenar" in orden.motivo
+    assert "clase" not in orden.motivo.replace("clase ABC", "")
 
 
 def test_sin_clase_abc_no_se_reordena_nada():
@@ -256,12 +290,7 @@ def test_sin_clase_abc_no_se_reordena_nada():
 
 
 def test_con_clase_abc_ordena_a_luego_b_luego_c():
-    """El orden que el ticket pide, probado con dobles porque el dato no existe.
-
-    Está construido entero y funciona: el día que `dim_producto` traiga la
-    columna, esto ya está escrito y probado, y lo único que hay que mover es
-    `almacen.LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO`.
-    """
+    """El orden que el ticket pide: A, luego B, luego C."""
     renglones = [_renglon(1), _renglon(2), _renglon(3)]
     clases = {1: "C", 2: "A", 3: "B"}
 
@@ -317,6 +346,9 @@ def test_media_lista_con_clase_tampoco_cumple_el_orden():
     assert orden.con_clase == 1
     assert orden.sin_clase == 1
     assert "1 de 2" in orden.motivo
+    assert "365 días" in orden.motivo
+    # El NULL es a propósito: no se le pide a nadie que "le ponga clase".
+    assert "ponles clase" not in orden.motivo
 
 
 def test_una_clase_que_no_es_a_b_ni_c_cuenta_como_no_saber():
@@ -335,12 +367,10 @@ def test_una_lista_vacia_no_cumple_el_orden_y_no_truena():
     assert orden.cumple_el_orden is False
 
 
-def test_las_clases_del_catalogo_salen_vacias_hoy():
-    """Hoy `Producto.clase_abc` vale `SIN_CLASE_ABC` en todas las filas.
+def test_las_clases_del_catalogo_salen_vacias_si_nadie_tiene_clase():
+    """Productos con `SIN_CLASE_ABC` (NULL: sin ventas en 365 días) no entran.
 
-    Es el bloqueo externo visto desde el catálogo: la columna no existe, así
-    que el mapa de clases sale vacío y el orden no se puede cumplir. El día que
-    exista, esta misma función lo llena sin tocarse.
+    Si ninguno la tiene, el mapa sale vacío y el orden no se puede cumplir.
     """
     assert clases_del_catalogo([_producto(1), _producto(2)]) == {}
 
@@ -509,7 +539,7 @@ def test_la_bitacora_dice_cada_motivo_con_palabras_de_persona():
 
 
 def test_la_bitacora_dice_cuando_el_orden_no_se_cumplio():
-    """El bloqueo externo se ve en la salida de cada noche, no solo en un ADR."""
+    """Un orden no cumplido se ve en la salida de cada noche, con su motivo."""
     orden = ordenar_por_importancia([_renglon(1)], {})
     resumen = ResumenDeLaCorrida(
         fecha_del_pedido=HOY,
@@ -964,11 +994,11 @@ def test_el_lote_consulta_en_el_orden_de_importancia():
 
 
 def test_hoy_el_lote_corre_pero_declara_que_el_orden_no_se_cumple():
-    """**Lo que pasa hoy en atlas, escrito como prueba.**
+    """Sin clase en el catálogo, el lote corre y lo declara.
 
-    El lote corre y trae precios —eso sí se puede— pero deja dicho, en el
-    resumen y en la bitácora, que el orden por clase ABC no se cumplió. La
-    casilla del ticket se queda sin marcar por esto, no por olvido.
+    El lote corre y trae precios pero deja dicho, en el resumen y en la
+    bitácora, que el orden por clase ABC no se cumplió, y el motivo no culpa a
+    una columna que existe desde el 2026-09-20.
     """
     almacen = _mundo(3)
     almacenamiento = AlmacenamientoFalso()
@@ -980,6 +1010,7 @@ def test_hoy_el_lote_corre_pero_declara_que_el_orden_no_se_cumple():
     assert resumen.orden is not None
     assert resumen.orden.cumple_el_orden is False
     assert "SIN CUMPLIR" in resumen.como_texto()
+    assert "sin implementar" not in resumen.como_texto()
 
 
 def test_el_lote_es_secuencial_y_por_eso_doyle_puede_reutilizar_el_navegador():

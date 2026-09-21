@@ -11,9 +11,10 @@
 > construir de cada una está construido y probado, y debajo de cada casilla
 > está escrito **qué falta exactamente** y **quién lo tiene que hacer**.
 >
-> - `marts.dim_producto` no tiene `clase_abc` (ADR 0018 de farmacia-data,
->   **aceptado y sin implementar**: la columna no aparece en un solo modelo de
->   `dbt/models`).
+> - ~~`marts.dim_producto` no tiene `clase_abc` (ADR 0018 de farmacia-data,
+>   aceptado y sin implementar).~~ **Levantado el 2026-09-20:** farmacia-data
+>   materializó la columna en `c989ecb` y Continental la lee desde `f3d7120`.
+>   Ver la nota del 2026-09-21 bajo la segunda casilla.
 > - Doyle no está en atlas (`~/proyectos/` tiene `borde`, `Farmacia`, `Marlowe`
 >   y `Sarabia`). El ADR 0008 de Doyle, el del navegador reutilizado por
 >   proveedor, está sin hacer.
@@ -50,7 +51,38 @@
 
 - [ ] Consulta en orden de importancia, leyendo la **clase ABC** del catálogo. Sin esa columna el orden especificado no se puede cumplir: es prerrequisito, no detalle.
 
-      **BLOQUEADA POR EL ADR 0018 DE FARMACIA-DATA.** La columna no existe.
+      > **Nota del 2026-09-21 — el bloqueo externo se levantó; queda uno de
+      > este repo.** `marts.dim_producto.clase_abc` ('A'/'B'/'C'/NULL) existe:
+      > la materializó farmacia-data el 2026-09-20 (`c989ecb`, ADR 0018), está
+      > construida en atlas, el rol `continental` la lee, y Continental la usa
+      > desde `f3d7120` (`LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO = True`). Un
+      > producto sin ventas en los últimos 365 días queda en NULL **a
+      > propósito** —el 55% del catálogo— y `ordenar_por_importancia` lo manda
+      > al final. Lo que sigue abajo en esta casilla es el estado al
+      > 2026-09-19 y ya no describe el código.
+      >
+      > **Hallazgo de revisión (no se cambió la lógica):** en
+      > `src/continental/lote.py`, `Orden.cumple_el_orden` queda en falso si
+      > **un solo** renglón no tiene clase (`if sin_clase:` en
+      > `ordenar_por_importancia`). Con el NULL intencional del ADR 0018, eso
+      > puede pasar cualquier noche aunque el orden sea exactamente el que el
+      > ADR describe (A, B, C y al final lo que no se sabe), y entonces la
+      > bitácora dice `orden: SIN CUMPLIR`, `pedidos.corrida_del_lote.
+      > orden_cumplido` queda en falso y el aviso de faltantes lo repite. Una
+      > alarma que suena cuando todo está bien enseña a ignorarla. Hay que
+      > decidir qué significa "cumplido": (a) que todo renglón con clase quedó
+      > antes que todo renglón sin clase —verdadero por construcción cuando el
+      > catálogo trajo clases—, o (b) que no haya renglones sin clase. Si es
+      > (a), `cumple_el_orden` debería fallar solo cuando **ningún** renglón
+      > trae clase (el catálogo no la trajo), y el conteo `sin_clase` seguir
+      > en la bitácora como dato, no como falla. Falta medir en atlas cuántos
+      > renglones de una lista real salen sin clase: la lista se arma con lo
+      > vendido, así que deberían ser pocos, pero no está medido.
+      >
+      > **Por eso la casilla sigue sin marcar**: el orden se lee y se aplica,
+      > pero lo que el lote declara sobre ese orden todavía no es confiable.
+
+      **(Al 2026-09-19) BLOQUEADA POR EL ADR 0018 DE FARMACIA-DATA.** La columna no existía.
 
       Lo que sí está hecho: `lote.ordenar_por_importancia` es una **función
       pura** que recibe los renglones y su clase y devuelve el orden A-B-C con
