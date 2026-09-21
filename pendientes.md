@@ -21,21 +21,21 @@ pegables. Si los dos no coinciden, manda Notion.
 
 ---
 
-## Dónde vamos — 12 de 17 casillas
+## Dónde vamos — 13 de 17 casillas
 
 | | Pendiente | Estado |
 |---|---|---|
 | 1 | El remoto y el clon en atlas | ✅ 2026-09-19 |
 | 2 | Los `grants` de farmacia-data | ✅ 2026-09-19 |
 | 7 | El DDL, el rol y el verificador | ✅ 2026-09-20 |
-| 8 | Las unidades de systemd | 🟡 la web corre; el lote espera al 6 |
+| 8 | Las unidades de systemd | 🟡 **la web corre; el lote ya se puede — el 6 cerró** |
 | 9 | El túnel y Access | ✅ 2026-09-20 — falta mirar B.3 |
 | 5 | `clase_abc` en `dim_producto` | ✅ 2026-09-20 — el ADR 0018, implementado |
 | **12** | **Uptime Kuma 1.23 → 2.x** | ⏭️ **el siguiente — el CPU sí lo aguanta (medido)** |
 | **11** | **El recorrido en navegador del ticket 20** | 🟡 a medias hasta que Doyle dé precios |
-| 3 | Las cuatro sesiones de Doyle | pendiente *(las contraseñas, el lunes)* |
+| 3 | Las cuatro sesiones de Doyle | ⏭️ **el siguiente con gente — hoy, en horario** |
 | 4 | La decisión del descarte | ✅ 2026-09-20 — decidida e implementada |
-| 6 | Doyle a atlas | pendiente *(lo más incierto, y ahora bloquea al 8)* |
+| 6 | Doyle a atlas | ✅ 2026-09-21 — corre, con visor sobre Xvfb detrás de Access |
 | 10 | El monitor de Uptime Kuma | ✅ 2026-09-20 — y se arregló el del vecino |
 
 **El 12 no estaba en la lista original y se agregó el 2026-09-20.** Es el único
@@ -258,19 +258,50 @@ esta lista.
 
 ### 6. Doyle a atlas (ADR 0008 de Doyle) · *lo más incierto de todo*
 
-- [ ] La mudanza, con visor remoto sobre Xvfb
+- [x] La mudanza, con visor remoto sobre Xvfb — ✅ **2026-09-21**
 
-Verificado el 2026-09-19: en `~/proyectos/` de atlas están `borde`,
-`Continental` (desde hoy), `Farmacia`, `Marlowe` y `Sarabia`. **Doyle no está
-ahí.**
+Doyle corre en atlas: `~/proyectos/Doyle`, `doyle.service` en
+`127.0.0.1:8383`, pantalla `xvfb98.service` en la `:98`, y el visor
+(`x11vnc` + noVNC) en `doyle.farfanlab.uk` detrás de Access. Las cuatro
+sesiones salen como `sin_sesion`, que es lo correcto hasta la casilla 3.
 
-Cierra dos casillas que hoy no se pueden cerrar: el lote reutilizando el
-navegador por proveedor (ticket 18) y el botón que abre una sesión caducada
-(ticket 19) — hoy esa ventana se abriría en la torre, donde no hay nadie
-mirando.
+**Los tres interrogantes que iban aquí, dos resueltos y uno reubicado:**
 
-Va con interrogantes que nadie ha medido: si el Chrome de Google arranca en ese
-CPU de 2010, si VICMA abre ventana ahí, el captcha de LEVIC.
+> *¿arranca el Chrome de Google en ese CPU de 2010?* — **la pregunta se
+> disolvió.** Doyle dejó de pedirlo: usa `/usr/bin/chromium` de apt, que es el
+> mismo que Marlowe ya corre ahí. Y no hay que correr `playwright install`.
+>
+> *¿VICMA abre ventana ahí?* — **sí, medido.** Y los otros tres también:
+> `scripts/probar-pantalla.py` de Doyle abre los cuatro portales sobre la
+> `:98`, con el campo de contraseña presente y sin emergentes. Lo que **no**
+> prueba es que el acceso pase; eso se decide al enviar el formulario.
+>
+> *el captcha de LEVIC* — **sigue sin medir, y se muda a la casilla 3**, que es
+> donde alguien teclea. Aquí no tenía forma de contestarse.
+
+**Tres trampas que costaron la noche y no conviene redescubrir:**
+
+> **La `:99` ya era de Marlowe.** Su `xvfb-run -a` la toma porque
+> `/usr/bin/xvfb-run` trae `SERVERNUM=99` y `-a` busca libre **desde el 99 y
+> hacia arriba**. Doyle quedó en la `:98`, seguro por construcción. El choque
+> no habría hecho ruido: si Doyle gana, Marlowe se va al `:100` sin quejarse y
+> el visor mira una pantalla vacía, sin una línea en ningún journal.
+>
+> **atlas clona con un alias de SSH por repo**, no con `git@github.com:`. Tiene
+> una deploy key por repositorio, cada una con su `Host` en `~/.ssh/config` y
+> `IdentitiesOnly yes`. Sin eso, `ssh` ofrece la llave de Marlowe y GitHub
+> contesta *"repository not found"*, que no menciona llaves.
+>
+> **El Public Hostname del túnel no creó el registro DNS.** El `cloudflared`
+> recibió el ingress —`version=6` en su log— pero `doyle.farfanlab.uk` daba
+> `NXDOMAIN` hasta en el servidor autoritativo. Se arregló con un CNAME a mano
+> a `<tunnel-id>.cfargotunnel.com`, **proxied**. Si vuelve a pasar con otro
+> servicio, el diagnóstico es: pregunta al autoritativo, no al resolvedor de
+> tu red.
+
+Con esto se destraba la casilla 8 —`continental-lote.{service,timer}`— que
+estaba esperando justo a esto. Los tickets 18 y 19 dejan de estar bloqueados
+por falta de máquina: ahora hay una pantalla donde sí hay quien mire.
 
 ---
 
