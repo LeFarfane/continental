@@ -1,9 +1,21 @@
 # Configuración de Continental. Sin secretos: lo que lleva contraseña vive en
 # `.env` (ver `.env.example`).
 
-# Dónde está cada módulo. Loopback siempre: nada de esto es alcanzable desde
-# fuera, y esa es justamente la razón por la que los módulos no llevan
-# autenticación propia (regla 2 de CLAUDE.md, ADR 0001).
+# Dónde está cada módulo. Doyle escucha en loopback: nada de fuera lo alcanza,
+# y por eso no lleva autenticación propia (regla 2 de CLAUDE.md, ADR 0001).
+#
+# MARLOWE NO. Escucha en 172.19.0.1 —el gateway de la red Docker `borde`—
+# porque todavía tiene su propia pantalla detrás de su propio túnel
+# (marlowe.farfanlab.uk, con su Access), igual que Continental (ADR 0005).
+# Hasta el 2026-09-21 aquí decía 127.0.0.1:8484, y en atlas la portada
+# enseñaba "marlowe · no se pudo alcanzar (ConnectError)": medido ese día,
+# `ss -ltn` da `172.19.0.1:8484` y nada en 127.0.0.1:8484, y
+# `curl http://172.19.0.1:8484/api/salud` contesta 200. El día que Marlowe
+# pierda su pantalla y pase a ser solo API (paso 4 de HANDOVER.md), vuelve a
+# loopback y esto con él.
+#
+# En la torre 172.19.0.1 no existe, así que Marlowe sale como hueco con su
+# motivo — que es lo correcto: ahí tampoco corre.
 modulos:
   doyle:
     url: "http://127.0.0.1:8383"
@@ -15,7 +27,7 @@ modulos:
     # sesiones-, no para esperar un resultado.
     timeout_seg: 10
   marlowe:
-    url: "http://127.0.0.1:8484"
+    url: "http://172.19.0.1:8484"
     timeout_seg: 10
 
 # A QUIÉN AVISARLE cuando algo falla y desde la pantalla no hay nada más que
