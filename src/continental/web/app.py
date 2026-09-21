@@ -32,7 +32,9 @@ from continental.almacenamiento import (
     CorridaDelLote,
     PedidoGuardado,
     PedidoSugeridoGuardado,
+    LLAVE_DEL_ATRASO,
     Ventana,
+    dias_en_transito_para_atrasado_configurados,
     dias_primera_vez_configurados,
     ventana_de_reposicion,
 )
@@ -75,6 +77,7 @@ from continental.particion import (
     eleccion_como_json,
     elegir,
     frase_del_envio,
+    frase_sin_nada_por_repartir,
     lo_que_hay_que_capturar,
     motivo_para_no_enviar,
     particion_como_json,
@@ -85,13 +88,22 @@ from continental.proveedores import puente_como_json, puente_configurado
 from continental.sugerido import armar_la_lista
 from continental.transito import (
     MemoriaDeLoPedido,
+    dias_en_transito,
     en_camino,
     en_camino_como_json,
     en_camino_con_hueco,
+    enviado_antes_de,
+    esta_atrasado,
     frase_de_la_ventana_propia,
     frase_de_ya_en_camino,
+    frase_del_atraso,
+    frase_del_pedido_cancelado,
+    frase_del_renglon_cancelado,
+    frase_del_renglon_devuelto,
     frase_del_transito,
+    frase_para_cancelar,
     memoria_de_lo_pedido,
+    motivo_para_no_cancelar,
     vendido_desde_que_se_pidio,
 )
 from continental.vistas import VISTAS
@@ -121,6 +133,26 @@ def _ahora() -> dt.datetime:
     que una prueba la fije.
     """
     return reloj()
+
+
+def _umbral_del_atraso() -> tuple[int | None, str | None]:
+    """El N del ticket 25, o por qué no se pudo leer: `(umbral, detalle)`.
+
+    `dias_en_transito_para_atrasado_configurados` truena si el YAML no lo trae
+    bien (regla 4), y aquí se convierte en un hueco con su motivo: la lista y lo
+    que viene en camino se enseñan igual; lo único que no se puede es decir qué
+    está atrasado. El detalle nombra la llave y el tipo de la excepción, nunca
+    su texto (regla 5), aunque aquí no lleve nada secreto: la costumbre es la
+    garantía.
+    """
+    try:
+        return dias_en_transito_para_atrasado_configurados(), None
+    except Exception as exc:  # noqa: BLE001 — sin el número, la señal es un hueco
+        log.exception("No se pudo leer pedido.%s", LLAVE_DEL_ATRASO)
+        return None, (
+            f"falta o está mal escrito pedido.{LLAVE_DEL_ATRASO} en "
+            f"config/continental.yml ({type(exc).__name__})"
+        )
 
 
 def quien(request: Request) -> str:
@@ -472,6 +504,10 @@ def _lo_que_viene_en_camino(
         )
 
     viajando = en_camino(ya_pedidos)
+    # LO QUE VUELVE EN LA SIGUIENTE LISTA (ticket 25): lo cancelado que todavía
+    # no atendió ninguna lista. `lo_ya_pedido` ya lo trae —es la misma memoria—
+    # y se enseña para que el número de mañana se pueda explicar hoy.
+    vuelven = tuple(ya for ya in ya_pedidos if ya.fue_cancelado)
     vendido = {}
     if viajando:
         try:
@@ -487,8 +523,16 @@ def _lo_que_viene_en_camino(
             vendido = None
 
     ahora = _ahora()
+    umbral, detalle_del_umbral = _umbral_del_atraso()
     return (
-        en_camino_como_json(viajando, vendido, ahora),
+        en_camino_como_json(
+            viajando,
+            vendido,
+            ahora,
+            umbral=umbral,
+            detalle_del_umbral=detalle_del_umbral,
+            vuelven=vuelven,
+        ),
         {ya.producto_id: ya for ya in viajando},
     )
 
@@ -1126,6 +1170,177 @@ def enviar_el_pedido(
         _ultima_corrida(almacenamiento, negocio, lista_id),
         almacenamiento.pedidos_de_la_lista(negocio, lista_id),
     )
+
+
+@app.post("/api/pedido/{pedido_id}/cancelar")
+def cancelar_el_pedido(
+    pedido_id: int,
+    request: Request,
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+):
+    """Cancelar un pedido que nunca se capturó: `enviado` -> `cancelado` (25).
+
+    **Continental no cancela nada en ningún portal**, igual que no captura nada
+    en ninguno (regla 1, ADR 0009 y 0013). Lo que se guarda es la palabra de una
+    persona —*este pedido no está en el portal del proveedor*— con su correo y
+    la hora. Firma y no permiso (regla 3): sin encabezado se firma
+    `sin-identificar`, que es un dato, y no se niega nada.
+
+    **No es "desenviar".** El pedido no vuelve a `borrador` y no se edita. Sus
+    renglones en tránsito pasan a `cancelado` y lo que vuelve es su **producto,
+    en la siguiente lista**, con todo lo que cubrían (ADR 0013). La lista de hoy
+    no se recalcula —lo que se muestra es lo guardado—, así que la pantalla
+    **vuelve a cargar** después de esto en vez de deducir qué cambió.
+
+    Un 409 cuando no había nada que cancelar: no es de este negocio, es un
+    borrador, ya estaba cancelado, o algo suyo ya se recibió. La condición vive
+    en el `WHERE`, no en un `if`.
+    """
+    negocio = cargar().negocio
+    firma = quien(request)
+
+    try:
+        cancelado = almacenamiento.cancelar_el_pedido(negocio, pedido_id, firma)
+    except Exception as exc:  # noqa: BLE001 — el almacenamiento caído es un hueco
+        # Regla 5: el detalle a la bitácora, al navegador solo el tipo.
+        log.exception("No se pudo cancelar el pedido %s", pedido_id)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "detalle": f"no se pudo cancelar el pedido ({type(exc).__name__})",
+            },
+        )
+
+    if cancelado is None:
+        log.info(
+            "%s quiso cancelar el pedido %s de %s y no se pudo: o no está "
+            "enviado, o ya estaba cancelado, o algo suyo ya se recibió.",
+            firma,
+            pedido_id,
+            negocio,
+        )
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "detalle": (
+                    "Ese pedido ya no se puede cancelar: o no está enviado, o ya "
+                    "se canceló, o algo de él ya se recibió. Vuelve a cargar la "
+                    "página para ver cómo quedó."
+                ),
+            },
+        )
+
+    log.info(
+        "%s canceló el pedido %s (%s) de la lista %s de %s: dijo que no está en "
+        "el portal. %d renglón(es) dejaron de estar en tránsito y vuelven a "
+        "proponerse en la siguiente lista. NO se canceló nada en el portal "
+        "(ADR 0013).",
+        firma,
+        pedido_id,
+        cancelado.pedido.nombre,
+        cancelado.pedido.pedido_sugerido_id,
+        negocio,
+        cancelado.cuantos_renglones,
+    )
+    return {
+        "ok": True,
+        "pedido": _pedido_como_json(cancelado.pedido),
+        "renglones_cancelados": cancelado.cuantos_renglones,
+        "frase": frase_del_pedido_cancelado(
+            cancelado.pedido.nombre, cancelado.cuantos_renglones
+        ),
+    }
+
+
+@app.post("/api/renglon/{renglon_id}/devolver-atrasado")
+def devolver_el_renglon_atrasado(
+    renglon_id: int,
+    request: Request,
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+):
+    """Devolver a la lista UN renglón atrasado, sin cancelar su pedido (25).
+
+    Solo lo que lleva **más de N días** en camino, con N de
+    `config/continental.yml`. El límite se calcula aquí con el mismo reloj y la
+    misma función con que la pantalla decidió ofrecer el botón
+    (`transito.enviado_antes_de`), y viaja al `WHERE` como parámetro: la base
+    no devuelve lo que todavía no se atrasa aunque alguien fabrique la petición.
+
+    El renglón pasa a `cancelado`, firmado, y su **producto** vuelve en la
+    siguiente lista con todo lo que cubría. Su pedido sigue `enviado`: lo demás
+    de él puede estar llegando. Continental no cancela nada en el portal; la
+    advertencia de la pantalla lo dice junto al botón.
+
+    Sin el N —YAML mal escrito— **no se devuelve nada**, y se dice por qué:
+    devolver con un número inventado sería abrir la válvula en un día que nadie
+    escogió.
+    """
+    negocio = cargar().negocio
+    firma = quien(request)
+
+    umbral, detalle_del_umbral = _umbral_del_atraso()
+    if umbral is None:
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "detalle": f"no se puede decir qué está atrasado: {detalle_del_umbral}",
+            },
+        )
+
+    try:
+        devuelto = almacenamiento.devolver_el_atrasado(
+            negocio, renglon_id, firma, enviado_antes_de(_ahora(), umbral)
+        )
+    except Exception as exc:  # noqa: BLE001 — el almacenamiento caído es un hueco
+        log.exception("No se pudo devolver el renglón %s a la lista", renglon_id)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "detalle": (
+                    f"no se pudo devolver el renglón a la lista ({type(exc).__name__})"
+                ),
+            },
+        )
+
+    if devuelto is None:
+        log.info(
+            "%s quiso devolver a la lista el renglón %s de %s y no se pudo: o "
+            "ya no está en tránsito, o todavía no lleva más de %d días.",
+            firma,
+            renglon_id,
+            negocio,
+            umbral,
+        )
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "detalle": (
+                    "Ese renglón no se puede devolver a la lista: o ya no está en "
+                    f"camino, o todavía no lleva más de {umbral} días. Vuelve a "
+                    "cargar la página para ver cómo quedó."
+                ),
+            },
+        )
+
+    log.info(
+        "%s devolvió a la lista el renglón %s (%s) de %s por atrasado: pasó a "
+        "«cancelado» y su producto vuelve en la siguiente lista. Su pedido sigue "
+        "enviado. NO se canceló nada en el portal (ADR 0013).",
+        firma,
+        renglon_id,
+        devuelto.propuesto.descripcion,
+        negocio,
+    )
+    return {
+        "ok": True,
+        "renglon_id": devuelto.renglon_id,
+        "frase": frase_del_renglon_devuelto(devuelto.propuesto.descripcion),
+    }
 
 
 @app.get("/api/pedido-sugerido/{pedido_sugerido_id}/pedido/{pedido_id}/csv")
@@ -2198,9 +2413,15 @@ def _como_json(
     }
     por_pedido = {p.pedido_id: p for p in (pedidos or ())}
     ahora = _ahora()
+    # EL N DEL TICKET 25, leído una vez por respuesta. Si el YAML no lo trae
+    # bien, los renglones en tránsito se enseñan sin decir si están atrasados.
+    umbral, detalle_del_umbral = _umbral_del_atraso()
     return {
         "ok": True,
         "pedido_sugerido_id": guardado.pedido_sugerido_id,
+        # Qué quiere decir "atrasado" en esta respuesta (ticket 25): el número,
+        # o por qué no se pudo leer. Los renglones lo usan; va aquí una vez.
+        "atraso": {"umbral": umbral, "detalle": detalle_del_umbral},
         "estado": guardado.estado,
         "fecha_de_ventas": guardado.ventana.hasta.isoformat(),
         "ventas_consideradas_desde": guardado.ventana.desde.isoformat(),
@@ -2227,6 +2448,7 @@ def _como_json(
                 pedido=por_pedido.get(r.pedido_id),
                 ya_en_camino=ya_en_camino,
                 ahora=ahora,
+                umbral=umbral,
             )
             for r in guardado.renglones
         ],
@@ -2305,14 +2527,28 @@ def _como_json(
         # `puente` va una vez arriba y no repetido en cada renglón: que SICAR
         # no conozca a QuePharma es una propiedad de la instalación, no de un
         # producto.
-        "particion": particion_como_json(
-            partir(
-                guardado.por_repartir,
-                comparaciones,
-                precios or {},
-                puente_configurado(),
-            )
-        ),
+        "particion": {
+            **particion_como_json(
+                partir(
+                    guardado.por_repartir,
+                    comparaciones,
+                    precios or {},
+                    puente_configurado(),
+                )
+            ),
+            # POR QUÉ NO QUEDA NADA QUE PARTIR, cuando es porque ya se atendió
+            # (ticket 25). Solo si de verdad no queda nada por repartir: con
+            # renglones abiertos sin precio, "no hay en qué partir" es otra
+            # cosa y la pantalla dice lo suyo.
+            "sin_nada_por_repartir": (
+                None
+                if guardado.por_repartir
+                else frase_sin_nada_por_repartir(
+                    guardado.en_transito,
+                    sum(1 for r in guardado.renglones if r.esta_cancelado),
+                )
+            ),
+        },
         # LA CAPTURA DE CADA PEDIDO (ticket 22) viaja DENTRO del pedido y sale
         # de los renglones que el pedido GUARDADO tiene dentro — no de la vista
         # previa de arriba, que se recalcula con los precios de este instante y
@@ -2326,6 +2562,11 @@ def _como_json(
                     p,
                     *_lo_que_hay_dentro(guardado, p),
                     captura=lo_que_hay_que_capturar(p, guardado.renglones, precios or {}),
+                    en_camino_dentro=sum(
+                        1
+                        for r in guardado.renglones
+                        if r.pedido_id == p.pedido_id and r.esta_en_transito
+                    ),
                 )
                 for p in pedidos
             ]
@@ -2374,6 +2615,7 @@ def _pedido_como_json(
     renglones_dentro: int = 0,
     total_envejecido: bool = False,
     captura: Captura | None = None,
+    en_camino_dentro: int = 0,
 ) -> dict:
     """Un pedido ya guardado, como la pantalla lo lee.
 
@@ -2405,6 +2647,21 @@ def _pedido_como_json(
         "estado": pedido.estado,
         "es_borrador": pedido.es_borrador,
         "fue_enviado": pedido.fue_enviado,
+        # CANCELAR (ticket 25, ADR 0013). La firma y lo que la pantalla dice
+        # junto al botón, ya decidido aquí. `se_puede_cancelar` es la misma
+        # decisión que el `WHERE` de `_CANCELAR_EL_PEDIDO` y NO la garantía.
+        "fue_cancelado": pedido.fue_cancelado,
+        "cancelado_por": pedido.cancelado_por,
+        "cancelado_en": (
+            pedido.cancelado_en.isoformat() if pedido.cancelado_en else None
+        ),
+        "se_puede_cancelar": motivo_para_no_cancelar(pedido) is None,
+        "motivo_para_no_cancelar": motivo_para_no_cancelar(pedido),
+        "frase_para_cancelar": (
+            frase_para_cancelar(pedido.nombre, en_camino_dentro)
+            if motivo_para_no_cancelar(pedido) is None
+            else None
+        ),
         "armado_en": pedido.armado_en.isoformat(),
         "total_sin_iva": (
             None if pedido.total_sin_iva is None else str(pedido.total_sin_iva)
@@ -2490,6 +2747,7 @@ def _renglon_como_json(
     pedido: PedidoGuardado | None = None,
     ya_en_camino: dict | None = None,
     ahora: dt.datetime | None = None,
+    umbral: int | None = None,
 ) -> dict:
     """Un renglón guardado, como la pantalla lo lee.
 
@@ -2535,6 +2793,14 @@ def _renglon_como_json(
         # cosas de la pantalla —la marca, los controles apagados y el conteo de
         # "por atender"—.
         "esta_en_transito": renglon.esta_en_transito,
+        # SE DEJÓ DE ESPERAR (ticket 25). Resuelto aquí por la misma razón que
+        # `esta_en_transito`: de él cuelgan la marca, los controles apagados y
+        # el conteo de "por atender", y la regla vive en `RenglonGuardado`.
+        "esta_cancelado": renglon.esta_cancelado,
+        "cancelado_por": renglon.cancelado_por,
+        "cancelado_en": (
+            renglon.cancelado_en.isoformat() if renglon.cancelado_en else None
+        ),
         "descartado_por": renglon.descartado_por,
         "descartado_en": (
             renglon.descartado_en.isoformat() if renglon.descartado_en else None
@@ -2612,12 +2878,14 @@ def _renglon_como_json(
         # columna: un renglón pertenece a un solo pedido.
         "pedido_id": renglon.pedido_id,
         **_porque_no_hay_lectura_como_json(renglon, comparacion, precios, corrida),
-        **_transito_del_renglon_como_json(renglon, ventana, pedido, ya_en_camino, ahora),
+        **_transito_del_renglon_como_json(
+            renglon, ventana, pedido, ya_en_camino, ahora, umbral
+        ),
     }
 
 
 def _transito_del_renglon_como_json(
-    renglon, ventana, pedido, ya_en_camino, ahora
+    renglon, ventana, pedido, ya_en_camino, ahora, umbral=None
 ) -> dict:
     """Las tres frases del ticket 24 que cuelgan de un renglón de la lista.
 
@@ -2633,11 +2901,41 @@ def _transito_del_renglon_como_json(
       (la carga de la lista): las rutas de un solo renglón no la mandan, y la
       pantalla conserva la de la carga.
 
+    Y las del ticket 25:
+
+    - **`frase_de_lo_cancelado`** — el renglón de hoy que se dejó de esperar:
+      vuelve a proponerse en la siguiente lista, no en ésta.
+    - **`dias_en_transito`, `atrasado`, `frase_del_atraso`,
+      `se_puede_devolver`** — el renglón de hoy que sigue en tránsito. Casi
+      nunca se atrasa —se envió desde la lista de hoy—, salvo que el almacén
+      lleve días sin ventas nuevas y "la lista de hoy" sea vieja. Por eso se
+      calcula también aquí y no solo en el bloque de listas anteriores.
+
     Todas se componen en `transito.py`, en Python y con pruebas: el JavaScript
     las pinta y no decide ni una palabra (la lección del ticket 15).
     """
     ahora = ahora or _ahora()
+    en_transito_con_pedido = renglon.esta_en_transito and pedido is not None
+    dias = dias_en_transito(pedido.enviado_en, ahora) if en_transito_con_pedido else None
+    atrasado = (
+        esta_atrasado(dias, umbral)
+        if en_transito_con_pedido and umbral is not None
+        else None
+    )
     salida: dict = {
+        "frase_de_lo_cancelado": (
+            frase_del_renglon_cancelado(
+                renglon,
+                pedido_cancelado=pedido is not None and pedido.fue_cancelado,
+                nombre=None if pedido is None else pedido.nombre,
+            )
+            if renglon.esta_cancelado
+            else None
+        ),
+        "dias_en_transito": dias,
+        "atrasado": atrasado,
+        "frase_del_atraso": frase_del_atraso(dias, umbral),
+        "se_puede_devolver": bool(atrasado),
         "frase_del_transito": (
             frase_del_transito(pedido.nombre, pedido.enviado_en, ahora)
             if renglon.esta_en_transito and pedido is not None

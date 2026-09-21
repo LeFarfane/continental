@@ -110,15 +110,34 @@ RENGLON_EN_TRANSITO = "en tránsito"
 RENGLON_RECIBIDO = "recibido"
 RENGLON_RECIBIDO_PARCIAL = "recibido parcial"
 
-#: Los cinco del glosario, con el acento de `en tránsito`. Hoy se escriben tres:
-#: `abierto` al nacer, `descartado` desde el ticket 10 y `en tránsito` desde el
-#: 21. El 26 pone los dos de recepción.
+#: **Se dejó de esperar sin haber llegado** (ticket 25, ADR 0013): su pedido se
+#: canceló porque nunca se capturó en el portal, o una persona lo devolvió a la
+#: lista porque se atrasó. Lleva firma —`cancelado_por`, `cancelado_en`— y es
+#: un final: no vuelve a `abierto` ni a `en tránsito`.
+#:
+#: **Por qué no vuelve a `abierto`, que es lo que el ticket decía.** Su lista
+#: casi siempre es vieja —cerrada o vencida— y el glosario dice que solo una
+#: lista `abierta` se deja modificar: un `abierto` dentro de una lista cerrada
+#: sería trabajo pendiente en algo que dice "ya se pidió lo que se iba a pedir",
+#: y nada lo volvería a proponer. Lo que vuelve es **el producto, a la
+#: siguiente lista**, con todo lo que este renglón cubría: la memoria del
+#: ticket 24 lo lee de aquí (`LoYaPedido.retiene_desde`).
+RENGLON_CANCELADO = "cancelado"
+
+#: Los seis del glosario, con el acento de `en tránsito`. Hoy se escriben
+#: cuatro: `abierto` al nacer, `descartado` desde el ticket 10, `en tránsito`
+#: desde el 21 y `cancelado` desde el 25. El 26 pone los dos de recepción.
+#:
+#: `cancelado` va AL FINAL y no junto a los de recepción, por la misma razón
+#: que las columnas nuevas van al final de la tabla: el orden de esta tupla es
+#: el del CHECK, y `test_sql_del_pedido.py` los compara como tuplas.
 ESTADOS_DEL_RENGLON: tuple[str, ...] = (
     "abierto",
     RENGLON_EN_TRANSITO,
     RENGLON_RECIBIDO,
     RENGLON_RECIBIDO_PARCIAL,
     "descartado",
+    RENGLON_CANCELADO,
 )
 
 #: **El enganche que el ticket 24 les deja a los tickets 26 y 27** (ADR 0012).
@@ -130,21 +149,36 @@ ESTADOS_DEL_RENGLON: tuple[str, ...] = (
 #: hacer nada más para que eso pase — ya está aquí y en `_LO_YA_PEDIDO`, que
 #: repite la tupla con sus acentos y tiene una prueba que los compara.
 #:
-#: Lo que NO está aquí, a propósito: **cancelar** (ticket 25). Un renglón que
-#: vuelve a `abierto` porque su pedido nunca se capturó no se recibió nunca, así
-#: que lo que tiene que volver es **también** lo que repuso, no solo lo de
-#: después. Esa regla es otra y la decide ese ticket; ver el ADR 0012.
+#: Lo que NO está aquí, a propósito: **`cancelado`** (ticket 25, ADR 0013). Un
+#: renglón cancelado no se recibió nunca, así que lo que vuelve es **también** lo
+#: que repuso, no solo lo de después del ancla: vuelve desde el principio de lo
+#: que cubría. Es otra regla, y por eso otra tupla: ver
+#: `ESTADOS_QUE_TERMINAN_EL_TRANSITO`.
 ESTADOS_QUE_CIERRAN_EL_TRANSITO: tuple[str, ...] = (
     RENGLON_RECIBIDO,
     RENGLON_RECIBIDO_PARCIAL,
 )
 
-#: Lo que ya se le pidió a un proveedor, llegara o no: `en tránsito` más los dos
-#: que lo cierran. Es la definición de "otra lista ya atendió este producto" en
-#: `_LO_YA_PEDIDO`.
-ESTADOS_YA_PEDIDOS: tuple[str, ...] = (
-    RENGLON_EN_TRANSITO,
+#: **Todo lo que deja de venir en camino, llegara o no** (ticket 25). Los dos de
+#: la recepción más `cancelado`. Un renglón en uno de éstos ya no saca su
+#: producto de la lista, y lo que no se propuso por su culpa **vuelve**: desde
+#: el día siguiente al ancla si llegó, desde el principio de lo que cubría si se
+#: canceló. Es la segunda clase de fila de `_LO_YA_PEDIDO`.
+ESTADOS_QUE_TERMINAN_EL_TRANSITO: tuple[str, ...] = (
     *ESTADOS_QUE_CIERRAN_EL_TRANSITO,
+    RENGLON_CANCELADO,
+)
+
+#: Lo que, en una lista **posterior**, hace que otra lista ya no tenga que
+#: recordar al producto (hasta el ticket 24 se llamaba `ESTADOS_YA_PEDIDOS` y
+#: no traía `cancelado`): se volvió a pedir, llegó, o se canceló otra vez. En
+#: los tres casos el renglón de después ya carga con lo que el de antes dejaba
+#: pendiente —se armó con la memoria—, y recordar los dos serían dos intervalos
+#: del mismo producto, que es sumar días dos veces. Es el `NOT EXISTS` de
+#: `_LO_YA_PEDIDO`.
+ESTADOS_QUE_ATIENDEN_EL_PRODUCTO: tuple[str, ...] = (
+    RENGLON_EN_TRANSITO,
+    *ESTADOS_QUE_TERMINAN_EL_TRANSITO,
 )
 
 CLASIFICACIONES = (MEDICAMENTO, ABARROTE, SIN_CLASIFICAR)
@@ -177,6 +211,18 @@ BORRADOR = "borrador"
 #: proponerlos mañana.
 ENVIADO = "enviado"
 
+#: **Una persona dijo que este pedido NO está en el portal del proveedor**
+#: (ticket 25, ADR 0013): nunca se capturó, o se canceló allá también. Solo se
+#: llega desde `enviado`, lleva firma —`cancelado_por`, `cancelado_en`— y es un
+#: final.
+#:
+#: **No es "desenviar"**, que el ADR 0009 negó y sigue negado: un pedido
+#: cancelado no vuelve a `borrador`, no se edita, no se vuelve a enviar y no se
+#: descancela. Lo que hace es soltar sus renglones del tránsito —pasan a
+#: `cancelado`— para que su mercancía se vuelva a proponer. Continental no
+#: cancela nada en ningún portal, igual que no captura nada en ninguno.
+CANCELADO = "cancelado"
+
 #: Los dos, y ningún sinónimo. El DDL los repite en `ck_pedido_estado` y
 #: `test_sql_del_pedido.py` compara esta tupla contra el archivo `.sql`.
 #:
@@ -187,10 +233,9 @@ ENVIADO = "enviado"
 #: — el código de arranque no aplica DDL nunca (ADR 0003), y hay una prueba que
 #: se pone roja si este archivo llega siquiera a nombrar esa carpeta.
 #:
-#: **No hay un estado de cancelado**, y tampoco es un olvido: nadie lo ha
-#: pedido, y un valor en un CHECK que ningún código escribe es vocabulario
-#: muerto invitando a que alguien lo use con otro significado.
-ESTADOS_DEL_PEDIDO: tuple[str, ...] = (BORRADOR, ENVIADO)
+#: **`cancelado` llegó con el ticket 25** (ADR 0013), y hasta ese día esta nota
+#: decía que no existía "porque nadie lo ha pedido". El ticket lo pidió.
+ESTADOS_DEL_PEDIDO: tuple[str, ...] = (BORRADOR, ENVIADO, CANCELADO)
 
 # ------------------------------------------- cómo acaba una corrida del lote
 #
@@ -473,6 +518,43 @@ def dias_primera_vez_configurados() -> int:
     return dias
 
 
+#: La llave del YAML, escrita una vez: la usan la lectura y los mensajes.
+LLAVE_DEL_ATRASO = "dias_en_transito_para_atrasado"
+
+
+def dias_en_transito_para_atrasado_configurados() -> int:
+    """El N del ticket 25: **más** de cuántos días en camino es "atrasado".
+
+    Sale de `config/continental.yml` (`pedido.dias_en_transito_para_atrasado`),
+    con su comentario de por qué vale lo que vale. No hay un número de omisión
+    en el código, y es a propósito.
+
+    **Truena si falta o está mal escrito, al revés que sus vecinas.**
+    `dias_primera_vez_configurados` y los topes del lote caen a un valor y
+    avisan porque tronar ahí dejaría a la farmacia sin pedido del día o sin lote
+    nocturno. Aquí tronar no deja a nadie sin nada: lo único que se pierde es la
+    señal —y la ruta la enseña como un hueco con su motivo (regla 4)—. Caer a
+    un número elegido en silencio sería peor: es el número que decide cuándo se
+    ofrece **devolver a la lista** algo que se pidió, y una válvula que se abre
+    en un día que nadie escogió es exactamente cómo se pide dos veces.
+
+    Un entero y nada más: `"7"` entre comillas, `7.5`, `True` —que en Python
+    es un `int`— y cualquier cosa menor que uno se rechazan. Un `7.5` no es un
+    número de días de calendario, y truncarlo a 7 sería decidir por el dueño.
+    """
+    from continental.config import cargar
+
+    crudo = cargar().pedido.get(LLAVE_DEL_ATRASO)
+    if isinstance(crudo, bool) or not isinstance(crudo, int) or crudo < 1:
+        raise ValueError(
+            f"config/continental.yml no trae un `pedido.{LLAVE_DEL_ATRASO}` "
+            f"utilizable ({crudo!r}): tiene que ser un entero de días, uno o más. "
+            "Sin él no se puede decir qué tránsito está atrasado, y no se "
+            "inventa uno."
+        )
+    return crudo
+
+
 @dataclass(frozen=True, slots=True)
 class RenglonGuardado:
     """Un renglón que ya tiene fila: su id, su estado y lo que se propuso.
@@ -561,6 +643,8 @@ class RenglonGuardado:
     elegido_en: dt.datetime | None = None
     capturado_por: str | None = None
     capturado_en: dt.datetime | None = None
+    cancelado_por: str | None = None
+    cancelado_en: dt.datetime | None = None
 
     @property
     def esta_capturado(self) -> bool:
@@ -650,6 +734,18 @@ class RenglonGuardado:
         return self.estado == RENGLON_EN_TRANSITO
 
     @property
+    def esta_cancelado(self) -> bool:
+        """Si se dejó de esperar sin haber llegado (ticket 25, ADR 0013).
+
+        Su pedido se canceló, o alguien lo devolvió a la lista por atrasado.
+        **No es "abierto otra vez"**: no se reparte, no se tacha y no se
+        consulta; lo que vuelve es su producto, en la siguiente lista. Separado
+        de `esta_en_transito` por la misma razón que `fue_cancelado` lo está de
+        `fue_enviado` en el pedido.
+        """
+        return self.estado == RENGLON_CANCELADO
+
+    @property
     def se_puede_repartir(self) -> bool:
         """Si todavía se le puede meter en un pedido.
 
@@ -697,6 +793,8 @@ class PedidoGuardado:
     total_sin_iva: Decimal | None = None
     enviado_por: str | None = None
     enviado_en: dt.datetime | None = None
+    cancelado_por: str | None = None
+    cancelado_en: dt.datetime | None = None
 
     @property
     def tiene_puente(self) -> bool:
@@ -720,6 +818,17 @@ class PedidoGuardado:
         return self.estado == ENVIADO
 
     @property
+    def fue_cancelado(self) -> bool:
+        """Si alguien dijo que no está en el portal del proveedor (ticket 25).
+
+        Es el caso que la nota de `fue_enviado` anticipó: "no es borrador" ya no
+        quiere decir "se capturó". Un pedido cancelado conserva la firma de su
+        envío —alguien SÍ dijo haberlo capturado, y eso también es su historia—
+        y agrega la suya.
+        """
+        return self.estado == CANCELADO
+
+    @property
     def nombre(self) -> str:
         """Cómo se escribe el proveedor, según el glosario."""
         return nombre_del_proveedor(self.proveedor)
@@ -739,6 +848,25 @@ class PedidoEnviado:
     `renglones` son los ids, en el orden en que el `RETURNING` los entrega. Se
     guardan los ids y no el conteo porque el conteo se saca de ellos y al revés
     no: si algún día hace falta decir *cuáles*, ya están.
+    """
+
+    pedido: PedidoGuardado
+    renglones: tuple[int, ...] = ()
+
+    @property
+    def cuantos_renglones(self) -> int:
+        return len(self.renglones)
+
+
+@dataclass(frozen=True, slots=True)
+class PedidoCancelado:
+    """Lo que dejó cancelar un pedido: la fila nueva y qué renglones soltó (25).
+
+    La misma forma que `PedidoEnviado`, y por lo mismo: son **dos** `UPDATE` en
+    una transacción —el pedido y sus renglones— y quien llama tiene que poder
+    decir en la bitácora cuántos renglones dejaron de estar en camino. Un pedido
+    cancelado que no soltara ninguno sería la falla silenciosa al revés: su
+    mercancía seguiría fuera de la lista para siempre.
     """
 
     pedido: PedidoGuardado
@@ -784,6 +912,24 @@ class LoYaPedido:
     proveedor: str | None
     enviado_por: str | None
     enviado_en: dt.datetime | None
+    #: El principio de la ventana de su lista (`ventas_consideradas_desde`).
+    #: Lo necesita **solo** el renglón cancelado (ticket 25): vuelve desde el
+    #: principio de lo que cubría, y eso es este día o su `ventas_desde`.
+    ventas_desde_la_lista: dt.date | None = None
+    #: El estado de su pedido: distingue "se canceló el pedido entero" de "lo
+    #: devolvieron a la lista a él solo", que se dicen distinto en la pantalla.
+    estado_del_pedido: str | None = None
+
+    def __post_init__(self) -> None:
+        # Un cancelado sin el principio de su lista no sabe desde cuándo vuelve.
+        # Adivinarlo —el ancla, la fecha de la lista— sería perder ventas o
+        # proponerlas dos veces, en silencio (regla 4): se truena.
+        if self.renglon.esta_cancelado and self.ventas_desde_la_lista is None:
+            raise ValueError(
+                f"El renglón {self.renglon.renglon_id} está cancelado y no trae el "
+                "principio de la ventana de su lista: no se sabe desde qué día "
+                "vuelve su producto (ADR 0013)."
+            )
 
     @property
     def producto_id(self) -> int:
@@ -799,8 +945,37 @@ class LoYaPedido:
         return self.renglon.estado in ESTADOS_QUE_CIERRAN_EL_TRANSITO
 
     @property
+    def fue_cancelado(self) -> bool:
+        """Si se dejó de esperar sin llegar (ticket 25)."""
+        return self.renglon.esta_cancelado
+
+    @property
+    def se_cancelo_el_pedido(self) -> bool:
+        """Si lo que lo canceló fue su pedido entero, y no una devolución suya."""
+        return self.fue_cancelado and self.estado_del_pedido == CANCELADO
+
+    @property
+    def vuelve_a_proponerse(self) -> bool:
+        """Si su producto ya no viene en camino y algo suyo falta por proponer.
+
+        Llegó —`recibido`, `recibido parcial`— o se canceló. Los dos vuelven;
+        lo que cambia es **desde cuándo**, y eso lo dice `retiene_desde`.
+        """
+        return self.renglon.estado in ESTADOS_QUE_TERMINAN_EL_TRANSITO
+
+    @property
     def retiene_desde(self) -> dt.date:
-        """El primer día de ventas que ese pedido NO cubrió: el siguiente al ancla."""
+        """El primer día de ventas cuyo producto **todavía no se pidió**.
+
+        - **En camino o recibido** (ADR 0012): el día siguiente al ancla. Lo
+          del ancla hacia atrás ya se pidió; lo de después es lo retenido.
+        - **Cancelado** (ADR 0013): **el principio de lo que cubría**. Nunca se
+          pidió —o nunca llegó y se dejó de esperar—, así que también vuelve lo
+          que ese renglón repuso: desde su `ventas_desde` si tenía ventana
+          propia, y si no desde el principio de su lista.
+        """
+        if self.fue_cancelado:
+            return self.renglon.propuesto.ventas_desde or self.ventas_desde_la_lista
         return self.ventas_hasta + dt.timedelta(days=1)
 
     @property
@@ -1033,6 +1208,11 @@ def columnas_del_renglon(
         # las relaciona.
         "capturado_por": None,
         "capturado_en": None,
+        # Y SIN CANCELAR (ticket 25): nace esperándose. Explícitas por lo mismo
+        # que las de arriba: `ck_renglon_cancelacion` las relaciona con el
+        # estado.
+        "cancelado_por": None,
+        "cancelado_en": None,
         # DESDE QUÉ DÍA SE SUMARON SUS VENTAS, si no es el principio de la
         # lista (ticket 24, ADR 0012). Casi siempre `None`. Es un dato del
         # CÁLCULO —lo decide la memoria de lo ya pedido al armar— y por eso
@@ -1217,6 +1397,26 @@ def revisar_el_renglon(columnas: dict) -> None:
             "voz pasiva, y cuando la factura no cuadre no habría a quién "
             "preguntarle qué se tecleó en el portal (ADR 0010)."
         )
+    # Las dos del ticket 25, con `.get` por lo mismo que las del 20 y el 22:
+    # una fila de una base sin la migración 0009 no las trae, y eso es "nadie
+    # canceló", no un KeyError.
+    if columnas.get("cancelado_por") == "":
+        raise ValueError(
+            "Firma vacía. La columna tiene CHECK (cancelado_por <> ''): o hay "
+            "correo o es NULL, igual que las otras firmas del esquema: "
+            "ck_renglon_cancelado_por."
+        )
+    if (columnas["estado"] == RENGLON_CANCELADO) != (
+        columnas.get("cancelado_por") is not None
+        and columnas.get("cancelado_en") is not None
+    ):
+        raise ValueError(
+            "Cancelado sin decir quién ni cuándo, o firma de cancelación en un "
+            "renglón que no está cancelado. Lo rechaza ck_renglon_cancelacion. "
+            "Un renglón cancelado vuelve a proponerse entero en la siguiente "
+            "lista (ADR 0013): sin la firma no hay a quién preguntarle por qué "
+            "se dejó de esperar algo que quizá sí venía."
+        )
 
 
 
@@ -1288,18 +1488,37 @@ def revisar_el_pedido(columnas: dict) -> None:
             "elección. Sin encabezado de Access, `web.app.quien()` devuelve "
             "'sin-identificar', que sí es un dato: ck_pedido_enviado_por."
         )
-    if (columnas["estado"] == ENVIADO) != (
+    # `enviado` Y `cancelado` llevan la firma del envío (ticket 25): solo se
+    # cancela lo que alguien dijo haber enviado, y esa palabra no se borra.
+    if (columnas["estado"] in (ENVIADO, CANCELADO)) != (
         columnas.get("enviado_por") is not None
         and columnas.get("enviado_en") is not None
     ):
         raise ValueError(
             "Enviado sin decir quién ni cuándo, o firma de envío en un pedido "
-            "que no está enviado. Lo rechaza ck_pedido_envio. 'Enviado' "
+            "que nunca se envió. Lo rechaza ck_pedido_envio. 'Enviado' "
             "significa 'yo ya lo capturé en el portal del proveedor' (ADR "
             "0009): es la declaración de una persona sobre algo que Continental "
             "no vio, así que sin su firma no queda ningún hecho guardado — solo "
             "un 'se envió' en voz pasiva y nadie a quien preguntarle qué se "
             "capturó."
+        )
+    # Las dos del ticket 25, con `.get` por la misma razón que las del 21.
+    if columnas.get("cancelado_por") == "":
+        raise ValueError(
+            "Firma vacía. La columna tiene CHECK (cancelado_por <> ''): o hay "
+            "correo o es NULL: ck_pedido_cancelado_por."
+        )
+    if (columnas["estado"] == CANCELADO) != (
+        columnas.get("cancelado_por") is not None
+        and columnas.get("cancelado_en") is not None
+    ):
+        raise ValueError(
+            "Cancelado sin decir quién ni cuándo, o firma de cancelación en un "
+            "pedido que no está cancelado. Lo rechaza ck_pedido_cancelacion. "
+            "'Cancelado' es la palabra de una persona de que el pedido no está "
+            "en el portal del proveedor (ADR 0013): sin su firma no hay a quién "
+            "preguntarle cuando la mercancía llegue de todos modos."
         )
     if columnas["proveedor_id"] is not None and columnas["proveedor_id"] <= 0:
         raise ValueError(
@@ -1342,6 +1561,10 @@ def pedido_desde_columnas(fila) -> PedidoGuardado:
         ),
         enviado_por=fila.get("enviado_por"),
         enviado_en=fila.get("enviado_en"),
+        # Las dos del ticket 25, con `.get` por lo mismo: sin la migración 0009
+        # es "nadie lo canceló".
+        cancelado_por=fila.get("cancelado_por"),
+        cancelado_en=fila.get("cancelado_en"),
     )
 
 
@@ -2260,6 +2483,63 @@ class AlmacenamientoDelPedido(Protocol):
         """
         ...
 
+    def cancelar_el_pedido(
+        self, negocio: str, pedido_id: int, quien: str
+    ) -> PedidoCancelado | None:
+        """`enviado` → `cancelado`, firmado, y sus renglones en tránsito también (25).
+
+        **Lo que se guarda es la palabra de una persona**, igual que al enviar:
+        *"este pedido no está en el portal del proveedor"* —nunca se capturó, o
+        se canceló allá—. Continental no cancela nada en ningún portal (regla
+        1, ADR 0013), así que lleva **firma** y no acuse. `quien` es una firma y
+        nunca un permiso (regla 3).
+
+        **No es "desenviar"** (ADR 0009, enmendado por el 0013 en este punto):
+        el pedido no vuelve a `borrador`, no se edita y no se vuelve a enviar.
+        Sus renglones pasan a `cancelado` —no a `abierto`—, y lo que vuelve es
+        su **producto, en la siguiente lista**, con todo lo que cubrían.
+
+        Son **dos sentencias en una transacción**, y `None` es "no había nada
+        que cancelar". Las condiciones viven en el `WHERE`:
+
+        - el pedido es de este negocio (regla 7);
+        - **está `enviado`** — un borrador no se le ha pedido a nadie y se
+          vuelve a partir; uno ya cancelado no mueve su firma con otro clic;
+        - **ninguno de sus renglones se recibió** — si algo llegó, el pedido sí
+          se capturó, y "nunca se capturó" sería falso.
+
+        **Lo que NO exige, igual que enviar: que la lista siga `abierta`.**
+        Cancelar no cambia lo que se iba a pedir: dice que no se pidió. Exigirlo
+        dejaría atrapado para siempre lo que se envió desde una lista cerrada.
+        """
+        ...
+
+    def devolver_el_atrasado(
+        self,
+        negocio: str,
+        renglon_id: int,
+        quien: str,
+        enviado_antes_de: dt.datetime,
+    ) -> RenglonGuardado | None:
+        """Un renglón atrasado, **él solo**, de `en tránsito` a `cancelado` (25).
+
+        La cuarta casilla del ticket: devolver a la lista uno por uno, sin
+        cancelar el pedido entero. El pedido sigue `enviado` —lo demás de él
+        puede estar llegando— y el renglón queda firmado con `quien`.
+
+        `enviado_antes_de` es el límite que calcula
+        `transito.enviado_antes_de(ahora, N)`: el renglón se devuelve **solo si
+        su pedido se envió antes de ese instante**, que es exactamente "lleva
+        más de N días en camino" contado en la hora de la farmacia. La
+        condición vive en el `WHERE` —con el límite como parámetro— y no en un
+        `if`: dos pestañas no se pisan, y la pantalla no puede devolver lo que
+        todavía no se atrasó aunque alguien fabrique la petición.
+
+        `None` es "no había nada que devolver": no es de este negocio, no está
+        en tránsito, o todavía no se atrasa. Devuelve el renglón releído.
+        """
+        ...
+
     def marcar_capturado(
         self, negocio: str, renglon_id: int, capturado: bool, quien: str
     ) -> PedidoSugeridoGuardado | None:
@@ -2370,7 +2650,8 @@ _LEER_RENGLONES = text(
            descartado_por, descartado_en,
            cantidad_final, ajustada_por, ajustada_en,
            pedido_id, proveedor_elegido, elegido_por, elegido_en,
-           capturado_por, capturado_en, ventas_desde
+           capturado_por, capturado_en, ventas_desde,
+           cancelado_por, cancelado_en
     from pedidos.renglon
     where negocio = :negocio and pedido_sugerido_id = :pedido_sugerido_id
     order by renglon_id
@@ -2389,7 +2670,8 @@ _LEER_RENGLON_POR_ID = text(
            descartado_por, descartado_en,
            cantidad_final, ajustada_por, ajustada_en,
            pedido_id, proveedor_elegido, elegido_por, elegido_en,
-           capturado_por, capturado_en, ventas_desde
+           capturado_por, capturado_en, ventas_desde,
+           cancelado_por, cancelado_en
     from pedidos.renglon
     where negocio = :negocio and renglon_id = :renglon_id
     """
@@ -2480,6 +2762,23 @@ _PISO_SIN_PEDIR = text(
 #
 # El negocio va en CADA unión, no solo en el `WHERE` de afuera (regla 7): un id
 # de lista o de pedido de otra farmacia no puede colarse por un `join`.
+#
+# **Y DESDE EL TICKET 25, LO `cancelado`** (ADR 0013), en la misma clase que lo
+# recibido y con el mismo "que nadie lo haya atendido": se dejó de esperar sin
+# llegar, así que su producto vuelve. La diferencia es DESDE CUÁNDO —desde el
+# principio de lo que cubría, y no desde el día siguiente al ancla— y por eso
+# la sentencia trae ahora `s.ventas_consideradas_desde`: es ese principio
+# cuando el renglón no tenía ventana propia. Va en su propia cláusula
+# (`r.estado = 'cancelado'`) y no dentro de la tupla de la recepción: son dos
+# reglas, y la tupla de allá es el enganche de los tickets 26 y 27.
+#
+# Una lista posterior que CANCELÓ el producto también lo atiende
+# (`r2.estado = 'cancelado'`): ese renglón se armó con la memoria, así que ya
+# carga con lo que el de antes dejaba pendiente, y se recuerda él. Recordar los
+# dos serían dos intervalos del mismo producto.
+#
+# `p.estado as estado_del_pedido` distingue "se canceló el pedido entero" de
+# "lo devolvieron a la lista a él solo", que la pantalla dice distinto.
 _LO_YA_PEDIDO = text(
     """
     select r.renglon_id, r.pedido_sugerido_id, r.producto_id, r.clave,
@@ -2489,8 +2788,11 @@ _LO_YA_PEDIDO = text(
            r.cantidad_final, r.ajustada_por, r.ajustada_en,
            r.pedido_id, r.proveedor_elegido, r.elegido_por, r.elegido_en,
            r.capturado_por, r.capturado_en, r.ventas_desde,
+           r.cancelado_por, r.cancelado_en,
            s.fecha_del_pedido, s.ventas_consideradas_hasta,
-           p.proveedor, p.enviado_por, p.enviado_en
+           s.ventas_consideradas_desde,
+           p.proveedor, p.enviado_por, p.enviado_en,
+           p.estado as estado_del_pedido
     from pedidos.renglon as r
     join pedidos.pedido_sugerido as s
       on s.pedido_sugerido_id = r.pedido_sugerido_id
@@ -2501,7 +2803,8 @@ _LO_YA_PEDIDO = text(
     where r.negocio = :negocio
       and s.fecha_del_pedido < :antes_de
       and (r.estado = 'en tránsito'
-           or (r.estado in ('recibido', 'recibido parcial')
+           or ((r.estado in ('recibido', 'recibido parcial')
+                or r.estado = 'cancelado')
                and not exists (
                    select 1
                    from pedidos.renglon as r2
@@ -2513,7 +2816,8 @@ _LO_YA_PEDIDO = text(
                      and s2.fecha_del_pedido > s.fecha_del_pedido
                      and s2.fecha_del_pedido < :antes_de
                      and (s2.estado = 'cerrado'
-                          or r2.estado in ('en tránsito', 'recibido', 'recibido parcial')))))
+                          or r2.estado in ('en tránsito', 'recibido', 'recibido parcial')
+                          or r2.estado = 'cancelado'))))
     order by s.fecha_del_pedido, r.renglon_id
     """
 )
@@ -2811,7 +3115,8 @@ _ELEGIR_PROVEEDOR = text(
 _LEER_PEDIDOS = text(
     """
     select pedido_id, negocio, pedido_sugerido_id, proveedor, proveedor_id,
-           estado, armado_en, total_sin_iva, enviado_por, enviado_en
+           estado, armado_en, total_sin_iva, enviado_por, enviado_en,
+           cancelado_por, cancelado_en
       from pedidos.pedido
      where negocio = :negocio and pedido_sugerido_id = :pedido_sugerido_id
      order by proveedor
@@ -2956,6 +3261,103 @@ _RENGLONES_A_TRANSITO = text(
        and r.pedido_id = :pedido_id
        and r.estado = 'abierto'
     returning r.renglon_id
+    """
+)
+
+# CANCELAR UN PEDIDO (ticket 25, ADR 0013). `enviado` -> `cancelado`, firmado.
+#
+# Es la palabra de una persona de que este pedido NO está en el portal del
+# proveedor: nunca se capturó, o se canceló allá también. Continental no
+# cancela nada en ningún portal, igual que no captura nada en ninguno.
+#
+#   - `p.negocio` — regla 7.
+#   - `p.estado = 'enviado'` — la transición en el `WHERE`. Un borrador no se
+#     le ha pedido a nadie (se vuelve a partir) y uno ya cancelado no mueve su
+#     firma con el segundo clic. Cero filas y quien llama lo dice.
+#   - **`not exists` sobre lo recibido** — si algo de este pedido llegó, sí se
+#     capturó, y "nunca se capturó" sería falso. Hoy nada escribe `recibido`
+#     (ticket 26); la condición está desde ya para que ese ticket no tenga que
+#     acordarse de venir aquí.
+#
+# `enviado_por` y `enviado_en` NO se tocan: alguien SÍ dijo haberlo capturado, y
+# esa palabra es parte de la historia del pedido. `ck_pedido_envio` las exige
+# desde el ticket 25 para `enviado` y para `cancelado`.
+#
+# **NO mira la lista, igual que enviar (ADR 0009).** Cancelar no modifica lo
+# que se iba a pedir: dice que no se pidió.
+_CANCELAR_EL_PEDIDO = text(
+    """
+    update pedidos.pedido as p
+       set estado = 'cancelado',
+           cancelado_por = :quien,
+           cancelado_en = now()
+     where p.negocio = :negocio
+       and p.pedido_id = :pedido_id
+       and p.estado = 'enviado'
+       and not exists (select 1
+                         from pedidos.renglon as r
+                        where r.pedido_id = p.pedido_id
+                          and r.negocio = p.negocio
+                          and r.estado in ('recibido', 'recibido parcial'))
+    returning p.pedido_id, p.negocio, p.pedido_sugerido_id, p.proveedor,
+              p.proveedor_id, p.estado, p.armado_en, p.total_sin_iva,
+              p.enviado_por, p.enviado_en, p.cancelado_por, p.cancelado_en
+    """
+)
+
+# Y sus renglones que seguían en camino pasan a `cancelado`, con la MISMA
+# firma: `now()` es el mismo instante en toda la transacción, así que el pedido
+# y sus renglones dicen la misma hora.
+#
+#   - `r.pedido_id = :pedido_id` — solo los de ESTE pedido.
+#   - `r.estado = 'en tránsito'` — uno que ya se había devuelto por atrasado
+#     conserva su firma, y uno descartado sigue descartado.
+#
+# El renglón NO se suelta de su pedido (`pedido_id` se queda): es la historia
+# de qué se pidió y qué se canceló. `fk_renglon_pedido` sigue apuntando a un
+# pedido de su misma lista.
+_RENGLONES_CANCELADOS = text(
+    """
+    update pedidos.renglon as r
+       set estado = 'cancelado',
+           cancelado_por = :quien,
+           cancelado_en = now()
+     where r.negocio = :negocio
+       and r.pedido_id = :pedido_id
+       and r.estado = 'en tránsito'
+    returning r.renglon_id
+    """
+)
+
+# DEVOLVER A LA LISTA UN RENGLÓN ATRASADO (ticket 25, casilla 4). Él solo: el
+# pedido sigue `enviado`.
+#
+#   - `r.negocio`, y `p.negocio = r.negocio` en la unión — regla 7.
+#   - `r.estado = 'en tránsito'` — la transición en el `WHERE`.
+#   - `p.estado = 'enviado'` — de un pedido cancelado ya no queda nada en
+#     tránsito, y uno en borrador no tiene renglones en tránsito.
+#   - **`p.enviado_en < :enviado_antes_de`** — "lleva más de N días en
+#     camino". El límite lo calcula `transito.enviado_antes_de` en la hora de
+#     la farmacia y viaja como PARÁMETRO: la aritmética de zonas no vive aquí,
+#     porque en Postgres `at time zone '-06'` es la convención POSIX y se lee
+#     como UTC+6. Es la misma función con la que la pantalla decide qué
+#     ofrecer, así que las dos no pueden separarse. Nada de esto depende del
+#     reloj del contenedor.
+_DEVOLVER_EL_ATRASADO = text(
+    """
+    update pedidos.renglon as r
+       set estado = 'cancelado',
+           cancelado_por = :quien,
+           cancelado_en = now()
+      from pedidos.pedido as p
+     where r.negocio = :negocio
+       and r.renglon_id = :renglon_id
+       and r.estado = 'en tránsito'
+       and p.pedido_id = r.pedido_id
+       and p.negocio = r.negocio
+       and p.estado = 'enviado'
+       and p.enviado_en < :enviado_antes_de
+    returning r.renglon_id, r.pedido_sugerido_id
     """
 )
 
@@ -3705,6 +4107,63 @@ class AlmacenamientoPostgres:
             renglones=tuple(int(f[0]) for f in movidos),
         )
 
+    def cancelar_el_pedido(
+        self, negocio: str, pedido_id: int, quien: str
+    ) -> PedidoCancelado | None:
+        # `begin()`: las dos sentencias son UNA transacción, igual que enviar.
+        # Medio cancelar —el pedido cancelado y sus renglones todavía en
+        # tránsito— dejaría su mercancía fuera de la lista para siempre.
+        parametros = {"negocio": negocio, "pedido_id": pedido_id, "quien": quien}
+        with self._motor().begin() as conexion:
+            fila = (
+                conexion.execute(_CANCELAR_EL_PEDIDO, parametros).mappings().first()
+            )
+            if fila is None:
+                # Cero filas es una de cuatro, y las cuatro son "no se canceló":
+                # no existe en este negocio, es un borrador, ya estaba
+                # cancelado, o algo suyo ya se recibió.
+                return None
+            soltados = conexion.execute(_RENGLONES_CANCELADOS, parametros).all()
+        return PedidoCancelado(
+            pedido=pedido_desde_columnas(fila),
+            renglones=tuple(int(f[0]) for f in soltados),
+        )
+
+    def devolver_el_atrasado(
+        self,
+        negocio: str,
+        renglon_id: int,
+        quien: str,
+        enviado_antes_de: dt.datetime,
+    ) -> RenglonGuardado | None:
+        with self._motor().begin() as conexion:
+            movido = (
+                conexion.execute(
+                    _DEVOLVER_EL_ATRASADO,
+                    {
+                        "negocio": negocio,
+                        "renglon_id": renglon_id,
+                        "quien": quien,
+                        "enviado_antes_de": enviado_antes_de,
+                    },
+                )
+                .mappings()
+                .first()
+            )
+            if movido is None:
+                return None
+            # Se relee DENTRO de la transacción: lo que vuelve es el renglón
+            # después del cambio, con su firma.
+            fila = (
+                conexion.execute(
+                    _LEER_RENGLON_POR_ID,
+                    {"negocio": negocio, "renglon_id": renglon_id},
+                )
+                .mappings()
+                .first()
+            )
+        return None if fila is None else renglon_guardado_desde_columnas(fila)
+
     def marcar_capturado(
         self, negocio: str, renglon_id: int, capturado: bool, quien: str
     ) -> PedidoSugeridoGuardado | None:
@@ -3850,6 +4309,10 @@ def renglon_guardado_desde_columnas(fila) -> RenglonGuardado:
         # migración 0007 es "nadie tachó", no un KeyError.
         capturado_por=fila.get("capturado_por"),
         capturado_en=fila.get("capturado_en"),
+        # Las dos del ticket 25, con `.get` por la misma razón: sin la
+        # migración 0009 es "nadie lo canceló", no un KeyError.
+        cancelado_por=fila.get("cancelado_por"),
+        cancelado_en=fila.get("cancelado_en"),
     )
 
 
@@ -3868,4 +4331,8 @@ def lo_ya_pedido_desde_columnas(fila) -> LoYaPedido:
         proveedor=fila["proveedor"],
         enviado_por=fila["enviado_por"],
         enviado_en=fila["enviado_en"],
+        # Las dos del ticket 25: desde cuándo vuelve lo cancelado, y si fue el
+        # pedido entero o el renglón solo.
+        ventas_desde_la_lista=fila.get("ventas_consideradas_desde"),
+        estado_del_pedido=fila.get("estado_del_pedido"),
     )

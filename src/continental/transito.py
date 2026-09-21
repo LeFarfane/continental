@@ -47,6 +47,24 @@ regla es que las **fechas de venta** salen de `max(fecha)` y nunca de
 contra otro instante —ahora—, que es exactamente lo que un reloj sabe. Contra
 `max(fecha)` saldría mal: los lunes, la última venta es del sábado y un pedido
 de esa mañana saldría "enviado en el futuro".
+
+## La válvula de escape (ticket 25, ADR 0013)
+
+Un renglón en tránsito que nunca llega se quedaría fuera de la lista para
+siempre. Dos salidas, las dos firmadas y las dos con el mismo destino:
+
+- **Atrasado** —lleva **más** de N días en camino, N en
+  `config/continental.yml`— es una **señal calculada**, no un estado: se
+  deduce del instante del envío cada vez que se mira, y no se guarda. Se llama
+  así y no "vencido" porque `vencido` ya es un estado de la **lista** en el
+  glosario. Lo atrasado se puede **devolver a la lista** uno por uno.
+- **Cancelar un pedido** que nunca se capturó en el portal.
+
+En los dos casos el renglón pasa a `cancelado` —no a `abierto`: su lista casi
+siempre está cerrada y no se deja modificar— y **lo que vuelve es el producto,
+en la siguiente lista**, desde el principio de lo que ese renglón cubría:
+nunca se pidió, así que también vuelve lo que repuso. Es la misma memoria del
+ticket 24, con otro "desde" (`LoYaPedido.retiene_desde`).
 """
 
 from __future__ import annotations
@@ -77,8 +95,8 @@ ZONA_DE_LA_FARMACIA = dt.timezone(dt.timedelta(hours=-6), "hora del centro")
 #: A partir de cuántos días el día de la semana solo ya no alcanza. En seis días
 #: cada día de la semana aparece una sola vez, así que "el martes" no se puede
 #: confundir; al séptimo, "el martes" es también hoy. Desde ahí va la fecha y
-#: cuántos días lleva — que es lo que el ticket 25 va a comparar contra su N
-#: para señalar el tránsito como vencido.
+#: cuántos días lleva — que es lo que el ticket 25 compara contra su N para
+#: señalar el tránsito como **atrasado** (no "vencido": ése es de la lista).
 DIAS_CON_NOMBRE = 7
 
 _DIAS = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
@@ -169,6 +187,12 @@ def memoria_de_lo_pedido(ya_pedidos: Iterable["LoYaPedido"]) -> MemoriaDeLoPedid
     pidió, llegó y se volvió a pedir, el último pedido manda y el producto sigue
     fuera. Entre dos del mismo tipo manda el ancla más reciente.
 
+    **Lo cancelado cuenta como "ya no viene"** (ticket 25): su producto vuelve,
+    desde el principio de lo que cubría. `lo_ya_pedido` ya se encarga de que no
+    lleguen aquí dos filas que vuelvan del mismo producto —la de después
+    atiende a la de antes—; si llegaran, manda la más reciente, igual que con
+    dos recibidos.
+
     Un renglón que no está ni en tránsito ni en un estado que lo cierre —un
     `abierto` o un `descartado` que alguien pasara por error— **no entra**: la
     memoria solo puede sacar de la lista lo que de verdad se le pidió a alguien.
@@ -178,7 +202,9 @@ def memoria_de_lo_pedido(ya_pedidos: Iterable["LoYaPedido"]) -> MemoriaDeLoPedid
     for ya in ya_pedidos:
         if ya.esta_en_transito:
             destino = en_camino
-        elif ya.ya_se_cerro:
+        elif ya.vuelve_a_proponerse:
+            # Llegó, o se canceló (ticket 25). Los dos vuelven, y la diferencia
+            # —desde cuándo— la dice `retiene_desde`, no esta función.
             destino = llegados
         else:
             continue
@@ -415,6 +441,271 @@ def frase_de_ya_en_camino(ya: "LoYaPedido", ahora: dt.datetime) -> str:
     )
 
 
+# ------------------------------------------------ atrasado (ticket 25)
+#
+# **Atrasado no es un estado**: es lo que se deduce de comparar el instante del
+# envío contra ahora. No se guarda porque cambia solo con el paso del tiempo, y
+# una columna que dijera "atrasado" envejecería sin avisar igual que una
+# sugerencia guardada (ticket 20). Y no se llama "vencido", que ya es de la
+# lista.
+
+
+def dias_en_transito(enviado_en: dt.datetime | None, ahora: dt.datetime) -> int | None:
+    """Cuántos días lleva en camino: de **calendario en la farmacia**.
+
+    Los mismos días que cuenta `cuando_se_envio`, y por la misma razón: un envío
+    del lunes a las 20:30 son las 02:30 del martes en UTC, y contado en UTC el
+    renglón se atrasaría un día tarde. Nunca negativo —un reloj de la base unos
+    segundos adelante no es un envío del futuro— y `None` si no quedó la hora:
+    no se inventa.
+    """
+    if enviado_en is None:
+        return None
+    dias = (_en_la_farmacia(ahora).date() - _en_la_farmacia(enviado_en).date()).days
+    return max(dias, 0)
+
+
+def esta_atrasado(dias: int | None, umbral: int | None) -> bool:
+    """**Más** de `umbral` días, como dice el ticket: con N = 7, el séptimo no."""
+    return dias is not None and umbral is not None and dias > umbral
+
+
+def enviado_antes_de(ahora: dt.datetime, umbral: int) -> dt.datetime:
+    """El instante que el `WHERE` compara: lo enviado **antes** está atrasado.
+
+    `dias > N` ⟺ el día del envío es anterior a `hoy - N` ⟺ se envió antes de la
+    **medianoche de la farmacia** de ese día. Se calcula aquí y viaja como
+    parámetro a `_DEVOLVER_EL_ATRASADO`, y es a propósito: la pantalla decide
+    qué ofrecer con `dias_en_transito` y la base decide qué acepta con esto, y
+    una prueba recorre doce días de hora en hora para que las dos no se separen
+    ni un instante. Hacer la cuenta en SQL obligaría a escribir la zona allá, y
+    en Postgres `at time zone '-06'` es la convención POSIX: se lee como UTC+6.
+    """
+    hoy = _en_la_farmacia(ahora).date()
+    dia = hoy - dt.timedelta(days=umbral)
+    return dt.datetime(dia.year, dia.month, dia.day, tzinfo=ZONA_DE_LA_FARMACIA)
+
+
+def _dias(cuantos: int) -> str:
+    return "1 día" if cuantos == 1 else f"{cuantos} días"
+
+
+def frase_del_atraso(dias: int | None, umbral: int | None) -> str | None:
+    """La primera casilla, dicha: **con el número de días a la vista**.
+
+    `None` cuando no está atrasado, o cuando no se puede saber (sin hora de
+    envío o sin umbral): esos casos se dicen en otra parte, no aquí con una
+    frase que afirme algo.
+    """
+    if not esta_atrasado(dias, umbral):
+        return None
+    return (
+        f"Atrasado: lleva {_dias(dias)} en camino, más de {_dias(umbral)}. "
+        "Si no llegó, se puede devolver a la lista."
+    )
+
+
+def frase_del_umbral(umbral: int) -> str:
+    """Qué quiere decir "atrasado" aquí, con su número. Va arriba del bloque."""
+    return (
+        f"Se da por atrasado lo que lleva más de {_dias(umbral)} en camino "
+        "sin recibirse."
+    )
+
+
+def frase_sin_umbral(detalle: str) -> str:
+    """El hueco cuando el número no se pudo leer (regla 4): dice qué falta.
+
+    Los renglones se siguen enseñando; lo que no se puede es decir cuál está
+    atrasado, y eso se dice en vez de callar —callar se leería "nada está
+    atrasado"—.
+    """
+    return (
+        "No se puede decir qué está atrasado: el número de días no se pudo leer "
+        f"de la configuración ({detalle}). Lo que viene en camino se ve igual."
+    )
+
+
+def frase_de_los_atrasados(cuantos: int, umbral: int | None) -> str | None:
+    """Cuántos están atrasados, arriba del bloque. Con cero, nada que decir."""
+    if not cuantos or umbral is None:
+        return None
+    if cuantos == 1:
+        return (
+            f"1 renglón lleva más de {_dias(umbral)} en camino: está atrasado."
+        )
+    return (
+        f"{cuantos} renglones llevan más de {_dias(umbral)} en camino: están "
+        "atrasados."
+    )
+
+
+#: Lo que cuesta equivocarse al devolver, dicho junto al botón.
+#:
+#: **Hasta el ticket 26 nada pasa a `recibido`**: todo lo que llegó sigue en
+#: tránsito y, a los N días, se ve atrasado igual que lo que no llegó. Devolver
+#: lo que sí llegó es volverlo a proponer entero — pedirlo dos veces. Y
+#: Continental no cancela nada en ningún portal: si el proveedor todavía lo tiene
+#: pedido, allá sigue.
+ADVERTENCIA_AL_DEVOLVER = (
+    "Devolver a la lista es decir que no llegó ni va a llegar: se vuelve a "
+    "proponer en la siguiente lista, con todo lo que cubría. Si sí llegó, no lo "
+    "devuelvas: se pediría dos veces. Y si el proveedor todavía lo tiene pedido "
+    "en su portal, cancélalo allá también — Continental no cancela nada en "
+    "ningún portal."
+)
+
+
+# --------------------------------------------------- cancelar (ticket 25)
+
+
+def _renglones(cuantos: int) -> str:
+    return "1 renglón" if cuantos == 1 else f"{cuantos} renglones"
+
+
+def frase_para_cancelar(nombre_del_proveedor: str, renglones_en_camino: int) -> str:
+    """Qué declara quien aprieta "Cancelar", en el mismo bloque del botón.
+
+    Es el par de `particion.frase_del_envio`: enviar dice *"ya lo capturé en el
+    portal"*, cancelar dice *"no está en el portal"*. Y se desmiente igual:
+    Continental no cancela nada allá, igual que no captura nada.
+    """
+    if renglones_en_camino == 0:
+        # Todo lo suyo ya se devolvió uno por uno: cancelar solo deja dicho que
+        # el pedido no está en el portal. Un "sus 0 renglones" no dice nada.
+        que_pasa = (
+            "Ya no le queda nada en camino: cancelarlo solo deja dicho que no "
+            "está en el portal."
+        )
+    elif renglones_en_camino == 1:
+        que_pasa = (
+            "Su renglón deja de estar en camino y vuelve a proponerse en la "
+            "siguiente lista, con todo lo que cubría."
+        )
+    else:
+        que_pasa = (
+            f"Sus {_renglones(renglones_en_camino)} dejan de estar en camino y "
+            "vuelven a proponerse en la siguiente lista, con todo lo que cubrían."
+        )
+    return (
+        f"Cancelar es decir que este pedido no está en el portal de "
+        f"{nombre_del_proveedor}: nunca se capturó, o ya se canceló allá. "
+        f"Continental no cancela nada en ningún portal. {que_pasa}"
+    )
+
+
+def motivo_para_no_cancelar(pedido) -> str | None:
+    """Por qué no se puede cancelar, o `None` si sí se puede.
+
+    La misma decisión que el `WHERE` de `_CANCELAR_EL_PEDIDO`, y **no la
+    garantía**: sirve para no pintar un botón que contestaría 409. Lo recibido
+    no se mira aquí —hoy nada lo escribe— y el `WHERE` sí lo mira.
+    """
+    if pedido.fue_cancelado:
+        return "ese pedido ya está cancelado"
+    if pedido.es_borrador:
+        return (
+            "un borrador todavía no se le pidió a nadie: no hay nada que "
+            "cancelar, se vuelve a partir"
+        )
+    return None
+
+
+def frase_del_pedido_cancelado(nombre_del_proveedor: str, cuantos: int) -> str:
+    """Lo que contesta la ruta al cancelar: qué pasó y qué NO pasó."""
+    if cuantos == 0:
+        soltados = "No le quedaba nada en camino."
+    elif cuantos == 1:
+        soltados = (
+            "Su renglón dejó de estar en camino y vuelve a proponerse en la "
+            "siguiente lista."
+        )
+    else:
+        soltados = (
+            f"Sus {_renglones(cuantos)} dejaron de estar en camino y vuelven a "
+            "proponerse en la siguiente lista."
+        )
+    return (
+        f"Pedido a {nombre_del_proveedor} cancelado. {soltados} Continental no "
+        f"canceló nada en el portal de {nombre_del_proveedor}."
+    )
+
+
+def frase_del_renglon_devuelto(descripcion: str) -> str:
+    """Lo que contesta la ruta al devolver un renglón atrasado a la lista."""
+    return (
+        f"{descripcion} se devolvió a la lista: vuelve a proponerse en la "
+        "siguiente lista, con todo lo que cubría. Su pedido sigue enviado."
+    )
+
+
+def frase_de_los_que_vuelven(cuantos: int) -> str | None:
+    """El encabezado de lo que vuelve en la siguiente lista. Con cero, calla.
+
+    Nació del recorrido del navegador: sin encabezado, la línea de lo que vuelve
+    quedaba pegada al pedido de arriba y se leía como parte de él.
+    """
+    if not cuantos:
+        return None
+    if cuantos == 1:
+        return (
+            "1 renglón se dejó de esperar y vuelve en la siguiente lista, con "
+            "todo lo que cubría:"
+        )
+    return (
+        f"{cuantos} renglones se dejaron de esperar y vuelven en la siguiente "
+        "lista, con todo lo que cubrían:"
+    )
+
+
+def _firma_de_la_cancelacion(quien: str | None, cuando: dt.datetime | None) -> str:
+    quien = quien or "alguien que no quedó escrito"
+    if cuando is None:
+        return f"{quien}, sin hora escrita"
+    local = _en_la_farmacia(cuando)
+    return f"{quien} {fecha_en_palabras(local.date())} a las {local:%H:%M}"
+
+
+def frase_de_lo_que_vuelve(ya: "LoYaPedido") -> str:
+    """Un renglón cancelado de una lista anterior: vuelve en la siguiente.
+
+    Dice quién lo soltó y cuándo —es una firma (regla 3)— y **desde qué día
+    vuelve**, que es lo que deja verificar el número de la lista siguiente:
+    sin esto, "pide 9" en una lista de un día no se podría explicar.
+    """
+    firma = _firma_de_la_cancelacion(ya.renglon.cancelado_por, ya.renglon.cancelado_en)
+    a_quien = ya.nombre_del_proveedor or "un proveedor que no quedó escrito"
+    vuelve = (
+        "Vuelve a proponerse en la siguiente lista, con lo vendido desde "
+        f"{fecha_en_palabras(ya.retiene_desde)}."
+    )
+    if ya.se_cancelo_el_pedido:
+        return f"Su pedido a {a_quien} se canceló: lo canceló {firma}. {vuelve}"
+    return (
+        f"Lo devolvió a la lista {firma}: no llegó de {a_quien}. {vuelve}"
+    )
+
+
+def frase_del_renglon_cancelado(renglon, pedido_cancelado: bool, nombre: str | None) -> str:
+    """Un renglón cancelado de **la lista de hoy**: vuelve en la siguiente, no aquí.
+
+    Lo que se muestra es lo guardado y no se recalcula (ADR 0012): la lista de
+    hoy ya se armó sin ese producto, y volverlo a `abierto` aquí sería reabrir
+    el pedido de ese proveedor en esta lista —desenviar por la puerta de atrás,
+    ADR 0013—. Así que se dice dónde va a aparecer.
+    """
+    a_quien = nombre or "un proveedor que no quedó escrito"
+    if pedido_cancelado:
+        return (
+            f"Su pedido a {a_quien} se canceló: no se va a recibir. Vuelve a "
+            "proponerse en la siguiente lista, no en ésta."
+        )
+    return (
+        f"Se devolvió a la lista porque no llegó de {a_quien}. Vuelve a "
+        "proponerse en la siguiente lista, no en ésta."
+    )
+
+
 # --------------------------------------------------------------- el JSON
 
 
@@ -422,18 +713,45 @@ def en_camino_como_json(
     ya_pedidos: Sequence["LoYaPedido"],
     vendido: Mapping[int, float] | None,
     ahora: dt.datetime,
+    *,
+    umbral: int | None = None,
+    detalle_del_umbral: str | None = None,
+    vuelven: Sequence["LoYaPedido"] = (),
 ) -> dict:
     """El bloque de lo que viene en camino, como la pantalla lo lee.
 
     `vendido` es `None` cuando no se pudieron leer las ventas: entonces cada
     renglón lleva `null` y la frase lo dice, en vez de enseñar un cero.
 
+    **Desde el ticket 25** cada renglón dice cuántos días lleva y si está
+    atrasado, y el bloque trae además los pedidos que se pueden cancelar y lo
+    que **vuelve** en la siguiente lista. `umbral` es el N del YAML; si no se
+    pudo leer, `detalle_del_umbral` dice por qué y `atrasado` va `null` en cada
+    renglón —no se sabe, que no es "no"—.
+
     Las frases viajan **hechas**; los datos van además, porque la pantalla los
     usa para acomodar, no para decidir.
     """
     renglones = []
+    pedidos: dict[int, dict] = {}
     for ya in ya_pedidos:
         piezas = None if vendido is None else vendido.get(ya.renglon.renglon_id)
+        dias = dias_en_transito(ya.enviado_en, ahora)
+        atrasado = None if umbral is None else esta_atrasado(dias, umbral)
+        if ya.renglon.pedido_id is not None and ya.proveedor is not None:
+            grupo = pedidos.setdefault(
+                ya.renglon.pedido_id,
+                {
+                    "pedido_id": ya.renglon.pedido_id,
+                    "proveedor": ya.proveedor,
+                    "nombre": ya.nombre_del_proveedor,
+                    "frase": frase_del_transito(
+                        ya.nombre_del_proveedor, ya.enviado_en, ahora
+                    ),
+                    "renglones_en_camino": 0,
+                },
+            )
+            grupo["renglones_en_camino"] += 1
         renglones.append(
             {
                 "renglon_id": ya.renglon.renglon_id,
@@ -456,14 +774,45 @@ def en_camino_como_json(
                 "firma": frase_de_la_firma(ya),
                 "vendido_desde_que_se_pidio": piezas,
                 "frase_de_lo_vendido": frase_de_lo_vendido(piezas),
+                # EL ATRASO (ticket 25). `atrasado` es `null` cuando no se sabe
+                # —sin umbral—, nunca `false` inventado.
+                "dias_en_transito": dias,
+                "atrasado": atrasado,
+                "frase_del_atraso": frase_del_atraso(dias, umbral),
+                "se_puede_devolver": bool(atrasado),
             }
         )
+    for grupo in pedidos.values():
+        grupo["frase_para_cancelar"] = frase_para_cancelar(
+            grupo["nombre"], grupo["renglones_en_camino"]
+        )
+    atrasados = sum(1 for r in renglones if r["atrasado"])
     return {
         "ok": True,
         "detalle": None,
         "frase": frase_del_bloque(len(renglones)),
         "advertencia": ADVERTENCIA_DE_LO_QUE_PROTEGE,
         "renglones": renglones,
+        "umbral_del_atraso": umbral,
+        "frase_del_umbral": (
+            frase_del_umbral(umbral)
+            if umbral is not None
+            else (frase_sin_umbral(detalle_del_umbral) if detalle_del_umbral else None)
+        ),
+        "frase_de_los_atrasados": frase_de_los_atrasados(atrasados, umbral),
+        "advertencia_al_devolver": ADVERTENCIA_AL_DEVOLVER,
+        "pedidos": list(pedidos.values()),
+        "frase_de_los_que_vuelven": frase_de_los_que_vuelven(len(vuelven)),
+        "vuelven": [
+            {
+                "renglon_id": ya.renglon.renglon_id,
+                "producto_id": ya.producto_id,
+                "clave": ya.renglon.propuesto.clave,
+                "descripcion": ya.renglon.propuesto.descripcion,
+                "frase": frase_de_lo_que_vuelve(ya),
+            }
+            for ya in vuelven
+        ],
     }
 
 
@@ -479,4 +828,11 @@ def en_camino_con_hueco(detalle: str) -> dict:
         "frase": "No se pudo leer lo que viene en camino.",
         "advertencia": ADVERTENCIA_DE_LO_QUE_PROTEGE,
         "renglones": [],
+        "umbral_del_atraso": None,
+        "frase_del_umbral": None,
+        "frase_de_los_atrasados": None,
+        "advertencia_al_devolver": ADVERTENCIA_AL_DEVOLVER,
+        "pedidos": [],
+        "frase_de_los_que_vuelven": None,
+        "vuelven": [],
     }

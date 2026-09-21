@@ -163,6 +163,14 @@ CONTINENTAL_NO_PIDE_EN_PORTALES = (
 #: mostrador. No es un error de nadie y por eso se dice con palabras.
 YA_ESTA_ENVIADO = "ese pedido ya está enviado: no se vuelve a enviar"
 
+#: Un pedido cancelado (ticket 25, ADR 0013) no vuelve a enviarse: cancelar es
+#: un final, no una vuelta a `borrador`. Lo que no llegó vuelve a proponerse en
+#: la siguiente lista, y ahí se pide otra vez si hace falta.
+YA_ESTA_CANCELADO = (
+    "ese pedido se canceló: no se vuelve a enviar, y lo suyo vuelve a "
+    "proponerse en la siguiente lista"
+)
+
 #: El pedido que se quedó sin renglones al volver a partir (ticket 20). Sigue
 #: existiendo —el rol no tiene `DELETE`— con su total en `NULL`. Enviarlo diría
 #: "capturé esto en el portal" sobre nada, y sus renglones ya se fueron a otro
@@ -664,11 +672,54 @@ def frase_del_envio(pedido: PedidoGuardado) -> str:
             f"Continental no se lo mandó a nadie: solo guarda quién lo dice y "
             f"cuándo lo dijo."
         )
+    # CANCELADO (ticket 25, ADR 0013). Las dos firmas en voz activa: quién dijo
+    # haberlo capturado y quién dijo después que no está en el portal. Y el
+    # desmentido, igual que al enviar: Continental no canceló nada allá.
+    if pedido.fue_cancelado:
+        return (
+            f"{pedido.cancelado_por} lo canceló: dijo que no está en el portal de "
+            f"{pedido.nombre} (antes, {pedido.enviado_por} lo había marcado como "
+            f"enviado). Continental no canceló nada en ningún portal. Sus "
+            f"renglones vuelven a proponerse en la siguiente lista."
+        )
     return (
         f"Enviar quiere decir «{ENVIAR_ES_UNA_DECLARACION}», el de "
         f"{pedido.nombre}. {CONTINENTAL_NO_PIDE_EN_PORTALES}: lo captura una "
         f"persona con la cuenta del dueño, y aquí se firma con su correo."
     )
+
+
+def frase_sin_nada_por_repartir(en_transito: int, cancelados: int) -> str | None:
+    """Por qué una lista ya no tiene nada que partir, cuando es porque se atendió.
+
+    **Nació del recorrido del navegador del ticket 25** —la sexta vez que el
+    recorrido caza lo que el suite no: 14, 15, 21, 22, 24 y 25—: con todo el
+    pedido de hoy cancelado, la pantalla decía *"Todavía no hay en qué partir
+    esta lista · Elige a quién se le pide cada renglón"* sobre renglones que ya
+    no se pueden repartir. Es el mismo tropiezo del ticket 21 con otro estado.
+
+    `None` cuando no hay nada ya pedido ni cancelado: entonces "no hay en qué
+    partir" quiere decir otra cosa —faltan precios o elecciones— y la pantalla
+    dice lo suyo. Quien llama la pide **solo** cuando ya no queda nada por
+    repartir.
+    """
+    partes = []
+    if en_transito == 1:
+        partes.append("1 renglón ya se pidió y viene en camino")
+    elif en_transito:
+        partes.append(f"{en_transito} renglones ya se pidieron y vienen en camino")
+    if cancelados == 1:
+        partes.append(
+            "1 renglón se dejó de esperar y vuelve a proponerse en la siguiente lista"
+        )
+    elif cancelados:
+        partes.append(
+            f"{cancelados} renglones se dejaron de esperar y vuelven a proponerse "
+            "en la siguiente lista"
+        )
+    if not partes:
+        return None
+    return f"No queda nada por repartir: {'; '.join(partes)}. Ya se puede cerrar."
 
 
 def motivo_para_no_enviar(
@@ -704,6 +755,10 @@ def motivo_para_no_enviar(
     """
     if pedido.fue_enviado:
         return YA_ESTA_ENVIADO
+    # Antes del conteo: un cancelado conserva sus renglones dentro —son su
+    # historia— y sin esta línea saldría "se puede enviar".
+    if pedido.fue_cancelado:
+        return YA_ESTA_CANCELADO
     if renglones_dentro <= 0:
         return SIN_RENGLONES_QUE_ENVIAR
     if total_envejecido:

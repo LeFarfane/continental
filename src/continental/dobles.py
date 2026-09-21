@@ -24,16 +24,20 @@ from continental.almacen import LineaDeCompra, LineaDeVenta, Producto
 from continental.almacenamiento import (
     ABIERTO,
     BORRADOR,
+    CANCELADO,
     CERRADO,
     ENVIADO,
     RENGLON_ABIERTO,
+    RENGLON_CANCELADO,
     RENGLON_DESCARTADO,
     RENGLON_EN_TRANSITO,
+    ESTADOS_QUE_ATIENDEN_EL_PRODUCTO,
     ESTADOS_QUE_CIERRAN_EL_TRANSITO,
-    ESTADOS_YA_PEDIDOS,
+    ESTADOS_QUE_TERMINAN_EL_TRANSITO,
     VENCIDO,
     CorridaDelLote,
     LoYaPedido,
+    PedidoCancelado,
     PedidoEnviado,
     PedidoSugeridoDuplicado,
     PedidoSugeridoGuardado,
@@ -510,6 +514,9 @@ class AlmacenamientoFalso:
           lista posterior (y anterior a `antes_de`) lo atendió si está
           **cerrada** y trae el producto, o si trae el producto **ya pedido**
           otra vez.
+        - **Lo cancelado que nadie ha atendido** (ticket 25), con la misma
+          condición. Y un cancelado posterior también atiende: se armó con la
+          memoria y ya carga con lo pendiente.
 
         El negocio se mira en la lista **y** en el renglón, que son las dos
         uniones del lado real; y el pedido se busca con su negocio, que es la
@@ -530,7 +537,10 @@ class AlmacenamientoFalso:
                 otra["fecha_del_pedido"] > fecha
                 and fila["negocio"] == negocio
                 and fila["producto_id"] == producto_id
-                and (otra["estado"] == CERRADO or fila["estado"] in ESTADOS_YA_PEDIDOS)
+                and (
+                    otra["estado"] == CERRADO
+                    or fila["estado"] in ESTADOS_QUE_ATIENDEN_EL_PRODUCTO
+                )
                 for otra in propias
                 for fila in otra["renglones"]
             )
@@ -542,7 +552,7 @@ class AlmacenamientoFalso:
                     continue
                 if fila["estado"] == RENGLON_EN_TRANSITO:
                     pass
-                elif fila["estado"] in ESTADOS_QUE_CIERRAN_EL_TRANSITO:
+                elif fila["estado"] in ESTADOS_QUE_TERMINAN_EL_TRANSITO:
                     if atendido_despues(fila["producto_id"], lista["fecha_del_pedido"]):
                         continue
                 else:
@@ -564,9 +574,13 @@ class AlmacenamientoFalso:
                             "ventas_consideradas_hasta": lista[
                                 "ventas_consideradas_hasta"
                             ],
+                            "ventas_consideradas_desde": lista[
+                                "ventas_consideradas_desde"
+                            ],
                             "proveedor": pedido["proveedor"] if pedido else None,
                             "enviado_por": pedido.get("enviado_por") if pedido else None,
                             "enviado_en": pedido.get("enviado_en") if pedido else None,
+                            "estado_del_pedido": pedido["estado"] if pedido else None,
                         }
                     )
                 )
@@ -710,6 +724,8 @@ class AlmacenamientoFalso:
         estado: str,
         descartado_por: str | None = None,
         descartado_en: dt.datetime | None = None,
+        cancelado_por: str | None = None,
+        cancelado_en: dt.datetime | None = None,
     ) -> PedidoSugeridoGuardado | None:
         """El `UPDATE` pelado de un renglón, revisado contra los CHECK.
 
@@ -735,6 +751,8 @@ class AlmacenamientoFalso:
             "estado": estado,
             "descartado_por": descartado_por,
             "descartado_en": descartado_en,
+            "cancelado_por": cancelado_por,
+            "cancelado_en": cancelado_en,
         }
         revisar_el_renglon(propuesta)
 
@@ -742,6 +760,8 @@ class AlmacenamientoFalso:
             estado=estado,
             descartado_por=descartado_por,
             descartado_en=descartado_en,
+            cancelado_por=cancelado_por,
+            cancelado_en=cancelado_en,
         )
         return armar_guardado(lista, lista["renglones"])
 
@@ -1147,6 +1167,98 @@ class AlmacenamientoFalso:
         return PedidoEnviado(
             pedido=pedido_desde_columnas(fila), renglones=tuple(movidos)
         )
+
+    # ------------------------------ cancelar y devolver lo atrasado (25)
+
+    def cancelar_el_pedido(self, negocio: str, pedido_id: int, quien: str):
+        """Los dos `UPDATE` de cancelar, en memoria y con las mismas condiciones.
+
+        En el orden del `WHERE` real: el negocio, el pedido todavía `enviado`,
+        y que **ninguno** de sus renglones se haya recibido. La lista **no se
+        mira**, igual que la sentencia: cancelar no exige la lista abierta. La
+        firma pasa por `revisar_el_pedido` y la de cada renglón por
+        `revisar_el_renglon`, así que un `cancelado` sin firma rebota aquí
+        igual que en atlas. Pedido y renglones con el MISMO instante: es el
+        `now()` de una sola transacción.
+        """
+        self._revisar()
+        fila = next((p for p in self.pedidos if p["pedido_id"] == pedido_id), None)
+        if fila is None or fila["negocio"] != negocio or fila["estado"] != ENVIADO:
+            return None
+        lista = self._por_id(fila["pedido_sugerido_id"])
+        dentro = [
+            r
+            for r in (lista["renglones"] if lista else [])
+            if r.get("pedido_id") == pedido_id and r["negocio"] == negocio
+        ]
+        # El `NOT EXISTS` sobre lo recibido: si algo llegó, sí se capturó.
+        if any(r["estado"] in ESTADOS_QUE_CIERRAN_EL_TRANSITO for r in dentro):
+            return None
+
+        cuando = dt.datetime.now(dt.UTC)
+        propuesta = {**fila, "estado": CANCELADO, "cancelado_por": quien, "cancelado_en": cuando}
+        revisar_el_pedido(propuesta)
+        fila.update(estado=CANCELADO, cancelado_por=quien, cancelado_en=cuando)
+
+        # `_RENGLONES_CANCELADOS`: solo los que seguían en camino.
+        soltados = []
+        for renglon in dentro:
+            if renglon["estado"] != RENGLON_EN_TRANSITO:
+                continue
+            self.poner_estado_del_renglon(
+                renglon["renglon_id"],
+                RENGLON_CANCELADO,
+                cancelado_por=quien,
+                cancelado_en=cuando,
+            )
+            soltados.append(renglon["renglon_id"])
+
+        return PedidoCancelado(
+            pedido=pedido_desde_columnas(fila), renglones=tuple(soltados)
+        )
+
+    def devolver_el_atrasado(
+        self,
+        negocio: str,
+        renglon_id: int,
+        quien: str,
+        enviado_antes_de: dt.datetime,
+    ):
+        """`_DEVOLVER_EL_ATRASADO`, en memoria: las mismas cinco condiciones.
+
+        El negocio del renglón, que esté `en tránsito`, que cuelgue de un pedido
+        del mismo negocio, que ese pedido siga `enviado`, y que se haya enviado
+        **antes del límite** —que es "lleva más de N días"—. La lista no se
+        mira. Devuelve el renglón releído, con su firma.
+        """
+        self._revisar()
+        encontrado = self._renglon_por_id(renglon_id)
+        if encontrado is None:
+            return None
+        fila, _lista = encontrado
+        if fila["negocio"] != negocio or fila["estado"] != RENGLON_EN_TRANSITO:
+            return None
+        pedido = next(
+            (
+                p
+                for p in self.pedidos
+                if p["pedido_id"] == fila.get("pedido_id")
+                and p["negocio"] == fila["negocio"]
+            ),
+            None,
+        )
+        if pedido is None or pedido["estado"] != ENVIADO:
+            return None
+        enviado_en = pedido.get("enviado_en")
+        if enviado_en is None or not enviado_en < enviado_antes_de:
+            return None
+        self.poner_estado_del_renglon(
+            renglon_id,
+            RENGLON_CANCELADO,
+            cancelado_por=quien,
+            cancelado_en=dt.datetime.now(dt.UTC),
+        )
+        return renglon_guardado_desde_columnas(fila)
 
     # -------------------------------------------- la pantalla de captura (22)
 

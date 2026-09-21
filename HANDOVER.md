@@ -292,7 +292,8 @@ sábado llega el lunes. **El enganche para 26 y 27 es
 `almacenamiento.ESTADOS_QUE_CIERRAN_EL_TRANSITO`**: quien escriba cualquiera de
 los dos estados no tiene que hacer nada más para que lo retenido vuelva. Cancelar
 (ticket 25) queda fuera a propósito: lo que vuelve ahí es también lo que el
-renglón repuso, porque nunca llegó.
+renglón repuso, porque nunca llegó — y así lo resolvió el 25, con su propia
+tupla y su propia cláusula (ver abajo y el ADR 0013).
 
 **El renglón que vuelve lo dice**: `renglon.ventas_desde` (migración 0008, una
 columna, **sin tabla nueva**) y la frase *"Trae también lo vendido desde el
@@ -319,6 +320,54 @@ armaba en el JavaScript pegándole un punto a una hora que ya terminaba en
 "a.m." —*"11:00 a.m.."*, el mismo tropiezo del 21— y vivía en un `title` que en
 pantalla táctil no se ve. Ahora es `transito.frase_de_la_firma`, a la vista y con
 prueba.
+
+**Y desde el ticket 25 hay válvula de escape: lo que nunca llega ya no se queda
+fuera de la lista para siempre.** Dos salidas, las dos firmadas con el correo de
+Access y las dos con el mismo destino (ADR 0013):
+
+- **Cancelar un pedido** que nunca se capturó en el portal —`enviado` →
+  `cancelado`—, desde el pedido enviado de hoy o desde el bloque de lo que viene
+  en camino. **No es "desenviar"**: el ADR 0009 sigue en pie y lleva una nota de
+  enmienda que dice exactamente qué cambió. Un cancelado no vuelve a borrador,
+  no se edita, no se vuelve a enviar y no se descancela. Un pedido con algo
+  recibido no se cancela.
+- **Devolver a la lista un renglón atrasado**, él solo: su pedido sigue
+  `enviado`. **Atrasado** es lo que lleva **más de N días** en camino, N en
+  `config/continental.yml` (`pedido.dias_en_transito_para_atrasado: 7`, sin
+  medir, con su porqué y su condición de revisión). **No es un estado** —se
+  calcula cada vez— y no se llama "vencido", que es de la lista. El `WHERE` de
+  `_DEVOLVER_EL_ATRASADO` recibe el límite como parámetro, calculado por la
+  misma función con que la pantalla decide ofrecer el botón.
+
+**En los dos casos el renglón pasa a `cancelado` —no a `abierto`— y lo que
+vuelve es su producto, en la siguiente lista**, contado desde el principio de lo
+que el renglón cubría: nunca se pidió, así que también vuelve lo que repuso. Lo
+lleva la misma memoria del 24 (`_LO_YA_PEDIDO` trae lo cancelado que nadie ha
+atendido, `LoYaPedido.retiene_desde` dice desde cuándo), con un solo intervalo
+por producto y el mismo "se olvida en cuanto una lista cerrada lo trae", así que
+ni se pierde ni se propone dos veces. No vuelve a `abierto` en su lista porque
+casi siempre está cerrada —y solo una lista abierta se modifica—, y porque detrás
+del corte sus ventas se perderían. **Lo que se renuncia:** quien cancela un
+pedido de hoy lo tiene de vuelta mañana, no hoy. La pantalla enseña lo que
+vuelve, con su firma y desde qué día.
+
+**Tres cosas del 25 que conviene no redescubrir.** (1) **`at time zone '-06'` en
+Postgres es la convención POSIX: se lee como UTC+6.** Por eso el límite del
+atraso se calcula en Python (medianoche de la farmacia) y viaja al `WHERE`; una
+prueba recorre doce días de hora en hora para que pantalla y base digan lo
+mismo. (2) **Un tercer estado del pedido rompe `!fue_enviado`**, que la pantalla
+usaba como "borrador" para pintar la captura: ahora es `es_borrador`, y
+`motivo_para_no_enviar` mira `fue_cancelado` antes del conteo —si no, un
+cancelado "se podía enviar"—. (3) **Hasta el ticket 26, lo que llegó también se
+ve atrasado**: nada lo pasa a `recibido`, y devolverlo es pedirlo dos veces. La
+advertencia va junto al botón. Y el recorrido del navegador cazó dos, **la
+sexta vez** (14, 15, 21, 22, 24, 25): con todo cancelado la partición mandaba a
+"elegir a quién se le pide" renglones que ya no se reparten, y lo que vuelve no
+tenía encabezado.
+
+**La 0009 va ANTES de desplegar**: `_LEER_RENGLONES`, `_LEER_PEDIDOS` y
+`_LO_YA_PEDIDO` nombran las columnas nuevas. No crea tabla: `crear_rol.sql` no
+se vuelve a correr.
 
 **Lo sugerido NO se guarda y lo decidido SÍ, y ésa es la decisión del ticket.**
 Es la misma pregunta que el 11 resolvió con `cantidad_propuesta` /
@@ -360,7 +409,21 @@ python iniciar.py     # http://127.0.0.1:8585
 python -m continental.verificar   # los datos de producción, no el código (ticket 17)
 python -m continental.lote        # el lote nocturno, a mano (ticket 18)
 python -m continental.lote --tope-minutos 5   # ...con tope corto, para mirarlo
-pytest                # 1095 pruebas, 0 saltadas, 5.40-5.49 s (2026-09-21, ticket 24)
+pytest                # 1191 pruebas, 0 saltadas, 4.92-6.05 s (2026-09-21, ticket 25)
+                      # 1095 en el 24. Las 96 nuevas son 95 de `test_cancelar.py`
+                      # (lo puro: días en tránsito, el umbral, el límite del
+                      # WHERE contra los días hora por hora, la memoria con lo
+                      # cancelado y las frases; lo que se guarda: cancelar y
+                      # devolver en el doble, los CHECK en Python, el SQL como
+                      # texto y el YAML; lo que se ve: las dos rutas en
+                      # escenarios de varios días, el lote y la pantalla) y 1 que
+                      # `test_compila.py` gana sola por la migración 0009. Siete
+                      # pruebas viejas se ajustaron porque los estados crecieron
+                      # (`ESTADOS_DEL_PEDIDO`, `ESTADOS_DEL_RENGLON`, la 0006 ya
+                      # no es la última palabra del CHECK) y porque la pantalla
+                      # tiene dos `fetch` más. NINGUNA TOCA POSTGRES ni duerme.
+                      #
+                      # 1095 pruebas, 0 saltadas, 5.40-5.49 s (2026-09-21, ticket 24)
                       # 1011 en el 23. Las 84 nuevas son 82 de `test_transito.py`
                       # (lo puro: qué se queda fuera, desde cuándo vuelve, cuánto
                       # se vendió y las frases, con el `ahora` por argumento; lo
@@ -493,7 +556,7 @@ pytest                # 1095 pruebas, 0 saltadas, 5.40-5.49 s (2026-09-21, ticke
 | `src/continental/comparacion.py` | funciones puras: las cuatro lecturas congeladas + las piezas -> quién gana, con qué certeza, cuánto se ahorra contra NADRO y, para la lista entera, cuántos renglones quedaron sin comparar (`contar_la_lista`). No toca la red, la base ni el reloj |
 | `src/continental/proveedores.py` | funciones puras: el puente entre la clave de Doyle y el `proveedor_id` de SICAR (ADR 0008). Lee el mapa del YAML, se niega con un aviso a una entrada mal escrita —y deja a ese proveedor "sin puente", que es un estado que el módulo sabe decir— y **nunca devuelve un cero**: `None` es "SICAR no lo conoce" |
 | `src/continental/particion.py` | funciones puras: los renglones + sus comparaciones + el puente -> a quién se le pide cada uno, en cuántos pedidos se parte la lista y cuánto suma cada uno. Ahí vive la decisión del ticket 20 —la sugerencia se recalcula, la decisión se guarda—, la regla de que un total con una línea sin precio es `None` y no una suma parcial, desde el 21 **las frases que dicen qué significa "enviar"** y cuándo no se puede (`frase_del_envio`, `motivo_para_no_enviar`), y desde el 22 **la captura**: qué renglones se teclean en el portal de cada pedido —los del pedido guardado, no los de la vista previa—, cuántos faltan, y la frase que lleva a enviar sin obligar (`lo_que_hay_que_capturar`, `frase_del_avance`, `invitacion_a_enviar`) |
-| `src/continental/transito.py` | funciones puras: lo ya pedido + las ventas + un `ahora` -> qué producto se queda fuera de la lista (viene en camino), desde qué día vuelve el que ya llegó (`MemoriaDeLoPedido`), cuánto se ha vendido desde que se pidió, y las frases de la pantalla: "Pedido el martes a NADRO, sin recibir.", la firma, lo vendido y la advertencia de que solo sabe de lo que pasó por Continental (ticket 24, ADR 0012) |
+| `src/continental/transito.py` | funciones puras: lo ya pedido + las ventas + un `ahora` -> qué producto se queda fuera de la lista (viene en camino), desde qué día vuelve el que ya llegó (`MemoriaDeLoPedido`), cuánto se ha vendido desde que se pidió, y las frases de la pantalla: "Pedido el martes a NADRO, sin recibir.", la firma, lo vendido y la advertencia de que solo sabe de lo que pasó por Continental (ticket 24, ADR 0012). Desde el 25, **el atraso** —cuántos días lleva, si pasó de N, y el límite que recibe el `WHERE` (`dias_en_transito`, `esta_atrasado`, `enviado_antes_de`)— y las frases de cancelar y de lo que vuelve en la siguiente lista (ADR 0013) |
 | `src/continental/exportar.py` | funciones puras: el pedido guardado + su captura -> los bytes del CSV (`csv_del_pedido`), su nombre (`nombre_del_archivo`) y su `Content-Disposition`. No escribe un archivo: la ruta sirve los bytes. Ahí vive por qué la clave va como `="..."`, medido contra el Excel de la torre (ticket 23) |
 | `src/continental/faltantes.py` | funciones puras: la corrida del lote + las comparaciones -> **por qué** le falta el precio a cada renglón, y **cuáles** va a consultar el botón de completar. Ahí vive la decisión cara del ticket 19: qué cuenta como "faltante", que son ~36 s de navegador por renglón de más si se estira |
 | `src/continental/latido.py` | el latido a Uptime Kuma, con monitor propio. `mandar_el_latido` **no levanta nunca** y el borde HTTP entra por argumento, así que ninguna prueba manda uno de verdad. El token vive en `KUMA_PUSH_URL_CONTINENTAL` del `.env`, jamás en el YAML |
@@ -566,13 +629,13 @@ más barato y se le pidió a otro.**
       -v ON_ERROR_STOP=1 < sql/verificar_rol.sql ; echo "salida: $?"
   ```
 
-  **Y desde el ticket 24 hay CUATRO migraciones que NO crean tabla** —la 0005,
-  la 0006, la 0007 y la 0008, de los tickets 20, 21, 22 y 24— así que
-  `crear_rol.sql` no hace falta volver a correrlo por ellas: el `GRANT SELECT,
-  INSERT, UPDATE` es sobre la tabla entera y no se usan permisos por columna. Lo
-  que sí conviene después de las cuatro es `verificar_rol.sql`, porque sus
-  comprobaciones **23 a 30** son suyas. **Las cuatro van ANTES de desplegar el
-  código de su ticket**:
+  **Y desde el ticket 25 hay CINCO migraciones que NO crean tabla** —la 0005,
+  la 0006, la 0007, la 0008 y la 0009, de los tickets 20, 21, 22, 24 y 25— así
+  que `crear_rol.sql` no hace falta volver a correrlo por ellas: el `GRANT
+  SELECT, INSERT, UPDATE` es sobre la tabla entera y no se usan permisos por
+  columna. Lo que sí conviene después de las cinco es `verificar_rol.sql`,
+  porque sus comprobaciones **23 a 33** son suyas. **Las cinco van ANTES de
+  desplegar el código de su ticket**:
   `_LEER_RENGLONES` nombra las columnas nuevas, y con la base vieja la lista del
   día no se puede leer — y `continental.verificar` no lo caza (ver el ticket 22,
   "sin hacer"):
@@ -584,7 +647,13 @@ más barato y se le pidió a otro.**
       -v ON_ERROR_STOP=1 < sql/migraciones/0007-el-avance-de-la-captura.sql
   docker exec -i farmacia_warehouse psql -U farmacia -d farmacia \
       -v ON_ERROR_STOP=1 < sql/migraciones/0008-el-renglon-que-vuelve-dice-desde-cuando.sql
+  docker exec -i farmacia_warehouse psql -U farmacia -d farmacia \
+      -v ON_ERROR_STOP=1 < sql/migraciones/0009-cancelar-y-devolver-lo-atrasado.sql
   ```
+
+  Sin la 0009, con el código del ticket 25 la lista tampoco se puede leer
+  —"column cancelado_por does not exist": la nombran `_LEER_RENGLONES`,
+  `_LEER_PEDIDOS` y `_LO_YA_PEDIDO`—.
 
   Sin la 0008, con el código del ticket 24 la lista **no se puede leer ni
   armar** —"column ventas_desde does not exist": la nombran `_LEER_RENGLONES`,
@@ -600,7 +669,7 @@ más barato y se le pidió a otro.**
   # y otra vez crear_rol.sql y verificar_rol.sql, en ese orden
   ```
 
-  El tercero es el que **da el veredicto**: 30 comprobaciones con lo que se
+  El tercero es el que **da el veredicto**: 33 comprobaciones con lo que se
   esperaba y lo que se encontró, y salida distinta de cero si algo quedó mal.
   Es lo que cierra la última casilla del ticket 07, y solo lo puede correr una
   persona con credenciales de dueño en atlas. Las 18, 19 y 20 son del ticket 12
@@ -618,7 +687,9 @@ más barato y se le pidió a otro.**
   en atlas— y que la firma del envío esté pareada en los dos sentidos. La **29**
   es del ticket 22: que la marca de captura tenga sus dos columnas y
   `ck_renglon_captura`. La **30** es del ticket 24: que `renglon.ventas_desde`
-  exista y sea `date` que admite nulos.
+  exista y sea `date` que admite nulos. Las **31 a 33** son del ticket 25: que
+  `ck_pedido_estado` y `ck_renglon_estado` conozcan `cancelado`, y que las dos
+  firmas de la cancelación —la del pedido y la del renglón— estén pareadas.
 
   **Ojo con la comprobación 16: estaba mal y se arregló en el ticket 19.**
   Esperaba `3` llaves `GENERATED AS IDENTITY` cuando ya eran cuatro desde el

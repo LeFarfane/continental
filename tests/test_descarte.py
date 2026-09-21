@@ -695,7 +695,17 @@ def test_el_descarte_no_es_uno_de_los_estados_nuevos():
     """
     assert RENGLON_DESCARTADO == "descartado"
     assert RENGLON_DESCARTADO in ESTADOS_DEL_RENGLON
-    assert len(ESTADOS_DEL_RENGLON) == 5
+    # Eran cinco hasta el ticket 25, que agregó `cancelado` —al final y con su
+    # ADR (0013)—. Lo que esta prueba cuida sigue igual: descartar no inventó
+    # un sinónimo; `cancelado` es otra cosa, con otra firma.
+    assert len(ESTADOS_DEL_RENGLON) == 6
+    assert ESTADOS_DEL_RENGLON[:5] == (
+        "abierto",
+        "en tránsito",
+        "recibido",
+        "recibido parcial",
+        "descartado",
+    )
 
 
 # ------------------------------------------------------------ la pantalla

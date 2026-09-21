@@ -75,7 +75,7 @@ import unicodedata
 from decimal import Decimal
 from urllib.parse import quote
 
-from continental.almacenamiento import BORRADOR, ENVIADO, PedidoGuardado
+from continental.almacenamiento import BORRADOR, CANCELADO, ENVIADO, PedidoGuardado
 from continental.particion import Captura, Linea, PedidoPorArmar
 
 #: Las columnas, en el orden del ticket y con el IVA dicho en el propio nombre:
@@ -198,6 +198,15 @@ def _estado(pedido: PedidoGuardado) -> str:
             f"enviado: {pedido.enviado_por} dijo haberlo capturado en el portal "
             f"de {pedido.nombre}{cuando}. Continental no se lo mandó a nadie: "
             f"solo guarda quién lo dice y cuándo"
+        )
+    # Cancelado (ticket 25): es el archivo que más se presta a confusión —dice
+    # lo que se iba a pedir, y no se pidió—, así que lo dice con las dos firmas.
+    if pedido.estado == CANCELADO:
+        cuando = "" if pedido.cancelado_en is None else f" el {_en_utc(pedido.cancelado_en)}"
+        return (
+            f"cancelado: {pedido.cancelado_por} dijo{cuando} que no está en el "
+            f"portal de {pedido.nombre}. NO es la constancia de un pedido hecho; "
+            f"lo suyo vuelve a proponerse en la siguiente lista"
         )
     return pedido.estado
 

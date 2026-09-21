@@ -626,6 +626,65 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
            'NO EXISTE ventas_desde')),
  NULL),
 
+-- CANCELAR (ticket 25, ADR 0013, migración 0009). Sin ella, el primer clic en
+-- "Cancelar" rebota contra `ck_pedido_estado`, y -- peor-- la lista del día no
+-- se puede leer, porque `_LEER_PEDIDOS` y `_LEER_RENGLONES` nombran las
+-- columnas nuevas. Lo que importa es qué VALORES acepta el CHECK, como en la 27.
+(31,
+ 'El pedido y el renglón pueden estar en cancelado',
+ 'los dos',
+ (SELECT CASE
+           WHEN count(*) FILTER (WHERE con.conname = 'ck_pedido_estado'
+                                   AND pg_get_constraintdef(con.oid) LIKE '%''cancelado''%') = 1
+            AND count(*) FILTER (WHERE con.conname = 'ck_renglon_estado'
+                                   AND pg_get_constraintdef(con.oid) LIKE '%''cancelado''%') = 1
+                THEN 'los dos'
+           ELSE 'falta cancelado en ck_pedido_estado o en ck_renglon_estado'
+         END
+    FROM pg_constraint con
+   WHERE con.conrelid IN (to_regclass('pedidos.pedido'), to_regclass('pedidos.renglon'))),
+ NULL),
+
+-- LA FIRMA DE LA CANCELACIÓN DEL PEDIDO, PAREADA. `cancelado` es la palabra de
+-- una persona sobre un portal que Continental no ve: sin su firma, cuando la
+-- mercancía llegue de todos modos no hay a quién preguntarle.
+(32,
+ 'Cancelar un pedido va firmado: quién y cuándo, pareados con el estado',
+ 'la restricción y las dos columnas',
+ (SELECT CASE
+           WHEN NOT EXISTS (SELECT 1 FROM pg_constraint con
+                             WHERE con.conrelid = to_regclass('pedidos.pedido')
+                               AND con.conname = 'ck_pedido_cancelacion')
+                THEN 'NO EXISTE ck_pedido_cancelacion'
+           WHEN (SELECT count(*) FROM pg_attribute a
+                  WHERE a.attrelid = to_regclass('pedidos.pedido')
+                    AND NOT a.attisdropped
+                    AND a.attname IN ('cancelado_por', 'cancelado_en')) <> 2
+                THEN 'falta cancelado_por o cancelado_en en pedido'
+           ELSE 'la restricción y las dos columnas'
+         END),
+ NULL),
+
+-- Y LA DEL RENGLÓN, con la misma forma: un renglón cancelado vuelve a
+-- proponerse entero en la siguiente lista, y sin firma no hay a quién
+-- preguntarle por qué se dejó de esperar.
+(33,
+ 'Un renglón cancelado va firmado: quién y cuándo, pareados con el estado',
+ 'la restricción y las dos columnas',
+ (SELECT CASE
+           WHEN NOT EXISTS (SELECT 1 FROM pg_constraint con
+                             WHERE con.conrelid = to_regclass('pedidos.renglon')
+                               AND con.conname = 'ck_renglon_cancelacion')
+                THEN 'NO EXISTE ck_renglon_cancelacion'
+           WHEN (SELECT count(*) FROM pg_attribute a
+                  WHERE a.attrelid = to_regclass('pedidos.renglon')
+                    AND NOT a.attisdropped
+                    AND a.attname IN ('cancelado_por', 'cancelado_en')) <> 2
+                THEN 'falta cancelado_por o cancelado_en en renglon'
+           ELSE 'la restricción y las dos columnas'
+         END),
+ NULL),
+
 -- AVISO y no MAL: una tabla temporal vive en la sesión, no puede leer nada que
 -- el rol no pueda leer ya, y desaparece al desconectarse. El permiso llega por
 -- el TEMPORARY que PUBLIC tiene sobre la base por omisión, y quitarlo sería

@@ -70,6 +70,9 @@ sistema a partir de lo que se vendió. No se le envía a nadie.
 - `recibido parcial` — llegó menos de lo pedido. Lo que faltó vuelve a
   proponerse.
 - `descartado` — una persona decidió no pedirlo.
+- `cancelado` — se dejó de esperar sin haber llegado: su pedido se canceló, o
+  una persona lo devolvió a la lista porque se atrasó. Lleva firma. **No vuelve
+  a `abierto`**: lo que vuelve es su producto, en la siguiente lista.
 
 > **Lo que se vende mientras un renglón está `en tránsito` no se pierde.** El
 > producto no se propone, pero sus ventas se siguen contando, y **cuando el
@@ -81,6 +84,30 @@ sistema a partir de lo que se vendió. No se le envía a nadie.
 > un portal sin marcarlo aquí como enviado no está `en tránsito`, y su
 > mercancía se va a proponer otra vez.
 
+> **Lo `cancelado` vuelve entero, y vuelve en la siguiente lista.** Un renglón
+> que se dejó de esperar nunca repuso nada, así que su producto se cuenta
+> **desde el principio de lo que ese renglón cubría** —no desde el día siguiente
+> al ancla, como lo recibido—. Y no vuelve a `abierto` en su lista, que casi
+> siempre está cerrada: **solo una lista `abierta` se deja modificar**. En la
+> lista de hoy se ve marcado —*"vuelve a proponerse en la siguiente lista, no
+> en ésta"*—. Ver el ADR 0013.
+
+**Atrasado** — un renglón `en tránsito` que lleva **más** de N días en camino,
+contados en días de calendario de la farmacia; N está en
+`config/continental.yml`. **No es un estado**: se calcula cada vez que se mira,
+contra la hora en que se envió, y no se guarda. Lo atrasado se señala con sus
+días a la vista y **se puede devolver a la lista** uno por uno, sin cancelar su
+pedido: pasa a `cancelado`.
+
+> **Atrasado no es vencido.** `vencido` es de la **lista** —pasó su día y
+> quedaron renglones sin atender—; atrasado es de un **renglón en tránsito**. Por
+> eso tienen nombres distintos: una lista vencida con un renglón atrasado son
+> dos hechos sobre dos cosas.
+>
+> **Y mientras no exista la recepción (ticket 26), lo que llegó también se ve
+> atrasado**: nada lo pasa a `recibido`. Devolver a la lista lo que sí llegó es
+> volverlo a pedir entero.
+
 **Pedido** — lo que se le pide a **un** proveedor: nace de renglones de un
 pedido sugerido. Un pedido sugerido puede repartirse en varios pedidos, uno por
 proveedor.
@@ -90,6 +117,11 @@ proveedor.
   volver a repartir.
 - `enviado` — **una persona ya lo capturó en el portal del proveedor**. Deja de
   poder cambiarse y sus renglones pasan a `en tránsito`.
+- `cancelado` — **una persona dijo que no está en el portal del proveedor**:
+  nunca se capturó, o se canceló allá. Solo desde `enviado`, con firma. Es un
+  final: no se edita, no se vuelve a enviar y no se descancela. Sus renglones en
+  tránsito pasan a `cancelado`, y su mercancía vuelve a proponerse en la
+  siguiente lista.
 
 > **`enviado` no quiere decir que Continental le mandó algo a nadie.**
 > Continental no hace pedidos en los portales y no va a hacerlos (ADR 0002): lo
@@ -99,6 +131,11 @@ proveedor.
 >
 > Un pedido `enviado` **no vuelve a `borrador`** desde la pantalla. Lo que ya
 > se capturó en el portal no se descaptura con un clic.
+>
+> **Cancelar no es "desenviar".** Es la salida hacia adelante para lo que nunca
+> se capturó (ADR 0013): el pedido no vuelve a `borrador` ni se edita. Y
+> Continental no cancela nada en ningún portal, igual que no captura nada en
+> ninguno: si allá sigue pedido, allá hay que cancelarlo.
 
 > Un renglón que entra en un pedido en `borrador` **sigue `abierto`**, no pasa
 > a `en tránsito`. `en tránsito` quiere decir "ya se le pidió a un proveedor", y

@@ -62,6 +62,36 @@ pedido:
   # cumplir nunca. Hay una prueba que comprueba que el de la unidad sea mayor.
   tope_lote_minutos: 60
 
+  # CUÁNDO UN RENGLÓN EN TRÁNSITO SE SEÑALA COMO ATRASADO (ticket 25, ADR 0013):
+  # cuando lleva MÁS de estos días en camino, contados en días de calendario de
+  # la farmacia (UTC-6). Con 7, el séptimo día todavía no; el octavo sí. Es lo
+  # que enciende el botón de "devolver a la lista" de ese renglón.
+  #
+  # SIETE, Y NO ESTÁ MEDIDO: hasta el ticket 26 nada se marca como recibido, así
+  # que no hay un solo tiempo de entrega guardado del cual sacar el número. Se
+  # eligió con tres razones y ningún dato:
+  #
+  # - Una semana cubre cualquier combinación de día de la semana, fin de semana
+  #   largo y puente: el aviso no se enciende sobre una entrega normal.
+  # - MIENTRAS NO HAYA RECEPCIÓN, TODO LO QUE LLEGÓ SIGUE "EN TRÁNSITO" y a los
+  #   N días se ve atrasado igual que lo que no llegó. Devolver a la lista algo
+  #   que sí llegó es volverlo a pedir entero. Un número chico encendería el
+  #   botón sobre casi todo, muy pronto; uno de una semana lo enciende solo
+  #   sobre lo que lleva demasiado para ser una entrega de mayorista.
+  # - A los siete días la pantalla ya escribe la fecha con los días que lleva
+  #   en vez del día de la semana (`transito.DIAS_CON_NOMBRE`), así que el
+  #   renglón atrasado siempre enseña su número.
+  #
+  # CONDICIÓN DE REVISIÓN: cuando el ticket 26 tenga un mes de recepciones,
+  # medir de enviado_en a la recepción y poner aquí algo por encima de lo que
+  # tardan casi todos. Si el botón se usa sobre cosas que sí llegaron, este
+  # número está bajo.
+  #
+  # UN ENTERO Y NADA MÁS. Si falta o está mal escrito ("7", 7.5, cero) la
+  # pantalla NO inventa uno: enseña lo que viene en camino sin decir qué está
+  # atrasado, y dice por qué. Ver `dias_en_transito_para_atrasado_configurados`.
+  dias_en_transito_para_atrasado: 7
+
   # El botón "completar lo que falta" (ticket 19). Vuelve a consultar SOLO los
   # renglones a los que volver a preguntar puede cambiarles algo -sin lectura,
   # o con huecos de los tres que se arreglan reintentando- y nunca los que ya

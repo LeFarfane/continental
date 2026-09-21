@@ -373,7 +373,12 @@ def test_la_pantalla_marca_el_renglon_que_no_es_medicamento(cliente):
     # que devuelve la lista entera, como partir y enviar —que no salen en esta
     # cuenta porque su `fetch(` parte la línea antes de la ruta—, y **no vuelve
     # a pedir la lista**: la de arriba sigue siendo una sola.
-    assert portada.count("fetch('/api/") == 11
+    #
+    # Las dos del ticket 25: cancelar un pedido y devolver un renglón atrasado.
+    # Las dos van a Continental, y al terminar **vuelven a cargar la pantalla
+    # con la misma función** —`cargarPedido`—, así que la lectura de la lista
+    # sigue escrita una sola vez.
+    assert portada.count("fetch('/api/") == 13
     assert portada.count("fetch('/api/pedido-sugerido')") == 1
 
 

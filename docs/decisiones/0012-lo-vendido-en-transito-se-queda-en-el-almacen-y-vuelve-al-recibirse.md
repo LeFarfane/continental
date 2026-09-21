@@ -213,7 +213,9 @@ producto se propondría otra vez y además dejaría de verse que viene en camino
   `abierto` porque su pedido nunca se capturó no se recibió nunca, así que lo que
   tiene que volver es **también** lo que ese renglón repuso, no solo lo de
   después del ancla. Ese ticket decide si vuelve el renglón mismo o si la
-  memoria lee desde el principio de su ventana. `recibido parcial` (ticket 27)
+  memoria lee desde el principio de su ventana. **Lo decidió el ADR 0013**: el
+  renglón pasa a `cancelado` —no a `abierto`— y la memoria lee su producto
+  desde el principio de lo que cubría, con esta misma sentencia. `recibido parcial` (ticket 27)
   trae de vuelta lo vendido después del ancla; **la diferencia de lo que no
   llegó** es regla de ese ticket y se suma aparte.
 - **Condición de revisión.** Si un tránsito dura semanas (el ticket 25 lo

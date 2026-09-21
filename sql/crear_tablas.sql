@@ -75,7 +75,7 @@
 -- se corren a mano con credenciales de dueño (ADR 0003) y ninguno de los dos
 -- lo toca el código de arranque.
 --
--- Hoy hay siete, y se corren en orden:
+-- Hoy hay nueve, y se corren en orden:
 --
 --   1. `sql/migraciones/0001-renglon-quien-descarto-y-cuando.sql` (ticket 10),
 --      que agrega `descartado_por` y `descartado_en`.
@@ -97,8 +97,14 @@
 --   7. `sql/migraciones/0007-el-avance-de-la-captura.sql` (ticket 22, ADR
 --      0010), que le da a `renglon` la marca de captura firmada. NO crea
 --      tabla.
+--   8. `sql/migraciones/0008-el-renglon-que-vuelve-dice-desde-cuando.sql`
+--      (ticket 24, ADR 0012), que le da a `renglon` su `ventas_desde`. NO crea
+--      tabla. (Faltaba en esta lista hasta el ticket 25.)
+--   9. `sql/migraciones/0009-cancelar-y-devolver-lo-atrasado.sql` (ticket 25,
+--      ADR 0013), que le da a `pedido` el estado `cancelado` y a los dos -
+--      `pedido` y `renglon`- la firma de la cancelación. NO crea tabla.
 --
--- Las siete son idempotentes, así que correrlas sobre una base que ya las
+-- Las nueve son idempotentes, así que correrlas sobre una base que ya las
 -- tiene -o sobre una recién creada con este archivo- no rompe nada.
 --
 -- **La 0003 y la 0004 son distintas de las dos primeras y hay que decirlo**:
@@ -278,6 +284,9 @@ CREATE TABLE IF NOT EXISTS pedidos.pedido (
     estado              text          NOT NULL DEFAULT 'borrador',
     enviado_por         text,
     enviado_en          timestamptz,
+    -- La firma de la cancelación (ticket 25, ADR 0013, migración 0009).
+    cancelado_por       text,
+    cancelado_en        timestamptz,
 
     CONSTRAINT pk_pedido
         PRIMARY KEY (pedido_id),
@@ -348,11 +357,13 @@ CREATE TABLE IF NOT EXISTS pedidos.pedido (
     -- dejó anotado lo que costaría: "el ticket 21 paga una migración para
     -- ampliar este CHECK". Es `sql/migraciones/0006-enviar-el-pedido.sql`.
     --
-    -- SIN un estado de cancelado, y tampoco es un olvido: nadie lo ha pedido, y
-    -- un valor en un CHECK que ningún código escribe es vocabulario muerto
-    -- invitando a que alguien lo use con otro significado.
+    -- `cancelado` LLEGÓ CON EL TICKET 25 (ADR 0013, migración 0009): una
+    -- persona dijo que el pedido NO está en el portal del proveedor. Solo desde
+    -- `enviado`, y es un final: no vuelve a borrador -el ADR 0009 sigue sin
+    -- "desenviar"-, no se edita y no se vuelve a enviar. Hasta ese ticket aquí
+    -- decía que no existía porque nadie lo había pedido.
     CONSTRAINT ck_pedido_estado
-        CHECK (estado IN ('borrador', 'enviado')),
+        CHECK (estado IN ('borrador', 'enviado', 'cancelado')),
 
     CONSTRAINT ck_pedido_total
         CHECK (total_sin_iva >= 0),
@@ -373,9 +384,24 @@ CREATE TABLE IF NOT EXISTS pedidos.pedido (
     --
     -- Y al revés: una firma colgada de un borrador diría que alguien envió lo
     -- que nadie envió.
+    --
+    -- DESDE EL TICKET 25 VALE TAMBIÉN PARA `cancelado`: solo se cancela lo que
+    -- alguien dijo haber enviado, y esa palabra no se borra al cancelar -es
+    -- parte de la historia del pedido-.
     CONSTRAINT ck_pedido_envio
-        CHECK ((estado = 'enviado')
+        CHECK ((estado IN ('enviado', 'cancelado'))
                = (enviado_por IS NOT NULL AND enviado_en IS NOT NULL)),
+
+    CONSTRAINT ck_pedido_cancelado_por
+        CHECK (cancelado_por <> ''),
+
+    -- CANCELADO SI Y SOLO SI HAY FIRMA Y HORA, el mismo par que el envío. Lo que
+    -- se guarda es la palabra de una persona sobre un portal que Continental no
+    -- ve: sin firma, cuando la mercancía llegue de todos modos no habría a quién
+    -- preguntarle.
+    CONSTRAINT ck_pedido_cancelacion
+        CHECK ((estado = 'cancelado')
+               = (cancelado_por IS NOT NULL AND cancelado_en IS NOT NULL)),
 
     CONSTRAINT fk_pedido_sugerido
         FOREIGN KEY (pedido_sugerido_id, negocio)
@@ -446,9 +472,10 @@ COMMENT ON COLUMN pedidos.pedido.proveedor_id IS
 -- se queda `abierto` con su `pedido_id` puesto -- que es justo lo que lo deja
 -- seguir siendo modificable, como la casilla pide.
 COMMENT ON COLUMN pedidos.pedido.estado IS
-    'borrador o enviado. Nace en borrador y se puede modificar mientras esté '
-    'así. enviado = una persona ya lo capturó en el portal del proveedor; '
-    'Continental no le manda nada a nadie (ADR 0009).';
+    'borrador, enviado o cancelado. Nace en borrador y se puede modificar '
+    'mientras esté así. enviado = una persona ya lo capturó en el portal del '
+    'proveedor; Continental no le manda nada a nadie (ADR 0009). cancelado = '
+    'una persona dijo que no está en el portal; es un final (ADR 0013).';
 
 -- LA FIRMA DEL ENVÍO, Y POR QUÉ ES UNA FIRMA Y NO UN ACUSE (ticket 21).
 --
@@ -472,6 +499,14 @@ COMMENT ON COLUMN pedidos.pedido.enviado_por IS
 
 COMMENT ON COLUMN pedidos.pedido.enviado_en IS
     'Cuándo lo dijo, instante con zona. NULL mientras siga en borrador.';
+
+COMMENT ON COLUMN pedidos.pedido.cancelado_por IS
+    'Quién dijo que el pedido no está en el portal del proveedor (nunca se '
+    'capturó, o se canceló allá). Es una FIRMA, no un permiso. NULL si no '
+    'está cancelado.';
+
+COMMENT ON COLUMN pedidos.pedido.cancelado_en IS
+    'Cuándo lo dijo, instante con zona. NULL si no está cancelado.';
 
 -- EL DINERO ES DECIMAL EXPLÍCITO, NUNCA COMA FLOTANTE. `numeric(12,2)`, igual
 -- que `raw.precio_competencia.precio` en Marlowe, y por la misma lección
@@ -535,6 +570,10 @@ CREATE TABLE IF NOT EXISTS pedidos.renglon (
     -- todos. Sin CHECK: la regla que lo relaciona con la ventana es de OTRA
     -- tabla, y un CHECK no puede mirar otra fila.
     ventas_desde         date,
+    -- La firma de la cancelación (ticket 25, ADR 0013, migración 0009): su
+    -- pedido se canceló, o alguien lo devolvió a la lista por atrasado.
+    cancelado_por        text,
+    cancelado_en         timestamptz,
 
     CONSTRAINT pk_renglon
         PRIMARY KEY (renglon_id),
@@ -579,11 +618,12 @@ CREATE TABLE IF NOT EXISTS pedidos.renglon (
     CONSTRAINT ck_renglon_clasificacion
         CHECK (clasificacion IN ('medicamento', 'abarrote', 'sin clasificar')),
 
-    -- Los cinco estados del glosario. 'en tránsito' CON ACENTO: ver la nota de
-    -- la cabecera.
+    -- Los seis estados del glosario. 'en tránsito' CON ACENTO: ver la nota de
+    -- la cabecera. `cancelado` llegó con el ticket 25 (migración 0009) y va al
+    -- final, igual que en `almacenamiento.ESTADOS_DEL_RENGLON`.
     CONSTRAINT ck_renglon_estado
         CHECK (estado IN ('abierto', 'en tránsito', 'recibido',
-                          'recibido parcial', 'descartado')),
+                          'recibido parcial', 'descartado', 'cancelado')),
 
     -- La firma vacía no existe, por la misma razón que la clave vacía: una
     -- cadena vacía se compara igual que un dato y no se distingue de "no se
@@ -710,6 +750,18 @@ CREATE TABLE IF NOT EXISTS pedidos.renglon (
     CONSTRAINT ck_renglon_captura
         CHECK ((capturado_por IS NULL) = (capturado_en IS NULL)),
 
+    -- LA CANCELACIÓN (ticket 25, ADR 0013): se dejó de esperar sin llegar.
+    -- Pareada contra el estado como el descarte: un `cancelado` sin quién ni
+    -- cuándo sería mercancía que se vuelve a proponer entera sin nadie a quien
+    -- preguntarle por qué; una firma suelta diría que alguien soltó lo que
+    -- sigue en camino.
+    CONSTRAINT ck_renglon_cancelado_por
+        CHECK (cancelado_por <> ''),
+
+    CONSTRAINT ck_renglon_cancelacion
+        CHECK ((estado = 'cancelado')
+               = (cancelado_por IS NOT NULL AND cancelado_en IS NOT NULL)),
+
     CONSTRAINT fk_renglon_sugerido
         FOREIGN KEY (pedido_sugerido_id, negocio)
         REFERENCES pedidos.pedido_sugerido (pedido_sugerido_id, negocio),
@@ -773,9 +825,9 @@ COMMENT ON COLUMN pedidos.renglon.dias_de_cobertura IS
     'cero se leería "agotado" justo cuando es lo contrario.';
 
 COMMENT ON COLUMN pedidos.renglon.estado IS
-    'abierto | en tránsito | recibido | recibido parcial | descartado. Con '
-    'acento en "en tránsito": el glosario de CONTEXT.md manda sobre el nombre '
-    'de cualquier cosa.';
+    'abierto | en tránsito | recibido | recibido parcial | descartado | '
+    'cancelado. Con acento en "en tránsito": el glosario de CONTEXT.md manda '
+    'sobre el nombre de cualquier cosa.';
 
 COMMENT ON COLUMN pedidos.renglon.pedido_id IS
     'A qué proveedor se le pidió. NULL mientras nadie lo haya repartido.';
@@ -879,6 +931,14 @@ COMMENT ON COLUMN pedidos.renglon.ventas_desde IS
     'Desde qué día se sumaron las ventas de este renglón cuando no es el '
     'principio de la ventana de su lista: el producto venía en camino y ya '
     'llegó (ADR 0012). NULL = desde ventas_consideradas_desde de su lista.';
+
+COMMENT ON COLUMN pedidos.renglon.cancelado_por IS
+    'Quién lo dejó de esperar: canceló su pedido, o lo devolvió a la lista por '
+    'atrasado (ADR 0013). Es una FIRMA, no un permiso. NULL si no está '
+    'cancelado.';
+
+COMMENT ON COLUMN pedidos.renglon.cancelado_en IS
+    'Cuándo, instante con zona. NULL si no está cancelado.';
 
 
 -- --------------------------------------------------------------------------

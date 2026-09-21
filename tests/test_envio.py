@@ -432,7 +432,9 @@ def test_enviado_esta_en_el_glosario_y_en_la_tupla_del_codigo():
     """
     glosario = (RAIZ / "CONTEXT.md").read_bytes().decode("utf-8")
     assert f"`{ENVIADO}`" in glosario
-    assert ESTADOS_DEL_PEDIDO == (BORRADOR, ENVIADO)
+    # El ticket 25 agregó `cancelado` DESPUÉS (ADR 0013); los dos de este
+    # ticket siguen siendo los dos primeros y en este orden.
+    assert ESTADOS_DEL_PEDIDO[:2] == (BORRADOR, ENVIADO)
 
 
 # ==========================================================================
@@ -898,15 +900,26 @@ def test_el_check_del_estado_se_amplio_en_los_dos_archivos():
     `CREATE TABLE IF NOT EXISTS` **calla si la tabla ya existe con otra forma**:
     sin la migración, atlas se quedaría con el CHECK viejo y el primer envío
     rebotaría; sin el DDL, una base desde cero nacería sin poder enviar.
+
+    **Desde el ticket 25 la 0006 ya no es la última palabra**, y esta prueba lo
+    dice igual que `test_pedidos` lo dijo de la 0005: una migración es un hecho
+    del pasado. La 0006 tiene que seguir diciendo lo que dijo —borrador y
+    enviado—; `crear_tablas.sql` y la migración que amplía el CHECK después
+    (la 0009, que agrega `cancelado`) dicen lo de hoy.
     """
     esperado = "CHECK (estado IN (" + ", ".join(
         f"'{e}'" for e in ESTADOS_DEL_PEDIDO
     ) + "))"
-    for ruta in (CREAR_TABLAS, MIGRACION):
+    ultima = SQL / "migraciones" / "0009-cancelar-y-devolver-lo-atrasado.sql"
+    for ruta in (CREAR_TABLAS, ultima):
         assert esperado in _sentencias(ruta), (
             f"{ruta.name} no dice {esperado}. `ck_pedido_estado` y "
             "`almacenamiento.ESTADOS_DEL_PEDIDO` tienen que decir lo mismo."
         )
+    assert "CHECK (estado IN ('borrador', 'enviado'))" in _sentencias(MIGRACION), (
+        "La migración 0006 dejó de decir lo que dijo el día que se corrió. Una "
+        "migración es un hecho del pasado: lo que amplía el CHECK es la 0009."
+    )
 
 
 def test_la_firma_del_envio_va_pareada_en_los_dos_archivos():

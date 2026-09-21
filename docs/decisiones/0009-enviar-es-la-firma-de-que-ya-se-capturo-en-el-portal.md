@@ -1,6 +1,8 @@
 # 0009 — Enviar es la firma de que alguien ya lo capturó en el portal, no un envío
 
-**Fecha:** 2026-09-21  ·  **Estado:** aceptada
+**Fecha:** 2026-09-21  ·  **Estado:** aceptada, **enmendada por el 0013** en
+un punto: existe `cancelado`, una salida hacia adelante desde `enviado`. Sigue
+sin haber "desenviar". Ver la nota al final de "Por qué no hay desenviar".
 
 ## Contexto
 
@@ -200,6 +202,18 @@ El caso del error se atiende donde se puede atender de verdad: con credenciales
 de dueño, con el `UPDATE` que `continental.verificar` ya imprime como comando de
 reparación de su invariante 3. Es a propósito que cueste: quien lo corre sabe lo
 que está diciendo.
+
+> **Enmienda del ADR 0013 (ticket 25, 2026-09-21).** Lo de arriba sigue en pie:
+> **no hay "desenviar"**, un pedido enviado no vuelve a `borrador` ni se edita.
+> Lo que el 0013 agrega es **`cancelado`**: una salida *hacia adelante* desde
+> `enviado`, terminal y firmada (`cancelado_por`, `cancelado_en`), que quiere
+> decir *"este pedido no está en el portal: nunca se capturó, o se canceló
+> allá"*. No abre el camino que este ADR temía —editar lo capturado— porque un
+> cancelado no se edita, no se vuelve a enviar y no se descancela; sus renglones
+> pasan a `cancelado` y lo que vuelve es su producto, en la siguiente lista. El
+> caso del error de dedo que aquí se mandaba al `UPDATE` de dueño ahora tiene
+> botón. Y `ck_pedido_estado` pasa a tres valores, con `ck_pedido_envio`
+> exigiendo la firma del envío también en un cancelado.
 
 ## Consecuencias
 
