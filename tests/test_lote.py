@@ -219,6 +219,21 @@ def _correr(almacen, almacenamiento, doyle, **extra):
     )
 
 
+def _linea_del_orden(orden) -> str:
+    """La única línea `orden:` de la bitácora de un resumen que lleva `orden`."""
+    texto = ResumenDeLaCorrida(
+        fecha_del_pedido=HOY,
+        pedido_sugerido_id=1,
+        final=TERMINO,
+        segundos=1.0,
+        tope_seg=3600.0,
+        orden=orden,
+    ).como_texto()
+    lineas = [l.strip() for l in texto.splitlines() if l.strip().startswith("orden:")]
+    assert len(lineas) == 1, texto
+    return lineas[0]
+
+
 # =========================================================================
 # EL ORDEN DE IMPORTANCIA — la clase ABC del ADR 0018 de farmacia-data
 # =========================================================================
@@ -267,12 +282,22 @@ def test_si_ningun_renglon_de_la_lista_tiene_clase_el_motivo_no_culpa_a_la_colum
 
 
 def test_la_lista_vacia_dice_que_no_hay_nada_que_ordenar():
-    """Sin renglones no hay clase que faltar: el motivo no culpa al catálogo."""
-    orden = ordenar_por_importancia([], {1: "A"})
+    """Sin renglones no hay clase que faltar: la bitácora no culpa al catálogo.
 
-    assert orden.cumple_el_orden is False
-    assert "no hay nada que ordenar" in orden.motivo
-    assert "clase" not in orden.motivo.replace("clase ABC", "")
+    **Decidido el 2026-09-21 (enmienda del ADR 0006):** una lista vacía
+    **cumple** el orden, porque no hay un solo renglón que haya quedado fuera
+    de él. La regla es "no se cumple solo si ningún renglón *de una lista con
+    renglones* trae clase". Declararla SIN CUMPLIR sería otra alarma que suena
+    sin que nada esté mal; la bitácora dice lo que pasó con sus palabras.
+    """
+    orden = ordenar_por_importancia([], {1: "A"})
+    linea = _linea_del_orden(orden)
+
+    assert orden.cumple_el_orden is True
+    assert orden.motivo == ""
+    assert "no hay nada que ordenar" in linea
+    assert "SIN CUMPLIR" not in linea
+    assert "clase" not in linea.replace("clase ABC", "")
 
 
 def test_sin_clase_abc_no_se_reordena_nada():
@@ -299,6 +324,7 @@ def test_con_clase_abc_ordena_a_luego_b_luego_c():
     assert [r.renglon_id for r in orden.renglones] == [2, 3, 1]
     assert orden.cumple_el_orden is True
     assert orden.motivo == ""
+    assert (orden.con_clase, orden.sin_clase) == (3, 0)
 
 
 def test_dentro_de_una_clase_se_respeta_la_urgencia():
@@ -333,22 +359,61 @@ def test_lo_que_no_tiene_clase_va_al_final_y_no_desaparece():
     assert orden.cuantos == 3
 
 
-def test_media_lista_con_clase_tampoco_cumple_el_orden():
-    """Estricto en la dirección segura: con un solo renglón sin clase, no cumple.
+def test_media_lista_con_clase_si_cumple_el_orden_y_cuenta_los_sin_clase():
+    """**La regla del 2026-09-21:** con algunos renglones sin clase, SÍ cumple.
 
-    Media lista ordenada por importancia y media al azar no es el orden que el
-    ADR 0018 describe. Decir que sí lo es sería el "no falla y no avisa" que
-    este repo persigue.
+    Hasta ese día un solo renglón sin clase lo ponía en falso. Pero
+    `dim_producto.clase_abc` es NULL **a propósito** en lo que no vendió en
+    365 días (ADR 0018 de farmacia-data), y el orden que ese ADR describe es
+    exactamente A, B, C y al final lo que no se sabe: eso es lo que se aplicó.
+    Llamarlo "sin cumplir" haría sonar la alarma casi cada noche, y una alarma
+    que suena siempre enseña a no mirarla.
+
+    Lo que no se pierde es el conteo: `sin_clase` sigue ahí y la bitácora lo
+    dice como dato, no como falla.
     """
-    orden = ordenar_por_importancia([_renglon(1), _renglon(2)], {1: "A"})
+    orden = ordenar_por_importancia([_renglon(1), _renglon(2)], {2: "A"})
 
-    assert orden.cumple_el_orden is False
+    assert orden.cumple_el_orden is True
+    assert [r.renglon_id for r in orden.renglones] == [2, 1]
     assert orden.con_clase == 1
     assert orden.sin_clase == 1
-    assert "1 de 2" in orden.motivo
-    assert "365 días" in orden.motivo
+    assert orden.motivo == ""
+
+
+def test_la_bitacora_cuenta_los_sin_clase_como_dato_y_no_como_falla():
+    """Cuántos quedaron al final, por qué, y sin la palabra de la alarma."""
+    orden = ordenar_por_importancia([_renglon(n) for n in (1, 2, 3)], {3: "B"})
+    linea = _linea_del_orden(orden)
+
+    assert "por clase ABC" in linea
+    assert "1 renglón(es) con clase" in linea
+    assert "2 sin clase" in linea
+    assert "al final" in linea
+    assert "365 días" in linea
+    assert "SIN CUMPLIR" not in linea
     # El NULL es a propósito: no se le pide a nadie que "le ponga clase".
-    assert "ponles clase" not in orden.motivo
+    assert "ponles clase" not in linea
+
+
+def test_la_bitacora_de_un_orden_completo_no_menciona_sin_clase():
+    """Un "0 sin clase" es ruido que tapa lo que importa."""
+    orden = ordenar_por_importancia([_renglon(1), _renglon(2)], {1: "A", 2: "C"})
+    linea = _linea_del_orden(orden)
+
+    assert linea == "orden:      por clase ABC, 2 renglón(es) con clase."
+
+
+def test_la_frontera_de_la_regla_es_uno_con_clase():
+    """Uno solo con clase entre muchos ya cumple; cero con clase ya no.
+
+    Es la frontera entera de la regla del 2026-09-21 escrita en dos líneas,
+    para que un `>` donde va un `>=` no pase sin que nadie lo vea.
+    """
+    muchos = [_renglon(n) for n in range(1, 11)]
+
+    assert ordenar_por_importancia(muchos, {10: "C"}).cumple_el_orden is True
+    assert ordenar_por_importancia(muchos, {99: "C"}).cumple_el_orden is False
 
 
 def test_una_clase_que_no_es_a_b_ni_c_cuenta_como_no_saber():
@@ -359,12 +424,19 @@ def test_una_clase_que_no_es_a_b_ni_c_cuenta_como_no_saber():
     assert orden.con_clase == 1
 
 
-def test_una_lista_vacia_no_cumple_el_orden_y_no_truena():
-    """Cero renglones: no hay nada que ordenar y tampoco nada que afirmar."""
+def test_una_lista_vacia_cumple_el_orden_y_no_truena():
+    """Cero renglones y cero clases en el catálogo: igual nada quedó fuera de orden.
+
+    Hasta el 2026-09-21 esto afirmaba lo contrario. La regla nueva exige
+    renglones para poder fallar: con la lista vacía el catálogo no tiene a
+    quién faltarle, y la bitácora no culpa a la columna.
+    """
     orden = ordenar_por_importancia([], {})
 
     assert orden.renglones == ()
-    assert orden.cumple_el_orden is False
+    assert orden.cumple_el_orden is True
+    assert (orden.con_clase, orden.sin_clase) == (0, 0)
+    assert "clase_abc" not in _linea_del_orden(orden)
 
 
 def test_las_clases_del_catalogo_salen_vacias_si_nadie_tiene_clase():
@@ -993,7 +1065,7 @@ def test_el_lote_consulta_en_el_orden_de_importancia():
     assert resumen.orden is not None and resumen.orden.cumple_el_orden is True
 
 
-def test_hoy_el_lote_corre_pero_declara_que_el_orden_no_se_cumple():
+def test_hoy_el_lote_corre_pero_declara_que_el_orden_no_se_cumple(caplog):
     """Sin clase en el catálogo, el lote corre y lo declara.
 
     El lote corre y trae precios pero deja dicho, en el resumen y en la
@@ -1003,14 +1075,51 @@ def test_hoy_el_lote_corre_pero_declara_que_el_orden_no_se_cumple():
     almacen = _mundo(3)
     almacenamiento = AlmacenamientoFalso()
 
-    resumen, _ = _correr(almacen, almacenamiento, _doyle_que_contesta(3))
+    with caplog.at_level(logging.INFO, logger="continental"):
+        resumen, _ = _correr(almacen, almacenamiento, _doyle_que_contesta(3))
 
     assert resumen.final == TERMINO
     assert resumen.con_precio == 3
     assert resumen.orden is not None
     assert resumen.orden.cumple_el_orden is False
+    # El aviso sale ANTES de consultar, para que una corrida que muera a la
+    # mitad lo haya dicho igual.
+    assert [
+        r for r in caplog.records
+        if r.levelno >= logging.WARNING and "clase ABC" in r.getMessage()
+    ]
     assert "SIN CUMPLIR" in resumen.como_texto()
     assert "sin implementar" not in resumen.como_texto()
+    guardada = almacenamiento.ultima_corrida(NEGOCIO, resumen.pedido_sugerido_id)
+    assert guardada is not None and guardada.orden_cumplido is False
+
+
+def test_con_clase_en_parte_de_la_lista_el_lote_cumple_el_orden_y_lo_guarda(caplog):
+    """La noche ordinaria desde el 2026-09-20: unos con clase y otros en NULL.
+
+    Doyle recibe primero lo que tiene clase y al final lo que no; la corrida
+    guarda `orden_cumplido` en verdadero —que es lo que la pantalla lee—, la
+    bitácora cuenta los sin clase como dato, y el aviso previo del journal
+    (`log.warning`) no sale, porque no hay nada que advertir.
+    """
+    almacen = _mundo(3, clases={3: "A"})
+    almacenamiento = AlmacenamientoFalso()
+    doyle = _doyle_que_contesta(3)
+
+    with caplog.at_level(logging.INFO, logger="continental"):
+        resumen, _ = _correr(almacen, almacenamiento, doyle)
+
+    assert doyle.pedidos == [_clave(3), _clave(1), _clave(2)]
+    assert resumen.orden is not None and resumen.orden.cumple_el_orden is True
+    assert resumen.orden.sin_clase == 2
+    assert "SIN CUMPLIR" not in resumen.como_texto()
+    assert "2 sin clase" in resumen.como_texto()
+    guardada = almacenamiento.ultima_corrida(NEGOCIO, resumen.pedido_sugerido_id)
+    assert guardada is not None and guardada.orden_cumplido is True
+    assert not [
+        r for r in caplog.records
+        if r.levelno >= logging.WARNING and "clase ABC" in r.getMessage()
+    ]
 
 
 def test_el_lote_es_secuencial_y_por_eso_doyle_puede_reutilizar_el_navegador():

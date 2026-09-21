@@ -343,12 +343,11 @@ journalctl -u continental-lote -n 200 --no-pager
 > dejaría el lote armando la lista con las ventas de ayer, sin fallar y sin
 > avisar.
 
-> **Dos casillas del ticket 18 quedan abiertas aquí y no se cierran
-> instalando nada:** el orden por clase ABC —la columna `clase_abc` ya existe
-> en `marts.dim_producto` desde el 2026-09-20 (farmacia-data `c989ecb`) y
-> Continental la lee; lo que queda abierto es una decisión de este repo, ver
-> el ticket 18—, y el navegador reutilizado por proveedor, que vive en Doyle
-> (su ADR 0008, sin hacer).
+> **Una casilla del ticket 18 queda abierta aquí y no se cierra instalando
+> nada:** el navegador reutilizado por proveedor, que vive en Doyle (su ADR
+> 0008, sin hacer). La del orden por clase ABC se marcó el 2026-09-21 (la
+> columna existe desde farmacia-data `c989ecb`; qué es "cumplido" está en la
+> enmienda del ADR 0006).
 
 ---
 

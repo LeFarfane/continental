@@ -278,3 +278,34 @@ del tope de 60 minutos sin que ningún portal lo notara.
   verdad antes de tocar el tope. Ese número no se puede estimar hoy: las cuatro
   sesiones de Doyle están caducadas y no hay una sola lectura real contra un
   portal.
+
+## Enmienda del 2026-09-21 — qué quiere decir "orden cumplido"
+
+**Decidido por el dueño el 2026-09-21.** La columna ya existe
+(`marts.dim_producto.clase_abc`, farmacia-data `c989ecb`, ADR 0018 de allá) y
+Continental la lee desde `f3d7120`, así que el hecho 5 y la opción II de arriba
+describen el estado al 2026-09-19. Lo que quedaba por decidir era la regla de
+`Orden.cumple_el_orden`, que hasta hoy era falsa **si un solo renglón** no
+tenía clase.
+
+Esa regla chocaba con el propio ADR 0018: `clase_abc` es NULL **a propósito**
+en lo que no vendió en 365 días —el 55% del catálogo—, así que el lote habría
+declarado "SIN CUMPLIR" casi cada noche aunque el orden aplicado fuera
+exactamente el que ese ADR describe: A, B, C y al final lo que no se sabe. Una
+alarma que suena siempre enseña a no mirarla.
+
+**La regla nueva:** el orden **no se cumple solo cuando la lista tiene
+renglones y ninguno trae clase** (el catálogo no la trajo, o ninguno de la
+lista la tiene); ahí el lote consulta en el orden de urgencia y lo declara como
+antes. Si **algunos** no la traen, el orden se cumple y cuántos quedaron sin
+clase va a la bitácora **como dato, no como falla**. Una lista vacía cumple:
+no hay nada fuera de orden, y la bitácora dice "no hay nada que ordenar".
+
+La regla vive en un solo lugar, `lote.ordenar_por_importancia`. La fila de
+`pedidos.corrida_del_lote` (`orden_cumplido`, ADR 0007, sin cambio de esquema)
+y el aviso de la pantalla (`faltantes.frase_de_la_corrida`) la copian y la
+leen; el latido de Kuma no depende de ella. Una corrida que nunca llegó a
+calcular el orden —sin lista, o cortada antes— sigue guardando `orden_cumplido`
+en falso. **Condición de revisión:** si la bitácora muestra que en una lista
+real la mayoría de los renglones sale sin clase, "cumplido" deja de decir mucho
+y hay que volver a mirar la regla.

@@ -14,7 +14,9 @@
 > - ~~`marts.dim_producto` no tiene `clase_abc` (ADR 0018 de farmacia-data,
 >   aceptado y sin implementar).~~ **Levantado el 2026-09-20:** farmacia-data
 >   materializó la columna en `c989ecb` y Continental la lee desde `f3d7120`.
->   Ver la nota del 2026-09-21 bajo la segunda casilla.
+>   Ver la nota del 2026-09-21 bajo la segunda casilla. **Esa casilla se
+>   marcó el 2026-09-21**, cuando el dueño decidió qué quiere decir "orden
+>   cumplido"; quedan dos sin marcar (el timer y el navegador de Doyle).
 > - Doyle no está en atlas (`~/proyectos/` tiene `borde`, `Farmacia`, `Marlowe`
 >   y `Sarabia`). El ADR 0008 de Doyle, el del navegador reutilizado por
 >   proveedor, está sin hacer.
@@ -49,7 +51,27 @@
       mismo movimiento**. Está escrito dentro del propio `.timer`, en
       mayúsculas, donde lo va a leer quien lo edite.
 
-- [ ] Consulta en orden de importancia, leyendo la **clase ABC** del catálogo. Sin esa columna el orden especificado no se puede cumplir: es prerrequisito, no detalle.
+- [x] Consulta en orden de importancia, leyendo la **clase ABC** del catálogo. Sin esa columna el orden especificado no se puede cumplir: es prerrequisito, no detalle.
+
+      > **Marcada el 2026-09-21.** Tres piezas, cada una con su fecha:
+      > farmacia-data materializó `marts.dim_producto.clase_abc` el 2026-09-20
+      > (`c989ecb`, su ADR 0018); Continental la conectó en `f3d7120`
+      > (`almacen.LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO = True`); y el 2026-09-21
+      > **el dueño aceptó la opción (a)** del hallazgo de abajo: el orden **no
+      > se cumple solo cuando la lista tiene renglones y NINGUNO trae clase**.
+      > Si algunos no la traen, el orden se cumple —A, B, C y al final lo que
+      > no se sabe es exactamente el del ADR 0018— y cuántos quedaron sin clase
+      > va a la bitácora **como dato, no como falla** (`orden: por clase ABC,
+      > N renglón(es) con clase. M sin clase, al final…`). Una lista vacía
+      > cumple y la bitácora dice "no hay nada que ordenar".
+      >
+      > La regla vive en **un solo lugar**, `lote.ordenar_por_importancia`
+      > (`Orden.cumple_el_orden`); la fila de `pedidos.corrida_del_lote`
+      > (`orden_cumplido`, sin cambio de esquema) y el aviso de faltantes de
+      > la pantalla (`faltantes.frase_de_la_corrida`) la leen de ahí. El
+      > latido de Kuma no depende de ella. Escrito como enmienda en el ADR
+      > 0006. Sigue sin medirse en atlas cuántos renglones de una lista real
+      > salen sin clase; ahora la bitácora de cada noche lo cuenta.
 
       > **Nota del 2026-09-21 — el bloqueo externo se levantó; queda uno de
       > este repo.** `marts.dim_producto.clase_abc` ('A'/'B'/'C'/NULL) existe:
@@ -79,8 +101,9 @@
       > renglones de una lista real salen sin clase: la lista se arma con lo
       > vendido, así que deberían ser pocos, pero no está medido.
       >
-      > **Por eso la casilla sigue sin marcar**: el orden se lee y se aplica,
-      > pero lo que el lote declara sobre ese orden todavía no es confiable.
+      > **Por eso la casilla seguía sin marcar** (resuelto el mismo día, ver
+      > arriba): el orden se leía y se aplicaba, pero lo que el lote declaraba
+      > sobre ese orden todavía no era confiable.
 
       **(Al 2026-09-19) BLOQUEADA POR EL ADR 0018 DE FARMACIA-DATA.** La columna no existía.
 

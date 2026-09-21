@@ -300,6 +300,10 @@ def frase_de_la_corrida(corrida: CorridaDelLote | None) -> str:
             + ("no tiene" if corrida.sin_clave == 1 else "no tienen")
             + " código de barras"
         )
+    # Se lee, no se recalcula: `orden_cumplido` es falso solo si la lista
+    # tenía renglones y ninguno traía clase ABC (la regla vive en
+    # `lote.ordenar_por_importancia`, enmienda del 2026-09-21 al ADR 0006).
+    # Unos cuantos sin clase —el NULL a propósito— no llegan aquí.
     if not corrida.orden_cumplido:
         cola.append(
             "y no fue en orden de importancia por clase ABC (el motivo está "

@@ -524,9 +524,11 @@ def test_el_lote_guarda_su_corrida_al_terminar():
     assert guardada.con_precio == 2
     assert guardada.fecha_del_pedido == HOY
     assert guardada.tope_minutos == pytest.approx(60.0)
-    # `orden_cumplido` en falso, y no por descuido: `marts.dim_producto` no
-    # tiene `clase_abc` (ADR 0018 de farmacia-data). El lote lo dice en vez de
-    # disimularlo, y ahora además queda guardado.
+    # `orden_cumplido` en falso, y no por descuido: el catálogo de este doble
+    # no trae clase ABC para ningún producto, y con ningún renglón con clase el
+    # orden del ticket 18 no se cumple (enmienda del 2026-09-21 al ADR 0006;
+    # con ALGUNOS sin clase sí se cumple). El lote lo dice en vez de
+    # disimularlo, y además queda guardado.
     assert guardada.orden_cumplido is False
 
 

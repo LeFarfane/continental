@@ -56,22 +56,20 @@ peor que antes**: lo único que escribe son filas de precio —la tabla que solo
 crece del ADR 0004— más la lista del día si no existía, sin un solo `UPDATE` de
 renglón, y hay una prueba que lo mata a la mitad para demostrarlo.
 
-**Dos casillas del ticket 18 siguen SIN MARCAR** (más la del timer, que está
+**Una casilla del ticket 18 sigue SIN MARCAR** (más la del timer, que está
 escrito y probado pero no instalado porque Continental todavía no está en
-atlas):
+atlas). **La del orden por clase ABC se marcó el 2026-09-21:**
+`marts.dim_producto.clase_abc` ('A'/'B'/'C'/NULL) la materializó farmacia-data
+el 2026-09-20 (`c989ecb`, su ADR 0018), Continental la lee desde `f3d7120`, y
+el 2026-09-21 el dueño decidió qué es "orden cumplido" (enmienda del ADR
+0006): **falso solo cuando la lista tiene renglones y ninguno trae clase**. Un
+producto sin ventas en 365 días queda en NULL **a propósito** —el 55% del
+catálogo—, va al final, y la bitácora cuenta cuántos fueron como dato, no
+como falla. La regla vive solo en `lote.ordenar_por_importancia`; la fila de
+`pedidos.corrida_del_lote` y el aviso de la pantalla la leen de ahí. Falta
+medir en atlas cuántos renglones de una lista real salen sin clase: la
+bitácora de cada noche ya lo dice.
 
-- **El orden de importancia por clase ABC. Ya no es un bloqueo externo.**
-  `marts.dim_producto.clase_abc` ('A'/'B'/'C'/NULL) existe: farmacia-data la
-  materializó el 2026-09-20 (`c989ecb`, su ADR 0018), el rol `continental` la
-  lee, y Continental la usa desde `f3d7120`
-  (`almacen.LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO = True`). Un producto sin ventas
-  en 365 días queda en NULL **a propósito** —el 55% del catálogo— y el lote lo
-  manda al final. La casilla sigue abierta por una decisión de este repo, no
-  por farmacia-data: `Orden.cumple_el_orden` es falso si **un solo** renglón
-  no tiene clase, así que con ese NULL intencional la bitácora puede decir
-  "SIN CUMPLIR" en noches en que el orden es exactamente el del ADR 0018. Está
-  anotado en el ticket 18. No se inventó un orden alterno: el propio ADR 0018
-  descartó "ordenar por la utilidad de la ventana" con su razón escrita.
 - **El navegador reutilizado por proveedor.** Vive en Doyle (su ADR 0008, sin
   hacer) y Continental no abre navegadores nunca (regla 1). Lo único que de
   este lado depende está hecho: el lote es **estrictamente secuencial**, que es
@@ -681,7 +679,22 @@ python -m continental.verificar   # los datos de producción, no el código (tic
 python -m continental.lote        # el lote nocturno, a mano (ticket 18)
 python -m continental.lote --tope-minutos 5   # ...con tope corto, para mirarlo
 python -m continental.verificar --forma   # solo la forma de la base (ADR 0017)
-pytest                # 1691 pruebas, 0 saltadas, 14.8-19.7 s (2026-09-21, ADR 0017,
+pytest                # 1698 pruebas, 0 saltadas, ~17 s (2026-09-21, enmienda del
+                      # ADR 0006: "orden cumplido" es falso solo si NINGÚN
+                      # renglón trae clase ABC). 1693 antes (1691 de ADR 0017
+                      # más 2 de `56ee59f`). Las 5 nuevas: 4 de
+                      # `test_lote.py` (la bitácora cuenta los sin clase como
+                      # dato; el orden completo no dice "sin clase"; la
+                      # frontera uno/cero con clase; la corrida con clase en
+                      # parte de la lista guarda `orden_cumplido` verdadero y
+                      # no avisa) y 1 de `test_motivos.py` (la frase de la
+                      # pantalla sigue a `orden_cumplido`). Viejas tocadas, en
+                      # `test_lote.py`: media lista con clase pasa de "no
+                      # cumple" a "cumple, con sin_clase contado"; la lista
+                      # vacía pasa a cumplir y la frase "no hay nada que
+                      # ordenar" se mira en la bitácora.
+                      #
+                      # 1691 pruebas, 0 saltadas, 14.8-19.7 s (2026-09-21, ADR 0017,
                       # medido con otra sesión corriendo en la torre)
                       # Las 44 nuevas: 41 de `test_forma.py` (el parseo de
                       # crear_tablas.sql y de las migraciones, revisar_forma,

@@ -494,6 +494,22 @@ def test_la_frase_escribe_el_singular_porque_pasa():
     assert "1 no tiene código de barras" in frase
 
 
+def test_la_frase_repite_el_orden_sin_cumplir_solo_si_la_corrida_lo_guardo_asi():
+    """La pantalla dice lo que `orden_cumplido` dice, y nada más.
+
+    Desde el 2026-09-21 (enmienda del ADR 0006) ese campo es falso **solo**
+    cuando ningún renglón de la lista traía clase ABC: una noche con algunos
+    sin clase —el NULL a propósito del ADR 0018 de farmacia-data— se guarda en
+    verdadero y aquí no aparece la queja. La regla no se repite en este
+    módulo; se lee.
+    """
+    cumplido = frase_de_la_corrida(_corrida(final=TERMINO, orden_cumplido=True))
+    sin_cumplir = frase_de_la_corrida(_corrida(final=TERMINO, orden_cumplido=False))
+
+    assert "clase ABC" not in cumplido
+    assert "no fue en orden de importancia por clase ABC" in sin_cumplir
+
+
 def test_sin_corrida_la_frase_es_vacia_porque_escribe_la_pantalla():
     """"No corrió" no es un grado de "corrió": lleva otra frase y otro color."""
     assert frase_de_la_corrida(None) == ""

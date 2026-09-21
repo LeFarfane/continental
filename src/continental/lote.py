@@ -207,8 +207,10 @@ FINALES_DEL_RENGLON: tuple[str, ...] = (
 # 55% del catálogo— y aquí se va al final.
 #
 # `ordenar_por_importancia` devuelve, además del orden, **si ese orden es el
-# que el ticket pidió**. Cuando no lo es —algún renglón sin clase—, el lote lo
-# escribe en la bitácora con todas sus letras.
+# que el ticket pidió**. Cuando no lo es —una lista con renglones y ninguno
+# con clase—, el lote lo escribe en la bitácora con todas sus letras. Algunos
+# sin clase NO lo rompen: van al final, que es donde el ADR 0018 los pone, y
+# se cuentan como dato (enmienda del 2026-09-21 al ADR 0006).
 #
 # Lo que NO se hizo, a propósito: inventar un orden alterno y llamarlo
 # cumplido. El ADR 0018 consideró exactamente eso —su opción 2, "que
@@ -238,14 +240,27 @@ class Orden:
 
     Las dos cosas van juntas en un solo objeto a propósito. Devolver nada más
     la lista ordenada dejaría que quien la recibe supusiera que se cumplió el
-    orden por clase ABC aunque algún renglón no tuviera clase; y devolver solo el
+    orden por clase ABC aunque ningún renglón tuviera clase; y devolver solo el
     booleano obligaría a ordenar dos veces.
 
-    `cumple_el_orden` es **falso mientras un solo renglón no tenga clase**, y
-    no "falso solo si no la tiene ninguno". Es estricto en la dirección segura:
-    media lista ordenada por importancia y media al azar no es el orden que el
-    ADR 0018 describe, y decir que sí lo es sería exactamente el "no falla y no
-    avisa" que este repo persigue.
+    **Qué quiere decir `cumple_el_orden`** (enmienda del 2026-09-21 al ADR
+    0006, decisión del dueño): es **falso solo cuando la lista tiene renglones
+    y ninguno trae clase ABC**. Ahí no hubo criterio que aplicar y el lote
+    consultó en el orden de urgencia, que no es el que pide el ticket 18.
+
+    Si **algunos** no traen clase, el orden **sí** se cumple: A, B, C y al
+    final lo que no se sabe es exactamente el orden que el ADR 0018 de
+    farmacia-data describe, y ese ADR deja NULL **a propósito** lo que no
+    vendió en 365 días —el 55% del catálogo—. Hasta el 2026-09-21 un solo
+    renglón sin clase lo ponía en falso, y con ese NULL intencional la alarma
+    habría sonado casi cada noche; una alarma que suena siempre enseña a no
+    mirarla. Cuántos quedaron sin clase **no se pierde**: va en `sin_clase` y
+    la bitácora lo dice como dato, no como falla.
+
+    Una lista **vacía** cumple: no hay un solo renglón fuera de orden, y la
+    bitácora dice "no hay nada que ordenar" en vez de "SIN CUMPLIR".
+
+    `motivo` es el porqué cuando no se cumple, y cadena vacía cuando sí.
     """
 
     renglones: tuple[RenglonGuardado, ...]
@@ -299,15 +314,26 @@ def ordenar_por_importancia(
     clase es mercancía que se queda sin precio sin que nadie se entere, que es
     el daño de la regla 4 de `CLAUDE.md`.
 
-    Si **ningún** renglón trae clase —el catálogo no trajo ninguna, o ninguno
-    de los de la lista la tiene—, esto devuelve los renglones **en el
-    orden en que llegaron** —el de urgencia, que es el que la lista ya tiene y
+    **Aquí vive la regla de `cumple_el_orden`, y en ningún otro lado** (ver
+    `Orden`): la corrida la guarda en `orden_cumplido`, la pantalla la lee de
+    ahí, y la bitácora la escribe desde este mismo objeto.
+
+    Si la lista tiene renglones y **ninguno** trae clase —el catálogo no trajo
+    ninguna, o ninguno de los de la lista la tiene—, esto devuelve los
+    renglones **en el orden en que llegaron** —el de urgencia, que es el que la lista ya tiene y
     el que el encargado ve en la pantalla— con `cumple_el_orden` en falso y el
     motivo escrito. No es un orden inventado para tapar el hueco: es no
     reordenar nada, que es lo único honesto cuando el criterio no está.
     """
     clases = dict(clase_por_producto or {})
     renglones = tuple(renglones)
+
+    if not renglones:
+        # Nada quedó fuera de orden. La frase "no hay nada que ordenar" la
+        # escribe la bitácora (`ResumenDeLaCorrida.como_texto`).
+        return Orden(
+            renglones=(), cumple_el_orden=True, motivo="", con_clase=0, sin_clase=0
+        )
 
     con_clase = sum(
         1 for r in renglones if clases.get(r.propuesto.producto_id) in CLASES_ABC
@@ -318,9 +344,7 @@ def ordenar_por_importancia(
         # El motivo dice solo lo que se sabe aquí: si el catálogo trajo alguna
         # clase o ninguna. La columna existe desde el 2026-09-20 (farmacia-data
         # `c989ecb`); culpar a su ausencia sería afirmar algo falso.
-        if not renglones:
-            porque = "la lista no tiene renglones de trabajo, no hay nada que ordenar."
-        elif not clases:
+        if not clases:
             porque = (
                 "el orden por clase ABC no se pudo cumplir: el catálogo leído "
                 "no trae clase ABC ('A', 'B' o 'C') para ningún producto. "
@@ -337,12 +361,11 @@ def ordenar_por_importancia(
                 "(dim_producto la deja en NULL, a propósito, en los productos "
                 "sin ventas en los últimos 365 días)."
             )
-        if renglones:
-            porque += (
-                " Se consulta en el orden de urgencia con el que la lista se "
-                "armó, que es el que la pantalla muestra. NO es el orden que "
-                "pide el ticket 18."
-            )
+        porque += (
+            " Se consulta en el orden de urgencia con el que la lista se "
+            "armó, que es el que la pantalla muestra. NO es el orden que "
+            "pide el ticket 18."
+        )
         return Orden(
             renglones=renglones,
             cumple_el_orden=False,
@@ -360,26 +383,14 @@ def ordenar_por_importancia(
         )
     )
 
-    if sin_clase:
-        return Orden(
-            renglones=ordenados,
-            cumple_el_orden=False,
-            motivo=(
-                f"{sin_clase} de {len(renglones)} renglones no tienen clase ABC "
-                "en el catálogo y quedaron al final, en orden de urgencia "
-                "(dim_producto la deja en NULL, a propósito, en los productos "
-                "sin ventas en los últimos 365 días)."
-            ),
-            con_clase=con_clase,
-            sin_clase=sin_clase,
-        )
-
+    # Algunos sin clase NO rompen el orden: al final, detrás de la C, es
+    # justo donde el ADR 0018 los pone. El conteo viaja en `sin_clase`.
     return Orden(
         renglones=ordenados,
         cumple_el_orden=True,
         motivo="",
         con_clase=con_clase,
-        sin_clase=0,
+        sin_clase=sin_clase,
     )
 
 
@@ -659,9 +670,12 @@ class ResumenDeLaCorrida:
             sin_alcanzar=self.sin_alcanzar,
             no_se_pudo=self.no_se_pudo,
             sin_clave=self.sin_clave,
-            # `None` cuando no hubo orden que calcular —una corrida sin lista—
-            # se guarda como falso, que es lo honesto: no se cumplió el orden
-            # que el ticket 18 pide, porque no hubo nada que ordenar.
+            # La regla de qué es "cumplido" vive en `ordenar_por_importancia`
+            # y aquí solo se copia. `None` es otra cosa: el orden **nunca se
+            # calculó** —no hubo lista, o la corrida se cortó antes de
+            # llegar ahí— y se guarda como falso, porque de un orden que no
+            # existió no se puede afirmar que se cumplió. (Una lista que sí se
+            # leyó y vino vacía trae su `Orden` y cumple: nada quedó fuera.)
             orden_cumplido=bool(self.orden and self.orden.cumple_el_orden),
             detalle=self.detalle,
         )
@@ -722,13 +736,27 @@ class ResumenDeLaCorrida:
             )
 
         if self.orden is not None:
-            if self.orden.cumple_el_orden:
+            if not self.orden.cumple_el_orden:
+                lineas.append(f"  orden:      SIN CUMPLIR — {self.orden.motivo}")
+            elif not self.orden.cuantos:
                 lineas.append(
+                    "  orden:      no hay nada que ordenar: la lista no tiene "
+                    "renglones de trabajo."
+                )
+            else:
+                linea = (
                     f"  orden:      por clase ABC, {self.orden.con_clase} "
                     "renglón(es) con clase."
                 )
-            else:
-                lineas.append(f"  orden:      SIN CUMPLIR — {self.orden.motivo}")
+                # Un dato, no una falla (enmienda del 2026-09-21 al ADR 0006):
+                # se dice cuántos y por qué, sin la palabra de la alarma.
+                if self.orden.sin_clase:
+                    linea += (
+                        f" {self.orden.sin_clase} sin clase, al final y en orden "
+                        "de urgencia: dim_producto la deja en NULL, a propósito, "
+                        "en los productos sin ventas en los últimos 365 días."
+                    )
+                lineas.append(linea)
 
         return "\n".join(lineas)
 
