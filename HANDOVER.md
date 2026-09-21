@@ -680,7 +680,22 @@ python iniciar.py     # http://127.0.0.1:8585
 python -m continental.verificar   # los datos de producción, no el código (ticket 17)
 python -m continental.lote        # el lote nocturno, a mano (ticket 18)
 python -m continental.lote --tope-minutos 5   # ...con tope corto, para mirarlo
-pytest                # 1647 pruebas, 0 saltadas, 6.69-7.27 s (2026-09-21, ADR 0016)
+python -m continental.verificar --forma   # solo la forma de la base (ADR 0017)
+pytest                # 1691 pruebas, 0 saltadas, 14.8-19.7 s (2026-09-21, ADR 0017,
+                      # medido con otra sesión corriendo en la torre)
+                      # Las 44 nuevas: 41 de `test_forma.py` (el parseo de
+                      # crear_tablas.sql y de las migraciones, revisar_forma,
+                      # `--forma`, el lote que no corre, y la prueba G sobre
+                      # las sentencias de almacenamiento.py), 2 de
+                      # `test_despliegue.py` (la forma antes del reinicio;
+                      # los datos siguen al final) y 1 que `test_compila.py`
+                      # gana por `forma.py`. Viejas tocadas: los rótulos N/6
+                      # a N/7; el invariante 3 sin `enviado_por` pasa de
+                      # PENDIENTE a FALLA (test_verificar, test_pedidos); y
+                      # `migraciones` en src/ se permite sólo en forma.py,
+                      # que la lee como texto (test_ajuste, test_descarte).
+                      #
+                      # 1647 pruebas, 0 saltadas, 6.69-7.27 s (2026-09-21, ADR 0016)
                       # 1566 antes (el 29 más el commit del CSV de lo que
                       # llegó). Las 81 nuevas son 75 de `test_cierre.py` (lo
                       # puro: qué se perdería y sus frases, la reapertura;
@@ -1481,3 +1496,19 @@ más barato y se le pidió a otro.**
    disparo:** la siguiente vez que alguien toque `pintarParticion`; el arreglo
    es que la reserva no afirme "entera" si `particion.cuantos_sin_proveedor`
    no es cero, con una prueba sobre el HTML.
+
+## La forma de la base (ADR 0017)
+
+Desde el 2026-09-21 el despliegue tiene **siete** pasos. El **4/7**
+(`python -m continental.verificar --forma`) compara las columnas reales de
+`pedidos` —leídas como el rol— contra `sql/crear_tablas.sql` y, si falta una,
+**no reinicia** y nombra la migración exacta con su comando. El lote de las
+22:00 hace la misma revisión al arrancar y, si no cuadra, no corre, sale con 1
+y late `down`. El servicio web no se niega a arrancar por esto.
+
+**Lo que el dueño corre a mano antes del primer despliegue con esto**, si la
+base de atlas va atrasada: las migraciones que falten, en orden y con
+credenciales de dueño, luego `sql/verificar_rol.sql`, luego `desplegar.sh`. La
+receta completa está al final de `docs/propuestas/verificar-la-forma-de-la-base.md`;
+si no se corre, el paso 4/7 se detiene y dice cuáles faltan, que es lo que se
+quiere.

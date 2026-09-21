@@ -344,25 +344,27 @@ def test_un_renglon_en_transito_sin_pedido_falla_con_las_dos_salidas():
 # ==========================================================================
 
 
-def test_sin_las_columnas_del_envio_el_invariante_queda_declarado_y_no_truena():
-    """**Hoy `pedidos.pedido` no tiene ni `estado` ni `enviado_por`.**
+def test_sin_las_columnas_del_envio_el_invariante_falla_y_manda_a_la_forma():
+    """**Hasta el ticket 21 esto era un `PENDIENTE`; desde el ADR 0017, falla.**
 
-    Llegan con los tickets 20 (`borrador`) y 21 (`borrador` -> `enviado`, con
-    quién y cuándo). Inventarlas aquí sería escribir un `SELECT` que rebota en
-    atlas con "column does not exist" y dejar el despliegue rojo por una
-    columna que nadie prometió. El invariante se declara **pendiente**, con su
-    porqué, y se enciende solo el día que las columnas existan.
+    Mientras las columnas "llegaban con otro ticket", su ausencia no era nada
+    roto. Desde el ticket 21 el código **ya las nombra**, así que faltar ya no
+    es "falta un ticket" sino "falta una migración": la lista del día rebota
+    con `column ... does not exist`. Un `PENDIENTE` convertía eso en una línea
+    gris y un código de salida cero.
+
+    No repite el comando de la migración: ése lo da, con el archivo exacto, la
+    comprobación de forma (`--forma`), que corre antes del reinicio y dice lo
+    mismo. Las dos fallan; ninguna contradice a la otra.
     """
     informe = v.revisar_pedidos_enviados([_pedido(1)], COLUMNAS_DE_HOY)
 
-    (pendiente,) = informe.pendientes
-    assert informe.fallas == ()
-    assert informe.codigo_de_salida == 0, (
-        "Un invariante que todavía no se puede revisar no puede tumbar un "
-        "despliegue: lo que falta es una columna, no un dato roto."
-    )
-    assert "enviado_por" in pendiente.detalle
-    assert "21" in pendiente.detalle, "No dice qué ticket trae las columnas."
+    (falla,) = informe.fallas
+    assert informe.pendientes == ()
+    assert informe.codigo_de_salida == 1
+    assert "enviado_por" in falla.detalle
+    assert "migración" in falla.detalle
+    assert "--forma" in falla.reparacion
 
 
 def test_con_las_columnas_puestas_el_invariante_empieza_a_revisar():
@@ -623,7 +625,9 @@ def test_el_codigo_de_salida_es_cero_si_todo_esta_en_orden():
 
 
 def test_un_pendiente_solo_no_tumba_el_despliegue_pero_se_ve():
-    informe = v.revisar_pedidos_enviados([_pedido(1)], COLUMNAS_DE_HOY)
+    # Con `clase_abc` y no con el envío: desde el ADR 0017, un pedido sin
+    # `enviado_por` ya no es un pendiente sino una migración que falta.
+    informe = v.revisar_clase_abc(frozenset({"producto_id"}))
 
     assert informe.codigo_de_salida == 0
     assert "··" in informe.como_texto(), "Un pendiente invisible es un pendiente perdido."
@@ -688,10 +692,11 @@ def test_el_modulo_explica_por_que_existen_los_dos_verificadores():
 def test_sin_clase_abc_el_invariante_queda_pendiente_y_no_tumba_el_despliegue():
     """**El bloqueo externo del ticket 18, visto desde el despliegue.**
 
-    `marts.dim_producto` tiene 18 columnas al 2026-09-19 y ninguna es
-    `clase_abc`. Sin ella el lote nocturno no puede consultar en orden de
-    importancia, y eso se dice en cada despliegue en vez de descubrirse un día
-    mirando por qué el pedido salió en otro orden.
+    `clase_abc` existe en `marts.dim_producto` desde el 2026-09-20
+    (farmacia-data `c989ecb`). Si un día falta, algo la quitó, y sin ella el
+    lote nocturno no puede consultar en orden de importancia: eso se dice en
+    cada despliegue en vez de descubrirse mirando por qué el pedido salió en
+    otro orden — y ya no se culpa a un ADR "sin implementar".
     """
     informe = v.revisar_clase_abc(frozenset({"producto_id", "clave", "ubicacion"}))
 
@@ -703,7 +708,9 @@ def test_sin_clase_abc_el_invariante_queda_pendiente_y_no_tumba_el_despliegue():
     )
     assert "clase_abc" in pendiente.resumen
     assert "0018" in pendiente.detalle
-    assert "ACEPTADO Y SIN IMPLEMENTAR" in pendiente.detalle
+    assert "c989ecb" in pendiente.detalle
+    assert "farmacia-diario" in pendiente.detalle
+    assert "SIN IMPLEMENTAR" not in pendiente.detalle.upper()
 
 
 def test_sin_clase_abc_se_dice_que_el_orden_alterno_esta_descartado():

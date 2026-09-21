@@ -453,30 +453,42 @@ ssh -t eddie@192.168.100.14 '~/proyectos/Continental/scripts/desplegar.sh'
 El `-t` es para que `sudo` pueda pedir la contraseña: el script corre como
 `eddie` y solo el reinicio necesita root.
 
-`desplegar.sh` hace seis pasos y **se detiene en el primero que falla**:
+`desplegar.sh` hace siete pasos y **se detiene en el primero que falla**:
 
 1. `git pull`
 2. compila **todos** los módulos, incluido `iniciar.py` —el archivo que el
    servicio ejecuta y que ninguna prueba importa—
 3. corre el suite completo con el venv de atlas
-4. reinicia, **solo si 2 y 3 pasaron**, limpiando antes un `failed` por límite
-   de reinicios
-5. comprueba por HTTP que quedó vivo, por la misma interfaz y el mismo puerto a
+4. corre `python -m continental.verificar --forma`: que la base tenga cada
+   columna que este código nombra, leída como el rol. **Si falta una, no se
+   reinicia nada** y la salida nombra la migración exacta con su comando
+   (ADR 0017)
+5. reinicia, **solo si 2, 3 y 4 pasaron**, limpiando antes un `failed` por
+   límite de reinicios
+6. comprueba por HTTP que quedó vivo, por la misma interfaz y el mismo puerto a
    los que apunta el túnel
-6. corre `python -m continental.verificar`: los invariantes sobre los **datos**
+7. corre `python -m continental.verificar`: los invariantes sobre los **datos**
    de producción (ticket 17)
+
+**El paso 4 es la forma, no los datos, y por eso sí detiene el reinicio.** Las
+migraciones sólo agregan columnas: el código anterior sigue sirviendo con la
+base migrada, así que el orden es **migrar y después desplegar**. Si el paso 4
+se detiene, el código nuevo ya quedó en disco por el `git pull`; el lote de las
+22:00 lo va a ver, revisa la forma por su cuenta y **se niega a correr** (sale
+distinto de cero y late `down` en Kuma con la migración que falta) hasta que la
+base cuadre.
 
 El orden es el punto entero. El 2026-09-08 Marlowe desplegó un `app.py` que no
 compilaba con "pull, reinicia y ojalá": el servicio entró en bucle de reinicio
 y el dueño estuvo corrigiendo enlaces contra un servidor que no existía.
 
-**El paso 6 pregunta otra cosa que los cinco anteriores, y por eso va al
-final.** Del 1 al 5 dicen si el código quedó bien desplegado; el 6 dice si lo
+**El paso 7 pregunta otra cosa que los seis anteriores, y por eso va al
+final.** Del 1 al 6 dicen si el código quedó bien desplegado; el 7 dice si lo
 que hay en la base está sano: que no haya dos listas abiertas del mismo día,
 que ningún renglón en tránsito se haya quedado sin su pedido, y que el rol
 todavía pueda leer las cinco tablas de `marts` —lo que `dbt build` se lleva por
-delante cada noche a las 20:30—. **Un paso 6 rojo no es un despliegue fallido**:
-el servicio ya contestó en el paso 5. Lo que está roto son los datos, y el
+delante cada noche a las 20:30—. **Un paso 7 rojo no es un despliegue fallido**:
+el servicio ya contestó en el paso 6. Lo que está roto son los datos, y el
 propio script lo dice con esas palabras para que nadie intente deshacer un
 despliegue que no hace falta deshacer. Cada falla sale con el comando que la
 repara; el verificador **señala y no repara**, a propósito.
@@ -491,7 +503,7 @@ y entonces sí: `daemon-reload`.
 No confundirlo con `sql/verificar_rol.sql`, que también "verifica": ése mira la
 **forma** de la base (que el rol no tenga `CREATE`, que los CHECK sigan
 puestos), se corre **a mano y una vez** con credenciales de dueño, y pregunta
-leyendo el catálogo. El paso 6 mira los **datos**, corre en cada despliegue con
+leyendo el catálogo. El paso 7 mira los **datos**, corre en cada despliegue con
 el rol acotado, y comprueba los permisos **haciendo un `SELECT 1`** sobre cada
 tabla. La cabecera de `src/continental/verificar.py` lo tiene en una tabla.
 
@@ -703,8 +715,10 @@ URL completa y la URL completa **es** el token— y la corrida vale lo que valí
 | La unidad no arranca: "Cannot assign requested address" | Se recreó la red `borde` y el gateway ya no es `172.19.0.1` (A.7) |
 | `active (running)` pero nada contesta en el 8585 | Arrancó en otro puerto. **No debería poder**: `--servicio` se niega. Si pasa, mirar `ExecStart` |
 | La pantalla dice `sin-identificar` entrando por el túnel | Falta la aplicación de Access, o está sobre otro dominio (B.3) |
-| El despliegue se detiene en "1/6 git pull" | No hay remoto configurado (A.1) |
-| El despliegue se detiene en "6/6 invariantes" | Los datos, no el código: el servicio ya está arriba. Lee cada falla con su comando en la salida del paso 6 |
+| El despliegue se detiene en "1/7 git pull" | No hay remoto configurado (A.1) |
+| El despliegue se detiene en "4/7 la base tiene la forma..." | Falta una migración. El servicio sigue con el código anterior. Corre con credenciales de dueño las que nombra la salida, en su orden, y vuelve a desplegar (ADR 0017) |
+| El despliegue se detiene en "7/7 invariantes" | Los datos, no el código: el servicio ya está arriba. Lee cada falla con su comando en la salida del paso 7 |
+| El lote sale con 1 sin armar lista y Kuma dice "la base no cuadra" | Se desplegó (o se hizo `pull`) código que nombra columnas que la base no tiene. El journal del lote trae la migración y su comando |
 | El lote nunca dispara, y `systemctl status continental-lote` dice `inactive (dead)` | Se habilitó el servicio en vez del timer (A.8) |
 | El lote muere a los 90 s con `Failed with result 'timeout'` | Falta o se borró `TimeoutStartSec` de la unidad: `Type=oneshot` usa el valor por omisión de systemd |
 | A la mañana la lista no tiene precios y el journal del lote está vacío | El timer no está habilitado, o atlas estuvo apagado a las 22:00 (no es `Persistent`, a propósito) |

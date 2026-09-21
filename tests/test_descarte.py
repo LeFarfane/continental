@@ -694,6 +694,13 @@ def test_la_migracion_no_la_corre_el_codigo_de_arranque():
     fuentes = [RAIZ / "iniciar.py"] + sorted((RAIZ / "src").rglob("*.py"))
     for ruta in fuentes:
         texto = ruta.read_text(encoding="utf-8")
+        if ruta.name == "forma.py":
+            # ADR 0017: `forma.py` LEE las migraciones como texto para NOMBRAR
+            # la que falta; no las ejecuta. Lo único que ejecuta es un
+            # `select * ... limit 0` por tabla, y eso se exige aquí también.
+            assert texto.count("text(") == 1, "forma.py ejecuta algo más que su select."
+            assert 'text(f"select * from pedidos.{tabla} limit 0")' in texto
+            continue
         assert "migraciones" not in texto, (
             f"{ruta.name} nombra `migraciones`: el DDL no lo corre el código."
         )
