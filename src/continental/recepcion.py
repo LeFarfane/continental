@@ -44,6 +44,23 @@ persona: confirmar (el renglón pasa a `recibido`, firmado, con las compras que
 lo sostienen) y rechazar (qué compras no son este renglón, firmado, para que no
 vuelvan a proponerse mañana). Es la misma línea del ticket 20: lo sugerido no se
 guarda, lo decidido sí.
+
+## Recibido parcial y a mano (ticket 27, ADR 0015)
+
+Tres salidas más, las tres de una persona y firmadas:
+
+- **recibir parcial con la evidencia** — la propuesta trae de menos (3 de 5):
+  confirmarla sería "llegó completo", así que se ofrece "llegaron solo 3".
+- **recibir a mano** — sin propuesta, o sin evidencia que alcance: se escribe
+  **cuántas llegaron en total**, y de ahí sale si es `recibido` o `recibido
+  parcial`. Es la única salida de lo que nunca va a tener propuesta.
+- **corregir la cifra** — la segunda factura, o un error de captura: la misma
+  pregunta, sobre un renglón ya recibido.
+
+En los tres, lo que faltó vuelve a proponerse **como piezas** en la siguiente
+lista (ver `transito.MemoriaDeLoPedido.faltaron`). Y el **estado del pedido**
+—`recibido` o `recibido parcial`— se calcula aquí, de sus renglones, y no se
+guarda (`estado_del_pedido`).
 """
 
 from __future__ import annotations
@@ -54,14 +71,25 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from continental.almacen import LineaDeCompra
+from continental.almacenamiento import (
+    ENVIADO,
+    PEDIDO_RECIBIDO,
+    PEDIDO_RECIBIDO_PARCIAL,
+    RENGLON_CANCELADO,
+    RENGLON_EN_TRANSITO,
+    RENGLON_RECIBIDO,
+    RENGLON_RECIBIDO_PARCIAL,
+)
 from continental.transito import (
     ZONA_DE_LA_FARMACIA,
     fecha_en_palabras,
+    frase_de_cuantas_llegaron,
+    frase_de_lo_que_vuelve_de_menos,
     frase_del_transito,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - solo para los tipos
-    from continental.almacenamiento import LoYaPedido, RenglonGuardado
+    from continental.almacenamiento import LoYaPedido, PedidoGuardado, RenglonGuardado
 
 # ------------------------------------------------------------ los motivos
 #
@@ -96,13 +124,34 @@ MOTIVOS_SIN_PROPUESTA: tuple[str, ...] = (
     MOTIVO_TODAVIA_NO,
 )
 
-#: **La salida que el ticket 27 va a abrir y que hoy no existe.** Se dice así, y
-#: no con un botón que no hay: prometer "márcalo a mano" en una pantalla sin ese
-#: botón sería una frase que afirma lo falso. El 27 cambia esta frase.
-FALTA_EL_MARCADO_MANUAL = (
-    "Su única salida es el recibido a mano, y eso todavía no se puede desde "
-    "esta pantalla."
+#: **La salida de lo que nunca va a tener propuesta** (ticket 27). Hasta el 26
+#: esta frase decía que el recibido a mano "todavía no se puede desde esta
+#: pantalla" —en vez de pintar un botón que no había—. Ahora el botón está al
+#: lado de cada renglón, y la frase lo dice.
+#:
+#: Sin "recibirlo": la frase va debajo de uno o de varios renglones, y el
+#: recorrido del 26 ya cazó un singular debajo de "estos productos".
+SALIDA_A_MANO = (
+    "La salida es el recibido a mano: cuando llegue, escribe cuántas piezas "
+    "llegaron."
 )
+
+#: Lo que dice el control de un renglón en camino.
+ETIQUETA_A_MANO = "Recibir a mano"
+
+#: Qué declara quien recibe a mano, una vez arriba del bloque.
+COMO_SE_RECIBE_A_MANO = (
+    "Recibir a mano es decir cuántas llegaron, en total: si son menos de las "
+    "pedidas queda recibido parcial, y lo que faltó vuelve a proponerse en la "
+    "siguiente lista. Si el resto llega en otra factura, corrige la cifra. Se "
+    "firma con tu correo."
+)
+
+#: Más de esto no es una recepción, es un dedo en el teclado. **No es una
+#: regla del negocio** —más de lo pedido se acepta: una bonificación, otro
+#: pedido del mismo producto—: es el tope de lo que se cree sin preguntar. La
+#: columna (`numeric(12,3)`) aguanta mucho más.
+PIEZAS_RECIBIDAS_MAXIMAS = 99_999
 
 #: **Una noche de retraso es normal, no un error** (casilla 6). Viaja siempre
 #: con el bloque, también cuando todo tiene propuesta: es cuando alguien recibe
@@ -118,8 +167,10 @@ AVISO_DEL_RETRASO = (
 ADVERTENCIA_AL_CONFIRMAR = (
     "Confirmar es decir que llegó completo: el renglón pasa a recibido y lo que "
     "se vendió mientras venía vuelve a proponerse en la siguiente lista. "
-    "Rechazar es decir que esa compra no es este pedido: el renglón sigue en "
-    "camino y esa compra ya no se le vuelve a proponer."
+    "Recibir parcial es decir que solo llegó lo que trae la compra: lo que faltó "
+    "vuelve a proponerse también. Rechazar es decir que esa compra no es este "
+    "pedido: el renglón sigue en camino y esa compra ya no se le vuelve a "
+    "proponer."
 )
 
 
@@ -171,14 +222,35 @@ class Propuesta:
         return self.piezas >= self.piezas_pedidas
 
     @property
+    def se_puede_recibir_parcial(self) -> bool:
+        """**La salida del ticket 27** para lo que trae de menos (ADR 0015).
+
+        Exactamente lo contrario de `se_puede_confirmar`, y con piezas: una
+        evidencia vacía no es una recepción. La misma condición vive en el
+        `WHERE` de `_RECIBIR_PARCIAL_CON_COMPRAS`.
+        """
+        return 0 < self.piezas < self.piezas_pedidas
+
+    @property
+    def etiqueta_del_parcial(self) -> str | None:
+        """El botón, con los números dentro: es donde de verdad se leen."""
+        if not self.se_puede_recibir_parcial:
+            return None
+        return (
+            f"Llegaron solo {_piezas(self.piezas)} de {self.piezas_pedidas}: "
+            "recibir parcial"
+        )
+
+    @property
     def motivo_para_no_confirmar(self) -> str | None:
         if self.se_puede_confirmar:
             return None
         return (
             f"La evidencia trae {_piezas(self.piezas)} de las "
             f"{self.piezas_pedidas} piezas que se pidieron: confirmar diría que "
-            "llegó completo. Si llegó solo eso, es un recibido parcial, que "
-            "todavía no se puede marcar aquí; si falta otra factura, aparecerá."
+            "llegó completo. Si llegó solo eso, recíbelo parcial: lo que faltó "
+            "vuelve a proponerse. Si falta otra factura, espera: cuando aparezca, "
+            "se suma."
         )
 
 
@@ -390,9 +462,9 @@ def frase_de_la_cantidad(propuesta: Propuesta) -> str:
     if trae < pedidas:
         return (
             f"Trae {_piezas(trae)} de las {pedidas} piezas que se pidieron. Si "
-            "solo llegó eso, es un recibido parcial, que todavía no se puede "
-            "marcar aquí: no lo confirmes como completo. Si falta otra factura, "
-            "cuando aparezca se sumará."
+            "solo llegó eso, recíbelo parcial: lo que faltó vuelve a proponerse "
+            "en la siguiente lista. Si falta otra factura, espera: cuando "
+            "aparezca, se sumará."
         )
     return (
         f"Trae {_con_unidad(trae)} y se pidieron {pedidas}: más de lo pedido. "
@@ -428,7 +500,7 @@ def frase_del_motivo(motivo: str, proveedores: Sequence[str] = (), cuantos: int 
         return (
             f"Nunca va a haber propuesta: SICAR no conoce a {quien}, así que "
             f"ninguna compra de SICAR se puede cruzar con {con_que}. "
-            + FALTA_EL_MARCADO_MANUAL
+            + SALIDA_A_MANO
         )
     if motivo == MOTIVO_NUNCA_EN_COMPRAS:
         cual = (
@@ -439,12 +511,12 @@ def frase_del_motivo(motivo: str, proveedores: Sequence[str] = (), cuantos: int 
         return (
             f"Lo más probable es que nunca haya propuesta: {cual} en una compra "
             "de SICAR —le pasa a cerca del 18% del catálogo, que entra sin compra "
-            "capturada—. " + FALTA_EL_MARCADO_MANUAL
+            "capturada—. " + SALIDA_A_MANO
         )
     if motivo == MOTIVO_SIN_HORA:
         return (
             "No quedó la hora del envío, así que no se puede saber qué compra es "
-            "posterior a él. " + FALTA_EL_MARCADO_MANUAL
+            "posterior a él. " + SALIDA_A_MANO
         )
     if motivo == MOTIVO_RECHAZADA:
         return (
@@ -500,30 +572,230 @@ def frase_del_rechazado(descripcion: str) -> str:
     )
 
 
+def _cuando(instante: dt.datetime | None) -> str:
+    if instante is None:
+        return "sin hora escrita"
+    if instante.tzinfo is None:
+        instante = instante.replace(tzinfo=dt.UTC)
+    local = instante.astimezone(ZONA_DE_LA_FARMACIA)
+    return f"{fecha_en_palabras(local.date())} a las {local:%H:%M}"
+
+
 def frase_de_lo_recibido(renglon: "RenglonGuardado") -> str | None:
-    """La firma de un renglón recibido: quién lo confirmó, cuándo y con qué.
+    """La firma de un renglón recibido: cuántas llegaron, quién lo dijo, cuándo
+    y con qué (tickets 26 y 27).
 
     Es la única frase de este módulo que afirma que llegó, y lo afirma **una
-    persona**: se dice quién.
+    persona**: se dice quién. **Con compras, "lo confirmó"** —juzgó una
+    evidencia de SICAR—; **sin compras, "lo dijo… a mano"** —es su palabra y
+    nada más— (casilla 5 del ticket 27: todo marcado manual firmado con quién y
+    cuándo). Un parcial dice además cuántas faltaron y adónde van.
     """
     if not renglon.esta_recibido:
         return None
     quien = renglon.recibido_por or "alguien que no quedó escrito"
-    if renglon.recibido_en is None:
-        cuando = "sin hora escrita"
-    else:
-        local = renglon.recibido_en
-        if local.tzinfo is None:
-            local = local.replace(tzinfo=dt.UTC)
-        local = local.astimezone(ZONA_DE_LA_FARMACIA)
-        cuando = f"{fecha_en_palabras(local.date())} a las {local:%H:%M}"
+    cuando = _cuando(renglon.recibido_en)
     compras = renglon.recibido_con_compras or ()
-    con_que = (
-        "sin compra de SICAR que lo sostenga"
-        if not compras
-        else ("con 1 compra de SICAR" if len(compras) == 1 else f"con {len(compras)} compras de SICAR")
+    if compras:
+        verbo = "lo confirmó"
+        con_que = (
+            "con 1 compra de SICAR" if len(compras) == 1 else f"con {len(compras)} compras de SICAR"
+        )
+    else:
+        verbo = "lo dijo"
+        con_que = "a mano, sin compra de SICAR que lo sostenga"
+    pedidas = renglon.cantidad_a_pedir
+    piezas = renglon.piezas_recibidas
+    if piezas is None:
+        # Solo en una fila de antes de la 0011, que la migración rellena: se
+        # dice lo que se sabe en vez de inventar una cifra.
+        cuanto = "sin decir cuántas llegaron"
+    else:
+        cuanto = frase_de_cuantas_llegaron(piezas, pedidas)
+        if piezas > pedidas:
+            cuanto += ", más de las pedidas"
+    firma = f"{verbo} {quien} {cuando}, {con_que}"
+    if renglon.esta_recibido_parcial:
+        return (
+            f"Recibido parcial: {cuanto}, y "
+            f"{frase_de_lo_que_vuelve_de_menos(renglon.lo_que_falto)}; {firma}."
+        )
+    return f"Recibido completo: {cuanto}; {firma}."
+
+
+def frase_de_lo_recibido_a_mano(
+    renglon: "RenglonGuardado", antes: "RenglonGuardado | None"
+) -> str:
+    """Lo que contesta la ruta al recibir a mano o corregir: qué pasa después.
+
+    `antes` es el renglón como estaba **si ya estaba recibido** —corregir la
+    cifra con la segunda factura—; `None` si venía en camino. Al corregir se
+    avisa lo que la memoria no alcanza: una lista que ya esté armada no se
+    recalcula (ADR 0012), así que si ya trae lo que faltó, se corrige ahí.
+    """
+    pedidas = renglon.cantidad_a_pedir
+    piezas = renglon.piezas_recibidas or 0
+    if antes is not None and antes.piezas_recibidas is not None:
+        que = f"se corrigió de {_piezas(antes.piezas_recibidas)} a {_piezas(piezas)} piezas"
+    elif piezas > pedidas:
+        que = f"llegaron {_piezas(piezas)}, más de las {pedidas} que se pidieron"
+    else:
+        que = frase_de_cuantas_llegaron(piezas, pedidas)
+
+    if renglon.esta_recibido_parcial:
+        despues = (
+            f"y quedó recibido parcial: "
+            f"{frase_de_lo_que_vuelve_de_menos(renglon.lo_que_falto)}, junto con "
+            "lo vendido mientras venía."
+        )
+    else:
+        despues = (
+            "y quedó recibido. Lo vendido mientras venía vuelve a proponerse en "
+            "la siguiente lista."
+        )
+        if piezas > pedidas:
+            despues += (
+                " Lo que sobra no se descuenta de ninguna lista: la reposición es "
+                "sobre lo vendido."
+            )
+    frase = f"{renglon.propuesto.descripcion}: {que}, {despues}"
+    if antes is not None:
+        frase += (
+            " Si una lista que ya esté armada trae lo que faltó, corrígela ahí: lo "
+            "que ya se armó no se recalcula."
+        )
+    return frase
+
+
+# ---------------------------------------------- lo que una persona escribe
+
+
+def piezas_escritas(valor) -> tuple[int | None, str | None]:
+    """Lo que llegó en el cuerpo → piezas enteras, o el motivo para no aceptarlo.
+
+    **Se valida en el servidor**, con palabras de persona, en vez de dejarle el
+    trabajo a pydantic —que contestaría en inglés y sin decir qué hacer—:
+
+    - **entero**: a un proveedor no se le reciben 2.5 piezas de lo que se le
+      pidió entero. `6.0` sí es seis; `true` y `"6"` no son un número.
+    - **mayor que cero**: cero no es recibir. Si no llegó nada, el renglón
+      sigue en camino; si no va a llegar, se devuelve a la lista cuando se
+      atrase (ticket 25).
+    - **no absurdo**: ver `PIEZAS_RECIBIDAS_MAXIMAS`.
+
+    **Más de lo pedido se acepta** (ADR 0015): queda `recibido`, y lo que sobra
+    no se descuenta de ninguna lista.
+    """
+    if isinstance(valor, bool) or not isinstance(valor, (int, float)):
+        return None, "Escribe cuántas piezas llegaron, con un número."
+    if isinstance(valor, float):
+        if not valor.is_integer():
+            return None, "Las piezas que llegaron son enteras: escribe un número sin decimales."
+        valor = int(valor)
+    if valor < 1:
+        return None, (
+            "Cero no es recibir: si no llegó nada, el renglón sigue en camino. Si "
+            "ya no va a llegar, devuélvelo a la lista cuando se atrase."
+        )
+    if valor > PIEZAS_RECIBIDAS_MAXIMAS:
+        return None, (
+            f"{valor} piezas no parece una recepción: revisa la cifra (el tope es "
+            f"{PIEZAS_RECIBIDAS_MAXIMAS})."
+        )
+    return valor, None
+
+
+def estado_por_las_piezas(pedidas: int, llegaron: float) -> str:
+    """`recibido` si llegaron al menos las pedidas; si no, `recibido parcial`.
+
+    La misma comparación que `ck_renglon_completo_o_parcial` y que el `case` de
+    `_RECIBIR_A_MANO`: la pantalla, la sentencia y la tabla no pueden decir
+    tres cosas distintas.
+    """
+    return RENGLON_RECIBIDO if llegaron >= pedidas else RENGLON_RECIBIDO_PARCIAL
+
+
+# --------------------------------------------------- el estado del pedido
+
+
+def _del_pedido(pedido: "PedidoGuardado", renglones: Iterable["RenglonGuardado"]):
+    """Los renglones que de verdad se le pidieron a ese proveedor.
+
+    Los de su `pedido_id` que se enviaron —en camino, llegados o cancelados—.
+    Uno descartado después de partir cuelga del pedido y nunca se pidió.
+    """
+    return [
+        r
+        for r in renglones
+        if r.pedido_id == pedido.pedido_id
+        and r.estado
+        in (RENGLON_EN_TRANSITO, RENGLON_RECIBIDO, RENGLON_RECIBIDO_PARCIAL, RENGLON_CANCELADO)
+    ]
+
+
+def estado_del_pedido(pedido: "PedidoGuardado", renglones: Iterable["RenglonGuardado"]) -> str:
+    """Los cinco estados del pedido; tres se guardan y dos se calculan (ADR 0015).
+
+    - `borrador`, `cancelado` — lo que una persona declaró; se dicen tal cual.
+    - `enviado` — mientras algo venga en camino, o si **nada** llegó (todo se
+      devolvió uno por uno: decir "recibido parcial" afirmaría mercancía que no
+      llegó).
+    - `recibido` — no queda nada en camino y **todos** llegaron completos.
+    - `recibido parcial` — no queda nada en camino, algo llegó, y alguno llegó
+      de menos **o se dejó de esperar**: "llegaron todos" es falso.
+
+    **No se guarda**: sale de los renglones, que sí están guardados y
+    firmados. Ver `almacenamiento.PEDIDO_RECIBIDO`.
+    """
+    if pedido.estado != ENVIADO:
+        return pedido.estado
+    pedidos = _del_pedido(pedido, renglones)
+    if not pedidos or any(r.estado == RENGLON_EN_TRANSITO for r in pedidos):
+        return ENVIADO
+    if not any(r.estado in (RENGLON_RECIBIDO, RENGLON_RECIBIDO_PARCIAL) for r in pedidos):
+        return ENVIADO
+    if all(r.estado == RENGLON_RECIBIDO for r in pedidos):
+        return PEDIDO_RECIBIDO
+    return PEDIDO_RECIBIDO_PARCIAL
+
+
+def _enumerar(partes: list[str]) -> str:
+    if len(partes) == 1:
+        return partes[0]
+    return ", ".join(partes[:-1]) + " y " + partes[-1]
+
+
+def frase_de_la_recepcion_del_pedido(
+    pedido: "PedidoGuardado", renglones: Iterable["RenglonGuardado"]
+) -> str | None:
+    """Lo que la pantalla dice de un pedido que ya llegó. `None` si no llegó."""
+    renglones = list(renglones)
+    estado = estado_del_pedido(pedido, renglones)
+    if estado not in (PEDIDO_RECIBIDO, PEDIDO_RECIBIDO_PARCIAL):
+        return None
+    pedidos = _del_pedido(pedido, renglones)
+    if estado == PEDIDO_RECIBIDO:
+        if len(pedidos) == 1:
+            return "Recibido: su renglón llegó completo."
+        return f"Recibido: sus {len(pedidos)} renglones llegaron completos."
+    completos = sum(1 for r in pedidos if r.estado == RENGLON_RECIBIDO)
+    de_menos = sum(1 for r in pedidos if r.estado == RENGLON_RECIBIDO_PARCIAL)
+    cancelados = sum(1 for r in pedidos if r.estado == RENGLON_CANCELADO)
+    partes = []
+    if completos:
+        partes.append(
+            "1 llegó completo" if completos == 1 else f"{completos} llegaron completos"
+        )
+    if de_menos:
+        partes.append("1 llegó de menos" if de_menos == 1 else f"{de_menos} llegaron de menos")
+    if cancelados:
+        partes.append(
+            "1 se dejó de esperar" if cancelados == 1 else f"{cancelados} se dejaron de esperar"
+        )
+    return (
+        f"Recibido parcial: de sus {len(pedidos)} renglones, {_enumerar(partes)}. Lo "
+        "que faltó vuelve a proponerse en la siguiente lista."
     )
-    return f"Recibido: lo confirmó {quien} {cuando}, {con_que}."
 
 
 # ------------------------------------------------------------------ el JSON
@@ -538,6 +810,10 @@ def _renglon_como_json(ya: "LoYaPedido") -> dict:
         "cantidad": ya.renglon.cantidad_a_pedir,
         "proveedor": ya.proveedor,
         "nombre": ya.nombre_del_proveedor,
+        # LA SALIDA A MANO (ticket 27): todo renglón en camino la tiene, con
+        # propuesta o sin ella —una compra de 10 que surtió dos pedidos de 5
+        # solo confirma uno, y el otro se recibe a mano—.
+        "etiqueta_a_mano": ETIQUETA_A_MANO,
     }
 
 
@@ -577,6 +853,11 @@ def recepcion_como_json(recepcion: Recepcion, ahora: dt.datetime) -> dict:
                 "tambien_encaja_con": list(propuesta.tambien_encaja_con),
                 "se_puede_confirmar": propuesta.se_puede_confirmar,
                 "motivo_para_no_confirmar": propuesta.motivo_para_no_confirmar,
+                # La salida del 27 para lo que trae de menos (ADR 0015).
+                # Las llaves no dicen "parcial": la prueba del 26 que impide
+                # componer frases en el JavaScript la busca en todo el cuerpo.
+                "se_puede_recibir_lo_que_trae": propuesta.se_puede_recibir_parcial,
+                "etiqueta_de_lo_que_trae": propuesta.etiqueta_del_parcial,
             }
         )
 
@@ -600,6 +881,7 @@ def recepcion_como_json(recepcion: Recepcion, ahora: dt.datetime) -> dict:
         "frase": frase_del_bloque(len(recepcion.propuestas), len(recepcion.sin_propuesta)),
         "aviso_del_retraso": AVISO_DEL_RETRASO,
         "advertencia": ADVERTENCIA_AL_CONFIRMAR,
+        "como_se_recibe_a_mano": COMO_SE_RECIBE_A_MANO,
         "propuestas": propuestas,
         "esperan": grupos,
     }
@@ -616,6 +898,7 @@ def recepcion_con_hueco(detalle: str) -> dict:
         "frase": "No se pudo saber qué llegó de lo que viene en camino.",
         "aviso_del_retraso": AVISO_DEL_RETRASO,
         "advertencia": ADVERTENCIA_AL_CONFIRMAR,
+        "como_se_recibe_a_mano": COMO_SE_RECIBE_A_MANO,
         "propuestas": [],
         "esperan": [],
     }

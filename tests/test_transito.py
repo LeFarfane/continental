@@ -167,6 +167,7 @@ def _renglon_guardado(
     producto_id: int,
     estado: str = RENGLON_EN_TRANSITO,
     cantidad: int = 3,
+    piezas_recibidas: float | None = None,
 ) -> RenglonGuardado:
     return RenglonGuardado(
         renglon_id=renglon_id,
@@ -183,6 +184,7 @@ def _renglon_guardado(
             clasificacion="medicamento",
         ),
         pedido_id=7,
+        piezas_recibidas=piezas_recibidas,
     )
 
 
@@ -194,6 +196,7 @@ def _ya_pedido(
     proveedor: str | None = "nadro",
     enviado_en: dt.datetime | None = None,
     cantidad: int = 3,
+    piezas_recibidas: float | None = None,
 ) -> LoYaPedido:
     return LoYaPedido(
         renglon=_renglon_guardado(
@@ -201,6 +204,7 @@ def _ya_pedido(
             producto_id,
             estado,
             cantidad,
+            piezas_recibidas,
         ),
         pedido_sugerido_id=1,
         fecha_del_pedido=ventas_hasta,
@@ -266,16 +270,24 @@ def _recibir(almacenamiento, producto_id: int) -> None:
 
     Es lo que el ticket 26 hace con un clic (`confirmar_la_recepcion`). Aquí
     va por `poner_estado_del_renglon` para probar el enganche sin compras de
-    por medio; desde el 26 lleva firma, porque `ck_renglon_recepcion` la exige.
+    por medio; desde el 26 lleva firma, porque `ck_renglon_recepcion` la exige,
+    y desde el 27 dice cuántas llegaron —todas las pedidas—, porque
+    `ck_renglon_completo_o_parcial` también.
     """
     for lista in almacenamiento.listas:
         for fila in lista["renglones"]:
             if fila["producto_id"] == producto_id and fila["estado"] == RENGLON_EN_TRANSITO:
+                pedidas = (
+                    fila["cantidad_propuesta"]
+                    if fila["cantidad_final"] is None
+                    else fila["cantidad_final"]
+                )
                 almacenamiento.poner_estado_del_renglon(
                     fila["renglon_id"],
                     "recibido",
                     recibido_por="encargado@farmacia.mx",
                     recibido_en=dt.datetime(2026, 9, 16, 16, 0, tzinfo=dt.UTC),
+                    piezas_recibidas=pedidas,
                 )
                 return
     raise AssertionError(f"No había renglón en tránsito del producto {producto_id}.")
@@ -366,7 +378,11 @@ def test_al_recibirse_con_la_lista_sin_cerrar_no_vuelve_a_proponer_lo_ya_pedido(
     ventana del miércoles arranca en el lunes (el piso), pero lo del lunes ya
     se pidió y ya llegó: se propone desde el martes.
     """
-    memoria = memoria_de_lo_pedido([_ya_pedido(1, LUNES, estado="recibido parcial")])
+    # Desde el 27 un parcial dice cuántas llegaron (2 de 3): sin eso no se sabe
+    # cuánto faltó, y `LoYaPedido` truena en vez de adivinar.
+    memoria = memoria_de_lo_pedido(
+        [_ya_pedido(1, LUNES, estado="recibido parcial", piezas_recibidas=2)]
+    )
     ventana = Ventana(LUNES, MIERCOLES)
 
     recortadas = memoria.recortar(

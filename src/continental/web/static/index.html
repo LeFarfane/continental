@@ -470,8 +470,11 @@
   .en-camino .atraso { flex: 1 1 100%; font-size: .82rem; color: var(--aviso); font-weight: 600; }
   .en-camino .umbral { margin: 0 0 .35rem; color: var(--tenue); font-size: .82rem; }
   .en-camino .umbral.mal { color: var(--mal); }
-  .en-camino .pedidos-en-camino, .en-camino .vuelven { margin: .9rem 0 0; }
-  .en-camino .pedidos-en-camino li, .en-camino .vuelven li { flex-wrap: wrap; gap: .3rem .7rem; }
+  .en-camino .pedidos-en-camino, .en-camino .vuelven, .en-camino .faltaron { margin: .9rem 0 0; }
+  .en-camino .pedidos-en-camino li, .en-camino .vuelven li, .en-camino .faltaron li { flex-wrap: wrap; gap: .3rem .7rem; }
+  /* RECIBIR A MANO (ticket 27): la cifra y su botón, juntos y sin romperse. */
+  .a-mano { display: inline-flex; align-items: center; gap: .3rem; }
+  .a-mano input { width: 4.5rem; }
   .en-camino .explica { flex: 1 1 100%; font-size: .82rem; color: var(--tenue); }
   .en-camino .accion { margin-left: auto; }
   /* LA RECEPCIÓN SUGERIDA (ticket 26). Usa la misma caja que lo que viene en
@@ -1259,11 +1262,17 @@ const renglon = (r, acciones) => {
   }
 
   // YA LLEGÓ (ticket 26): con la firma de quien lo confirmó, hecha en Python.
+  // Desde el 27 dice cuántas llegaron, y se puede CORREGIR la cifra —la
+  // segunda factura, un error de captura—. La etiqueta viene de Python.
   if (r.esta_recibido && r.frase_de_lo_recibido) {
     const marca = document.createElement('span');
     marca.className = 'marca tenue';
     marca.textContent = r.frase_de_lo_recibido;
     producto.append(marca);
+    if (r.se_puede_corregir && r.etiqueta_a_mano) {
+      producto.append(controlAMano(r.renglon_id, r.etiqueta_a_mano, r.descripcion,
+        r.piezas_recibidas));
+    }
   }
 
   // SE DEJÓ DE ESPERAR (ticket 25): su pedido se canceló o se devolvió por
@@ -1288,6 +1297,15 @@ const renglon = (r, acciones) => {
     producto.append(marca);
   }
 
+  // LO QUE FALTÓ Y ESTE RENGLÓN TRAE (ticket 27): "pide 6" con 2 vendidas no
+  // se podría verificar sin decir que 4 faltaron en un pedido anterior.
+  if (r.frase_de_lo_que_falto) {
+    const marca = document.createElement('span');
+    marca.className = 'marca tenue';
+    marca.textContent = r.frase_de_lo_que_falto;
+    producto.append(marca);
+  }
+
   // EL BORDE QUE LA MEMORIA NO ALCANZA (ticket 24): este producto ya viene en
   // camino desde una lista anterior que se envió DESPUÉS de armar ésta. La
   // lista guardada no se recalcula; se avisa en ámbar, con la frase de Python.
@@ -1295,6 +1313,16 @@ const renglon = (r, acciones) => {
     const marca = document.createElement('span');
     marca.className = 'marca';
     marca.textContent = r.ya_viene_en_camino;
+    producto.append(marca);
+  }
+
+  // Y SU PAR DEL TICKET 27: este renglón trae lo que faltó en un pedido
+  // anterior, pero el resto llegó en otra factura y se corrigió después de
+  // armar la lista. Lo guardado no se recalcula; se avisa en ámbar.
+  if (r.ya_no_falta) {
+    const marca = document.createElement('span');
+    marca.className = 'marca';
+    marca.textContent = r.ya_no_falta;
     producto.append(marca);
   }
 
@@ -2512,6 +2540,30 @@ const pintarEnCamino = (en_camino) => {
     vuelven.append(li);
   });
 
+  // LO QUE LLEGÓ DE MENOS (ticket 27): lo que faltó vuelve en la siguiente
+  // lista, y aquí se ve —con su firma— y se corrige si el resto llegó en otra
+  // factura. Todas las frases y la etiqueta son de Python.
+  const faltaron = document.createElement('ul');
+  faltaron.className = 'faltaron';
+  if (en_camino.frase_de_los_que_faltaron) {
+    const encabezado = document.createElement('li');
+    encabezado.className = 'explica';
+    encabezado.textContent = en_camino.frase_de_los_que_faltaron;
+    faltaron.append(encabezado);
+  }
+  (en_camino.faltaron || []).forEach(f => {
+    const li = document.createElement('li');
+    const que = document.createElement('span');
+    que.className = 'que';
+    que.textContent = (f.clave ? f.clave + ' · ' : '') + f.descripcion;
+    const explica = document.createElement('span');
+    explica.className = 'explica';
+    explica.textContent = f.frase;
+    li.append(que, explica,
+      controlAMano(f.renglon_id, f.etiqueta_a_mano, f.descripcion, f.piezas_recibidas));
+    faltaron.append(li);
+  });
+
   caja.replaceChildren(
     resumen,
     advertencia,
@@ -2519,7 +2571,8 @@ const pintarEnCamino = (en_camino) => {
     ...(hayAtrasados && alDevolver.textContent ? [alDevolver] : []),
     ...(lista.children.length ? [lista] : []),
     ...(pedidos.children.length ? [pedidos] : []),
-    ...(vuelven.children.length ? [vuelven] : []));
+    ...(vuelven.children.length ? [vuelven] : []),
+    ...(faltaron.children.length ? [faltaron] : []));
   caja.hidden = false;
 };
 
@@ -2551,6 +2604,11 @@ const pintarRecepcion = (recepcion) => {
   const advertencia = document.createElement('p');
   advertencia.className = 'advertencia';
   advertencia.textContent = recepcion.advertencia || '';
+
+  // Qué declara quien recibe a mano (ticket 27), una vez arriba.
+  const aMano = document.createElement('p');
+  aMano.className = 'advertencia';
+  aMano.textContent = recepcion.como_se_recibe_a_mano || '';
 
   const lista = document.createElement('ul');
   (recepcion.propuestas || []).forEach(p => {
@@ -2594,10 +2652,19 @@ const pintarRecepcion = (recepcion) => {
       confirmar.setAttribute('aria-label', 'Confirmar que llegó ' + p.descripcion);
       li.append(confirmar);
     }
+    // Lo que trae de menos (ticket 27): la etiqueta, con sus números, viene
+    // hecha de Python.
+    if (p.se_puede_recibir_lo_que_trae && p.etiqueta_de_lo_que_trae) {
+      li.append(botonDeAccion(p.etiqueta_de_lo_que_trae,
+        (b) => recibirParcial(p.renglon_id, p.compras, b)));
+    }
     const rechazar = botonDeAccion('Rechazar: no es este pedido',
       (b) => recibirORechazar('rechazar', p.renglon_id, p.compras, b));
     rechazar.setAttribute('aria-label', 'Rechazar la compra de ' + p.descripcion);
     li.append(rechazar);
+    // Y siempre a mano: la compra de 10 que surtió dos pedidos solo confirma
+    // uno, y el otro se recibe así.
+    if (p.etiqueta_a_mano) li.append(controlAMano(p.renglon_id, p.etiqueta_a_mano, p.descripcion));
     lista.append(li);
   });
 
@@ -2610,19 +2677,29 @@ const pintarRecepcion = (recepcion) => {
     const explica = document.createElement('span');
     explica.className = 'explica';
     explica.textContent = g.frase;
-    const cuales = document.createElement('span');
-    cuales.className = 'que';
-    cuales.textContent = (g.renglones || [])
-      .map(r => (r.clave ? r.clave + ' · ' : '') + r.descripcion)
-      .join('; ');
-    li.append(cuales, explica);
+    // Uno por renglón, cada uno con su salida a mano (ticket 27): hasta el 26
+    // iban en una sola línea, porque no había nada que hacer con ninguno.
+    const cuales = document.createElement('ul');
+    cuales.className = 'cuales';
+    (g.renglones || []).forEach(r => {
+      const fila = document.createElement('li');
+      const que = document.createElement('span');
+      que.className = 'que';
+      que.textContent = (r.clave ? r.clave + ' · ' : '') + r.descripcion;
+      fila.append(que);
+      if (r.etiqueta_a_mano) fila.append(controlAMano(r.renglon_id, r.etiqueta_a_mano, r.descripcion));
+      cuales.append(fila);
+    });
+    li.append(explica, cuales);
     esperan.append(li);
   });
 
+  const hayRenglones = lista.children.length || esperan.children.length;
   caja.replaceChildren(
     resumen,
     ...(retraso.textContent ? [retraso] : []),
     ...(lista.children.length && advertencia.textContent ? [advertencia] : []),
+    ...(hayRenglones && aMano.textContent ? [aMano] : []),
     ...(lista.children.length ? [lista] : []),
     ...(esperan.children.length ? [esperan] : []));
   caja.hidden = false;
@@ -2640,6 +2717,69 @@ const recibirORechazar = async (accion, renglonId, compras, boton) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ compras }),
+    })).json();
+  } catch (e) {
+    boton.disabled = false;
+    nota('pedido-accion',
+      'Continental no contestó. El renglón sigue como estaba; inténtalo otra vez.', 'mal');
+    return;
+  }
+  if (!respuesta.ok) {
+    boton.disabled = false;
+    // Genérico a propósito (regla 5): el detalle está en la bitácora.
+    nota('pedido-accion', respuesta.detalle || 'No se pudo guardar.', 'aviso');
+    return;
+  }
+  await cargarPedido();
+  nota('pedido-accion', respuesta.frase, 'todo');
+};
+
+// RECIBIR PARCIAL CON LA EVIDENCIA (ticket 27, ADR 0015): la misma ida y vuelta
+// que confirmar y rechazar —el servidor recalcula la propuesta y se niega si ya
+// no es la que se vio—, con su propia acción.
+const recibirParcial = (renglonId, compras, boton) =>
+  recibirORechazar('parcial', renglonId, compras, boton);
+
+// RECIBIR A MANO Y CORREGIR LA CIFRA (ticket 27, ADR 0015). Un campo y un
+// botón: cuántas llegaron EN TOTAL. Es el mismo control para lo que viene en
+// camino y para lo que ya llegó —la segunda factura, un error de captura—,
+// porque para quien lo escribe es la misma pregunta. La etiqueta llega de
+// Python; aquí no se compone ninguna palabra.
+//
+// `min="1"` es comodidad: la defensa —entero, mayor que cero— es del servidor
+// (`recepcion.piezas_escritas`) y del CHECK de la tabla, igual que la cantidad.
+const controlAMano = (renglonId, etiqueta, descripcion, valor) => {
+  const caja = document.createElement('span');
+  caja.className = 'a-mano';
+  const campo = document.createElement('input');
+  campo.type = 'number';
+  campo.min = '1';
+  campo.step = '1';
+  campo.inputMode = 'numeric';
+  if (valor != null) campo.value = valor;
+  campo.setAttribute('aria-label', etiqueta + ': ' + descripcion);
+  const boton = botonDeAccion(etiqueta, (b) => recibirAMano(renglonId, campo.value, b));
+  boton.setAttribute('aria-label', etiqueta + ': ' + descripcion);
+  caja.append(campo, boton);
+  return caja;
+};
+
+// La ida y vuelta, y después SE VUELVE A CARGAR la pantalla entera —cambian la
+// recepción, lo que viene en camino, el renglón de hoy y el estado de su
+// pedido— en vez de deducir aquí qué cambió.
+const recibirAMano = async (renglonId, escrito, boton) => {
+  // Lo escrito viaja como número si lo es y tal cual si no: quien dice si
+  // sirve —entero, de 1 en adelante— es el servidor, con sus palabras.
+  const numero = Number(escrito);
+  const piezas = escrito === '' ? null : (Number.isFinite(numero) ? numero : escrito);
+  boton.disabled = true;
+  nota('pedido-accion', '');
+  let respuesta;
+  try {
+    respuesta = await (await fetch('/api/renglon/' + renglonId + '/recepcion/a-mano', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ piezas }),
     })).json();
   } catch (e) {
     boton.disabled = false;
@@ -3234,10 +3374,14 @@ const pintarParticion = (particion, pedidos, editable, alPartir, alEnviar, alTac
     // SIN NADA QUE PARTIR SON DOS COSAS DISTINTAS, y decirlas igual sería el
     // peor de los mensajes: "todavía no hay en qué partir" sobre una lista que
     // ya se pidió entera manda a elegir proveedores que ya se eligieron.
-    : (cancelados && particion.sin_nada_por_repartir
+    // Y con algo SIN PROVEEDOR no se pidió entera (hilo abierto 18, cerrado
+    // en el ticket 27): se pidió en parte, y falta elegir.
+    : (cancelados && particion.sin_nada_por_repartir && !particion.cuantos_sin_proveedor
        ? 'Esta lista ya no tiene nada por repartir'
        : (enviados
-          ? 'Esta lista ya se pidió entera'
+          ? (particion.cuantos_sin_proveedor
+             ? 'Esta lista se pidió en parte'
+             : 'Esta lista ya se pidió entera')
           : 'Todavía no hay en qué partir esta lista')))
     + (enviados
        ? ' · ' + plural(enviados, 'pedido ya enviado', 'pedidos ya enviados')
@@ -3319,9 +3463,18 @@ const pintarParticion = (particion, pedidos, editable, alPartir, alEnviar, alTac
       // Sin punto al final: `instanteEnPalabras` ya termina en "a.m." o "p.m.",
       // y el punto extra salía como "02:07 a.m..". Lo cazó el recorrido del
       // navegador del 2026-09-21, no el suite.
-      marca.textContent = 'Pedido ' + guardado.pedido_id + ', ' + guardado.estado
+      // `estado_a_la_vista` (ticket 27): recibido y recibido parcial se
+      // CALCULAN de sus renglones; `estado` es lo guardado.
+      marca.textContent = 'Pedido ' + guardado.pedido_id + ', '
+        + (guardado.estado_a_la_vista || guardado.estado)
         + ', armado ' + instanteEnPalabras(guardado.armado_en);
       fila.append(marca);
+      if (guardado.frase_de_la_recepcion) {
+        const llegada = document.createElement('span');
+        llegada.className = 'envio hecho';
+        llegada.textContent = guardado.frase_de_la_recepcion;
+        fila.append(llegada);
+      }
 
       // QUÉ SIGNIFICA ENVIAR, y ya lo dice el servidor (ticket 21). La frase
       // viene HECHA de `particion.frase_del_envio`: aquí no se elige entre dos
@@ -3410,9 +3563,16 @@ const pintarParticion = (particion, pedidos, editable, alPartir, alEnviar, alTac
 
     const marca = document.createElement('span');
     marca.className = 'marca tenue';
-    marca.textContent = 'Pedido ' + g.pedido_id + ', ' + g.estado
+    marca.textContent = 'Pedido ' + g.pedido_id + ', ' + (g.estado_a_la_vista || g.estado)
       + ', armado ' + instanteEnPalabras(g.armado_en);
     fila.append(marca);
+    // LO QUE LLEGÓ (ticket 27): la frase del pedido recibido, de Python.
+    if (g.frase_de_la_recepcion) {
+      const llegada = document.createElement('span');
+      llegada.className = 'envio hecho';
+      llegada.textContent = g.frase_de_la_recepcion;
+      fila.append(llegada);
+    }
 
     const envio = document.createElement('span');
     envio.className = 'envio' + (g.fue_enviado ? ' hecho' : '');

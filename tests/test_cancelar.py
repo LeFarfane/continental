@@ -738,8 +738,13 @@ def test_un_pedido_con_algo_recibido_no_se_cancela(almacenamiento):
     """Si algo llegó, el pedido SÍ se capturó: "nunca se capturó" es falso."""
     lunes = _lista_con(almacenamiento, LUNES, [1, 2])
     enviado = _enviar_en_el_doble(almacenamiento, lunes, {1, 2})
+    # Desde el 27, lo recibido dice cuántas llegaron: las que se pidieron.
     almacenamiento.poner_estado_del_renglon(
-        lunes.renglones[0].renglon_id, "recibido", recibido_por=CORREO, recibido_en=_local(MARTES)
+        lunes.renglones[0].renglon_id,
+        "recibido",
+        recibido_por=CORREO,
+        recibido_en=_local(MARTES),
+        piezas_recibidas=lunes.renglones[0].cantidad_a_pedir,
     )
 
     assert almacenamiento.cancelar_el_pedido(NEGOCIO, enviado.pedido.pedido_id, DUENO) is None
@@ -870,7 +875,11 @@ def test_un_recibido_se_olvida_si_una_lista_posterior_lo_cancelo(almacenamiento)
     lunes = _lista_con(almacenamiento, LUNES, [1])
     _enviar_en_el_doble(almacenamiento, lunes, {1})
     almacenamiento.poner_estado_del_renglon(
-        lunes.renglones[0].renglon_id, "recibido", recibido_por=CORREO, recibido_en=_local(MARTES)
+        lunes.renglones[0].renglon_id,
+        "recibido",
+        recibido_por=CORREO,
+        recibido_en=_local(MARTES),
+        piezas_recibidas=lunes.renglones[0].cantidad_a_pedir,
     )
     martes = almacenamiento.insertar_la_lista(
         NEGOCIO, MARTES, Ventana(MARTES, MARTES), [_renglon(1, ventas_desde=MARTES)]

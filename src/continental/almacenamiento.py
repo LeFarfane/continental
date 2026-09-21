@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import math
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
@@ -106,9 +107,14 @@ RENGLON_EN_TRANSITO = "en tránsito"
 
 #: Los dos de la recepción (tickets 26 y 27). Son constantes desde el ticket 24
 #: porque ese código ya los LEÍA —son los que cierran un tránsito, ver
-#: `ESTADOS_QUE_CIERRAN_EL_TRANSITO`—. **Desde el 26 `recibido` se escribe**,
-#: y solo lo escribe `_CONFIRMAR_LA_RECEPCION`, firmado (ADR 0014); `recibido
-#: parcial` lo escribirá el 27.
+#: `ESTADOS_QUE_CIERRAN_EL_TRANSITO`—. **Desde el 26 `recibido` se escribe**
+#: (`_CONFIRMAR_LA_RECEPCION`, firmado, ADR 0014), y **desde el 27 también
+#: `recibido parcial`** (ADR 0015): a mano (`_RECIBIR_A_MANO`,
+#: `_CORREGIR_LO_RECIBIDO`) o con una evidencia que trae de menos
+#: (`_RECIBIR_PARCIAL_CON_COMPRAS`). Los dos llevan `piezas_recibidas`, y el
+#: CHECK `ck_renglon_completo_o_parcial` amarra cuál es cuál a esas piezas:
+#: `recibido` es "llegaron al menos las pedidas" y `recibido parcial` "llegaron
+#: menos". Lo que faltó vuelve a proponerse en la siguiente lista.
 RENGLON_RECIBIDO = "recibido"
 RENGLON_RECIBIDO_PARCIAL = "recibido parcial"
 
@@ -126,10 +132,10 @@ RENGLON_RECIBIDO_PARCIAL = "recibido parcial"
 #: ticket 24 lo lee de aquí (`LoYaPedido.retiene_desde`).
 RENGLON_CANCELADO = "cancelado"
 
-#: Los seis del glosario, con el acento de `en tránsito`. Hoy se escriben
-#: cinco: `abierto` al nacer, `descartado` desde el ticket 10, `en tránsito`
-#: desde el 21, `cancelado` desde el 25 y `recibido` desde el 26. Falta
-#: `recibido parcial`, que es el 27.
+#: Los seis del glosario, con el acento de `en tránsito`. Desde el ticket 27
+#: se escriben los seis: `abierto` al nacer, `descartado` desde el 10, `en
+#: tránsito` desde el 21, `cancelado` desde el 25, `recibido` desde el 26 y
+#: `recibido parcial` desde el 27.
 #:
 #: `cancelado` va AL FINAL y no junto a los de recepción, por la misma razón
 #: que las columnas nuevas van al final de la tabla: el orden de esta tupla es
@@ -239,6 +245,26 @@ CANCELADO = "cancelado"
 #: **`cancelado` llegó con el ticket 25** (ADR 0013), y hasta ese día esta nota
 #: decía que no existía "porque nadie lo ha pedido". El ticket lo pidió.
 ESTADOS_DEL_PEDIDO: tuple[str, ...] = (BORRADOR, ENVIADO, CANCELADO)
+
+#: **Los otros dos estados del pedido, que NO se guardan** (ticket 27, ADR
+#: 0015). El glosario dice que un pedido cuyos renglones llegaron todos queda
+#: `recibido`, y si alguno quedó corto, `recibido parcial`. Eso **se calcula de
+#: sus renglones** cada vez que se mira (`recepcion.estado_del_pedido`) y no es
+#: una columna, por tres razones que el ADR desarrolla:
+#:
+#: - es un hecho **derivado** de otros que ya están guardados y firmados —el
+#:   estado de cada renglón—, y dos copias del mismo hecho se separan en cuanto
+#:   un camino escriba una y olvide la otra (recibir, corregir la cifra con la
+#:   segunda factura, devolver un atrasado: cuatro sentencias que tendrían que
+#:   acordarse del pedido);
+#: - `enviado` en la tabla sigue siendo **verdad** —alguien lo capturó en el
+#:   portal— y cuatro `WHERE` lo exigen (`_CONFIRMAR_LA_RECEPCION`,
+#:   `_RECHAZAR_LA_RECEPCION`, `_DEVOLVER_EL_ATRASADO`, `_RECIBIR_A_MANO`): un
+#:   cuarto estado guardado los rompería en silencio, igual que el tercero
+#:   rompió `!fue_enviado` en la pantalla (ticket 25);
+#: - y `ck_pedido_estado` no cambia: la 0011 no toca `pedidos.pedido`.
+PEDIDO_RECIBIDO = "recibido"
+PEDIDO_RECIBIDO_PARCIAL = "recibido parcial"
 
 # ------------------------------------------- cómo acaba una corrida del lote
 #
@@ -665,6 +691,33 @@ class RenglonGuardado:
     compras_rechazadas: tuple[int, ...] | None = None
     recepcion_rechazada_por: str | None = None
     recepcion_rechazada_en: dt.datetime | None = None
+    #: CUÁNTAS LLEGARON (ticket 27, ADR 0015). Lo dice una persona —a mano— o
+    #: la evidencia de SICAR que una persona juzgó (26). `None` en todo renglón
+    #: que no se recibió (`ck_renglon_piezas_recibidas`). Tres decimales, como
+    #: las piezas vendidas: una compra de granel trae 2.5. De aquí sale si es
+    #: `recibido` o `recibido parcial` —`ck_renglon_completo_o_parcial` los
+    #: amarra— y cuánto faltó.
+    piezas_recibidas: float | None = None
+
+    @property
+    def esta_recibido_parcial(self) -> bool:
+        """Si llegó menos de lo pedido (ticket 27). Lo que faltó vuelve."""
+        return self.estado == RENGLON_RECIBIDO_PARCIAL
+
+    @property
+    def lo_que_falto(self) -> int:
+        """Cuántas piezas pedidas **no llegaron**: lo que vuelve a proponerse.
+
+        Cero en todo lo que no es `recibido parcial`. Se mide contra
+        `cantidad_a_pedir` —lo que de verdad se le pidió al proveedor, con la
+        corrección de la persona si la hubo— y se redondea **hacia arriba**,
+        por la misma razón que `sugerido._piezas_a_pedir`: la evidencia de
+        granel puede traer 2.5 de 5, y redondear a la baja repondría de menos
+        en silencio.
+        """
+        if not self.esta_recibido_parcial or self.piezas_recibidas is None:
+            return 0
+        return max(0, math.ceil(round(self.cantidad_a_pedir - self.piezas_recibidas, 3)))
 
     @property
     def esta_recibido(self) -> bool:
@@ -985,6 +1038,14 @@ class LoYaPedido:
                 "principio de la ventana de su lista: no se sabe desde qué día "
                 "vuelve su producto (ADR 0013)."
             )
+        # Un parcial sin sus piezas no sabe cuánto faltó (ticket 27). Adivinar
+        # —cero, o todo lo pedido— sería perder piezas o pedirlas dos veces.
+        if self.renglon.esta_recibido_parcial and self.renglon.piezas_recibidas is None:
+            raise ValueError(
+                f"El renglón {self.renglon.renglon_id} está recibido parcial y no "
+                "dice cuántas piezas llegaron: no se sabe cuántas faltaron (ADR "
+                "0015)."
+            )
 
     @property
     def producto_id(self) -> int:
@@ -1032,6 +1093,29 @@ class LoYaPedido:
         if self.fue_cancelado:
             return self.renglon.propuesto.ventas_desde or self.ventas_desde_la_lista
         return self.ventas_hasta + dt.timedelta(days=1)
+
+    @property
+    def piezas_que_vuelven(self) -> int:
+        """Las piezas —no las ventas— que este renglón devuelve a la lista (27).
+
+        Es la otra mitad de lo que vuelve, y va **aparte** de `retiene_desde`
+        porque es otra cosa (ADR 0015):
+
+        - **Recibido parcial**: lo que faltó (`RenglonGuardado.lo_que_falto`).
+          Son ventas de la ventana ORIGINAL que el renglón cubría y que no se
+          repusieron; lo vendido mientras venía vuelve por el ancla, como
+          siempre. Sumarlas no cuenta ninguna venta dos veces.
+        - **Cancelado**: lo que faltó de antes y **este renglón traía**
+          (`piezas_que_faltaron`). Cancelado vuelve "con todo lo que cubría"
+          (ADR 0013), y eso incluye esas piezas: sin esto se perderían.
+        - **Recibido completo, o en camino**: cero. Lo que traía, llegó —o
+          todavía viene—.
+        """
+        if self.renglon.esta_recibido_parcial:
+            return self.renglon.lo_que_falto
+        if self.fue_cancelado:
+            return self.renglon.propuesto.piezas_que_faltaron
+        return 0
 
     @property
     def nombre_del_proveedor(self) -> str | None:
@@ -1277,6 +1361,14 @@ def columnas_del_renglon(
         "compras_rechazadas": None,
         "recepcion_rechazada_por": None,
         "recepcion_rechazada_en": None,
+        # Y SIN NADA RECIBIDO (ticket 27): `ck_renglon_piezas_recibidas` lo
+        # relaciona con el estado.
+        "piezas_recibidas": None,
+        # LO QUE FALTÓ DE UN PEDIDO ANTERIOR Y ESTE RENGLÓN TRAE DE VUELTA
+        # (ticket 27, ADR 0015). Casi siempre cero. Como `ventas_desde`, es un
+        # dato del CÁLCULO —lo decide la memoria al armar— y viene en el
+        # renglón propuesto.
+        "piezas_que_faltaron": renglon.piezas_que_faltaron,
         # DESDE QUÉ DÍA SE SUMARON SUS VENTAS, si no es el principio de la
         # lista (ticket 24, ADR 0012). Casi siempre `None`. Es un dato del
         # CÁLCULO —lo decide la memoria de lo ya pedido al armar— y por eso
@@ -1311,6 +1403,9 @@ def renglon_desde_columnas(fila) -> Renglon:
         # 22: sin la migración 0008 la fila no la trae, y eso es "desde el
         # principio de la lista", no un KeyError que tumbe la pantalla.
         ventas_desde=fila.get("ventas_desde"),
+        # La del ticket 27, con `.get` por lo mismo: sin la 0011 es "no trae
+        # nada que faltó".
+        piezas_que_faltaron=int(fila.get("piezas_que_faltaron") or 0),
     )
 
 
@@ -1525,6 +1620,39 @@ def revisar_el_renglon(columnas: dict) -> None:
             "rechazo es la palabra de una persona de que esa compra no es este "
             "pedido: sin firma no hay a quién preguntarle, y sin compra no dice "
             "nada."
+        )
+    # Las tres del ticket 27 (ADR 0015), con `.get` por lo mismo que las del 26:
+    # una fila de una base sin la migración 0011 no las trae.
+    piezas = columnas.get("piezas_recibidas")
+    if recibido != (piezas is not None) or (piezas is not None and piezas <= 0):
+        raise ValueError(
+            "Recibido sin decir cuántas piezas llegaron, piezas recibidas en un "
+            "renglón que no llegó, o cero piezas. Lo rechaza "
+            "ck_renglon_piezas_recibidas. Sin la cifra no se sabe cuánto faltó, "
+            "y lo que faltó es lo que vuelve a proponerse (ADR 0015)."
+        )
+    if piezas is not None:
+        pedidas = (
+            columnas["cantidad_propuesta"]
+            if columnas.get("cantidad_final") is None
+            else columnas["cantidad_final"]
+        )
+        if (columnas["estado"] == RENGLON_RECIBIDO) != (piezas >= pedidas):
+            raise ValueError(
+                f"Estado {columnas['estado']!r} con {piezas} piezas recibidas de "
+                f"{pedidas} pedidas. Lo rechaza ck_renglon_completo_o_parcial: "
+                "'recibido' es que llegaron al menos las pedidas y 'recibido "
+                "parcial' que llegaron menos. Un recibido con piezas de menos "
+                "cerraría el renglón en falso y lo que faltó no volvería nunca."
+            )
+    faltaron = columnas.get("piezas_que_faltaron", 0)
+    if faltaron is None or faltaron < 0 or faltaron > columnas["cantidad_propuesta"]:
+        raise ValueError(
+            f"piezas_que_faltaron de {faltaron} con una propuesta de "
+            f"{columnas['cantidad_propuesta']}. Lo rechaza "
+            "ck_renglon_piezas_que_faltaron: lo que faltó de un pedido anterior "
+            "se SUMA a lo vendido para dar la propuesta, así que cabe en ella y "
+            "nunca es negativo."
         )
 
 
@@ -2699,6 +2827,45 @@ class AlmacenamientoDelPedido(Protocol):
         """
         ...
 
+    def recibir_parcial_con_compras(
+        self,
+        negocio: str,
+        renglon_id: int,
+        compras: Sequence[int],
+        piezas: float,
+        quien: str,
+    ) -> RenglonGuardado | None:
+        """`en tránsito` → `recibido parcial` con la evidencia que trae de menos (27).
+
+        La salida que el 26 no tenía para "trae 3 de 5": una persona dice que
+        solo llegó eso. Las mismas garantías que confirmar, con la cantidad al
+        revés —`piezas` **menos** que lo pedido, en el `WHERE`
+        (`_RECIBIR_PARCIAL_CON_COMPRAS`)—. Firma y nunca permiso. `None` es
+        "no se recibió"; devuelve el renglón releído.
+        """
+        ...
+
+    def recibir_a_mano(
+        self, negocio: str, renglon_id: int, piezas: int, quien: str
+    ) -> RenglonGuardado | None:
+        """Decir cuántas piezas llegaron **en total**, sin compra de SICAR (27).
+
+        Dos transiciones y una sola puerta, porque para quien lo escribe es la
+        misma pregunta —¿cuántas llegaron?—:
+
+        - **en tránsito** → `recibido` o `recibido parcial`, según las piezas
+          (`_RECIBIR_A_MANO`). Sin compras: es la palabra de una persona.
+        - **ya recibido** → la cifra se corrige (`_CORREGIR_LO_RECIBIDO`): la
+          segunda factura, o una cifra mal capturada. Solo mientras lo que
+          faltó no lo haya atendido una lista posterior.
+
+        El estado sale de las piezas en la misma sentencia, igual que el CHECK.
+        Firmado con `quien`, que es firma y nunca permiso (regla 3). `None` es
+        "no se movió nada" —no es de este negocio, no está en camino ni
+        recibido, ya decía esa cifra, o lo que faltó ya se atendió—.
+        """
+        ...
+
     def rechazar_la_recepcion(
         self, negocio: str, renglon_id: int, compras: Sequence[int], quien: str
     ) -> RenglonGuardado | None:
@@ -2825,7 +2992,8 @@ _LEER_RENGLONES = text(
            capturado_por, capturado_en, ventas_desde,
            cancelado_por, cancelado_en,
            recibido_por, recibido_en, recibido_con_compras,
-           compras_rechazadas, recepcion_rechazada_por, recepcion_rechazada_en
+           compras_rechazadas, recepcion_rechazada_por, recepcion_rechazada_en,
+           piezas_recibidas, piezas_que_faltaron
     from pedidos.renglon
     where negocio = :negocio and pedido_sugerido_id = :pedido_sugerido_id
     order by renglon_id
@@ -2847,7 +3015,8 @@ _LEER_RENGLON_POR_ID = text(
            capturado_por, capturado_en, ventas_desde,
            cancelado_por, cancelado_en,
            recibido_por, recibido_en, recibido_con_compras,
-           compras_rechazadas, recepcion_rechazada_por, recepcion_rechazada_en
+           compras_rechazadas, recepcion_rechazada_por, recepcion_rechazada_en,
+           piezas_recibidas, piezas_que_faltaron
     from pedidos.renglon
     where negocio = :negocio and renglon_id = :renglon_id
     """
@@ -2967,7 +3136,7 @@ _LO_YA_PEDIDO = text(
            r.cancelado_por, r.cancelado_en,
            r.recibido_por, r.recibido_en, r.recibido_con_compras,
            r.compras_rechazadas, r.recepcion_rechazada_por,
-           r.recepcion_rechazada_en,
+           r.recepcion_rechazada_en, r.piezas_recibidas, r.piezas_que_faltaron,
            s.fecha_del_pedido, s.ventas_consideradas_hasta,
            s.ventas_consideradas_desde,
            p.proveedor, p.enviado_por, p.enviado_en,
@@ -3028,7 +3197,7 @@ _EN_TRANSITO = text(
            r.cancelado_por, r.cancelado_en,
            r.recibido_por, r.recibido_en, r.recibido_con_compras,
            r.compras_rechazadas, r.recepcion_rechazada_por,
-           r.recepcion_rechazada_en,
+           r.recepcion_rechazada_en, r.piezas_recibidas, r.piezas_que_faltaron,
            s.fecha_del_pedido, s.ventas_consideradas_hasta,
            s.ventas_consideradas_desde,
            p.proveedor, p.enviado_por, p.enviado_en,
@@ -3098,12 +3267,13 @@ _INSERTAR_RENGLONES = text(
     insert into pedidos.renglon
         (negocio, pedido_sugerido_id, producto_id, clave, descripcion,
          piezas_vendidas, cantidad_propuesta, esta_en_el_catalogo, existencia,
-         dias_de_cobertura, clasificacion, estado, ventas_desde)
+         dias_de_cobertura, clasificacion, estado, ventas_desde,
+         piezas_que_faltaron)
     values
         (:negocio, :pedido_sugerido_id, :producto_id, :clave, :descripcion,
          :piezas_vendidas, :cantidad_propuesta, :esta_en_el_catalogo,
          :existencia, :dias_de_cobertura, :clasificacion, :estado,
-         :ventas_desde)
+         :ventas_desde, :piezas_que_faltaron)
     """
 )
 
@@ -3627,13 +3797,18 @@ _DEVOLVER_EL_ATRASADO = text(
 #     cuando encaja con dos pedidos del mismo producto.
 #
 # El folio no aparece: su semántica no está verificada (ADR 0002).
+#
+# **Desde el ticket 27 guarda también `piezas_recibidas`**: las que trajo la
+# evidencia, que pueden ser más de las pedidas. Con eso lo confirmado se
+# corrige igual que lo recibido a mano (`_CORREGIR_LO_RECIBIDO`).
 _CONFIRMAR_LA_RECEPCION = text(
     """
     update pedidos.renglon as r
        set estado = 'recibido',
            recibido_por = :quien,
            recibido_en = now(),
-           recibido_con_compras = cast(:compras as bigint[])
+           recibido_con_compras = cast(:compras as bigint[]),
+           piezas_recibidas = :piezas
       from pedidos.pedido as p
      where r.negocio = :negocio
        and r.renglon_id = :renglon_id
@@ -3648,6 +3823,147 @@ _CONFIRMAR_LA_RECEPCION = text(
                          from pedidos.renglon as r2
                         where r2.negocio = r.negocio
                           and r2.recibido_con_compras && cast(:compras as bigint[]))
+    returning r.renglon_id, r.pedido_sugerido_id
+    """
+)
+
+# RECIBIR PARCIAL CON LA EVIDENCIA (ticket 27, ADR 0015). `en tránsito` ->
+# `recibido parcial`, firmado y con las compras que una persona juzgó.
+#
+# Es la salida que el 26 no tenía: una propuesta que trae de menos —3 de 5— no
+# se puede confirmar (sería "llegó completo") y no había nada más. Ahora una
+# persona dice "llegó solo eso", y lo que faltó vuelve a proponerse.
+#
+# Las mismas garantías que `_CONFIRMAR_LA_RECEPCION`, con la cantidad al revés:
+#
+#   - `coalesce(r.cantidad_final, r.cantidad_propuesta) > :piezas` — la
+#     evidencia trae MENOS de lo pedido. Con lo pedido completo es confirmar, y
+#     las dos no pueden decir lo mismo: `ck_renglon_completo_o_parcial` tampoco
+#     lo dejaría.
+#   - `:piezas > 0` — una evidencia de cero piezas no es una recepción.
+#   - ninguna compra rechazada por este renglón y ninguna que ya sostenga otra
+#     recepción: una compra sostiene un solo renglón, completo o parcial.
+_RECIBIR_PARCIAL_CON_COMPRAS = text(
+    """
+    update pedidos.renglon as r
+       set estado = 'recibido parcial',
+           recibido_por = :quien,
+           recibido_en = now(),
+           recibido_con_compras = cast(:compras as bigint[]),
+           piezas_recibidas = :piezas
+      from pedidos.pedido as p
+     where r.negocio = :negocio
+       and r.renglon_id = :renglon_id
+       and r.estado = 'en tránsito'
+       and p.pedido_id = r.pedido_id
+       and p.negocio = r.negocio
+       and p.estado = 'enviado'
+       and p.proveedor_id is not null
+       and :piezas > 0
+       and coalesce(r.cantidad_final, r.cantidad_propuesta) > :piezas
+       and not (coalesce(r.compras_rechazadas, '{}') && cast(:compras as bigint[]))
+       and not exists (select 1
+                         from pedidos.renglon as r2
+                        where r2.negocio = r.negocio
+                          and r2.recibido_con_compras && cast(:compras as bigint[]))
+    returning r.renglon_id, r.pedido_sugerido_id
+    """
+)
+
+# RECIBIR A MANO (ticket 27, ADR 0015). `en tránsito` -> `recibido` o
+# `recibido parcial`, firmado, SIN compras: es la palabra de una persona, no la
+# evidencia de SICAR. Es la única salida de lo que nunca va a tener propuesta
+# (QuePharma, el 17.7% del catálogo que no aparece en compras) y la del pedido
+# que llega en dos facturas.
+#
+#   - `r.negocio`, y `p.negocio = r.negocio` en la unión — regla 7.
+#   - `r.estado = 'en tránsito'` — la transición en el `WHERE`.
+#   - `p.estado = 'enviado'` — lo que viene en camino es de un pedido enviado.
+#   - `:piezas > 0` — cero no es recibir: si no llegó nada, sigue en camino.
+#
+# **El estado sale de las piezas, aquí mismo**, con la misma comparación que
+# `ck_renglon_completo_o_parcial`: la tabla y la sentencia no pueden decir dos
+# cosas distintas. Más de lo pedido es `recibido`: lo que sobra no se descuenta
+# de ninguna lista (ADR 0012, opción 5).
+#
+# `recibido_con_compras` NO se toca: a mano no hay compra que lo sostenga, y
+# `NULL` es justo lo que dice eso.
+_RECIBIR_A_MANO = text(
+    """
+    update pedidos.renglon as r
+       set estado = case
+                      when coalesce(r.cantidad_final, r.cantidad_propuesta) <= :piezas
+                      then 'recibido'
+                      else 'recibido parcial'
+                    end,
+           piezas_recibidas = :piezas,
+           recibido_por = :quien,
+           recibido_en = now()
+      from pedidos.pedido as p
+     where r.negocio = :negocio
+       and r.renglon_id = :renglon_id
+       and r.estado = 'en tránsito'
+       and p.pedido_id = r.pedido_id
+       and p.negocio = r.negocio
+       and p.estado = 'enviado'
+       and :piezas > 0
+    returning r.renglon_id, r.pedido_sugerido_id
+    """
+)
+
+# CORREGIR CUÁNTAS LLEGARON (ticket 27, ADR 0015): la segunda factura, o una
+# cifra mal capturada. Lo que se escribe es **cuántas llegaron en total**, y el
+# estado vuelve a salir de ahí: 6 de 10 más el resto el jueves → 10, `recibido`.
+#
+#   - `r.estado in ('recibido', 'recibido parcial')` — solo se corrige lo que ya
+#     llegó. Lo confirmado con compras (26) también: la evidencia se QUEDA, lo
+#     que cambia es la cifra.
+#   - `r.piezas_recibidas <> :piezas` — decir lo mismo otra vez no mueve la
+#     firma.
+#   - **`not exists` sobre una lista posterior que ya ATENDIÓ el producto** —el
+#     mismo "atendido" de `_LO_YA_PEDIDO`: cerrada con el producto dentro, o
+#     con el producto pedido otra vez—. Ahí lo que faltó ya se volvió a
+#     proponer y quizá a pedir; cambiar la cifra ya no cambia nada que se vaya
+#     a pedir, y diría lo contrario. Una lista posterior ABIERTA no lo impide:
+#     nadie ha pedido nada, y la ruta avisa que esa lista ya armada trae lo que
+#     faltó (lo que se muestra es lo guardado y no se recalcula, ADR 0012).
+#
+# La firma se MUEVE: `recibido_por` es quien dijo la cifra que está guardada, que
+# es a quien se le pregunta cuando no cuadre. La de antes queda en la bitácora.
+_CORREGIR_LO_RECIBIDO = text(
+    """
+    update pedidos.renglon as r
+       set estado = case
+                      when coalesce(r.cantidad_final, r.cantidad_propuesta) <= :piezas
+                      then 'recibido'
+                      else 'recibido parcial'
+                    end,
+           piezas_recibidas = :piezas,
+           recibido_por = :quien,
+           recibido_en = now()
+      from pedidos.pedido as p, pedidos.pedido_sugerido as s
+     where r.negocio = :negocio
+       and r.renglon_id = :renglon_id
+       and r.estado in ('recibido', 'recibido parcial')
+       and r.piezas_recibidas <> :piezas
+       and :piezas > 0
+       and p.pedido_id = r.pedido_id
+       and p.negocio = r.negocio
+       and p.estado = 'enviado'
+       and s.pedido_sugerido_id = r.pedido_sugerido_id
+       and s.negocio = r.negocio
+       and not exists (
+           select 1
+             from pedidos.renglon as r2
+             join pedidos.pedido_sugerido as s2
+               on s2.pedido_sugerido_id = r2.pedido_sugerido_id
+              and s2.negocio = r2.negocio
+            where r2.negocio = r.negocio
+              and r2.producto_id = r.producto_id
+              and s2.fecha_del_pedido > s.fecha_del_pedido
+              and (s2.estado = 'cerrado'
+                   or r2.estado in ('en tránsito', 'recibido', 'recibido parcial')
+                   or r2.estado = 'cancelado'))
     returning r.renglon_id, r.pedido_sugerido_id
     """
 )
@@ -4529,6 +4845,55 @@ class AlmacenamientoPostgres:
             },
         )
 
+    def recibir_parcial_con_compras(
+        self,
+        negocio: str,
+        renglon_id: int,
+        compras: Sequence[int],
+        piezas: float,
+        quien: str,
+    ) -> RenglonGuardado | None:
+        return self._recibir_o_rechazar(
+            _RECIBIR_PARCIAL_CON_COMPRAS,
+            {
+                "negocio": negocio,
+                "renglon_id": renglon_id,
+                "compras": [int(c) for c in compras],
+                "piezas": piezas,
+                "quien": quien,
+            },
+        )
+
+    def recibir_a_mano(
+        self, negocio: str, renglon_id: int, piezas: int, quien: str
+    ) -> RenglonGuardado | None:
+        parametros = {
+            "negocio": negocio,
+            "renglon_id": renglon_id,
+            "piezas": piezas,
+            "quien": quien,
+        }
+        # Una transacción y dos sentencias con estados disjuntos: a lo más una
+        # mueve una fila. Primero la que recibe lo que viene en camino; si no
+        # movió nada, la que corrige lo ya recibido. No hay un `if` sobre el
+        # estado: cada `WHERE` decide el suyo.
+        with self._motor().begin() as conexion:
+            movido = conexion.execute(_RECIBIR_A_MANO, parametros).mappings().first()
+            if movido is None:
+                movido = (
+                    conexion.execute(_CORREGIR_LO_RECIBIDO, parametros).mappings().first()
+                )
+            if movido is None:
+                return None
+            fila = (
+                conexion.execute(
+                    _LEER_RENGLON_POR_ID, {"negocio": negocio, "renglon_id": renglon_id}
+                )
+                .mappings()
+                .first()
+            )
+        return None if fila is None else renglon_guardado_desde_columnas(fila)
+
     def rechazar_la_recepcion(
         self, negocio: str, renglon_id: int, compras: Sequence[int], quien: str
     ) -> RenglonGuardado | None:
@@ -4726,6 +5091,14 @@ def renglon_guardado_desde_columnas(fila) -> RenglonGuardado:
         compras_rechazadas=_tupla_de_ids(fila.get("compras_rechazadas")),
         recepcion_rechazada_por=fila.get("recepcion_rechazada_por"),
         recepcion_rechazada_en=fila.get("recepcion_rechazada_en"),
+        # La del ticket 27, con `.get` por lo mismo: sin la 0011 es "nadie dijo
+        # cuántas llegaron". `numeric` llega como `Decimal` y se vuelve `float`
+        # aquí, en el borde, igual que las piezas vendidas.
+        piezas_recibidas=(
+            None
+            if fila.get("piezas_recibidas") is None
+            else float(fila["piezas_recibidas"])
+        ),
     )
 
 

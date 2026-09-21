@@ -32,6 +32,7 @@ from continental.almacenamiento import (
     RENGLON_DESCARTADO,
     RENGLON_EN_TRANSITO,
     RENGLON_RECIBIDO,
+    RENGLON_RECIBIDO_PARCIAL,
     ESTADOS_QUE_ATIENDEN_EL_PRODUCTO,
     ESTADOS_QUE_CIERRAN_EL_TRANSITO,
     ESTADOS_QUE_TERMINAN_EL_TRANSITO,
@@ -739,6 +740,7 @@ class AlmacenamientoFalso:
         recibido_por: str | None = None,
         recibido_en: dt.datetime | None = None,
         recibido_con_compras: Sequence[int] | None = None,
+        piezas_recibidas: float | None = None,
     ) -> PedidoSugeridoGuardado | None:
         """El `UPDATE` pelado de un renglón, revisado contra los CHECK.
 
@@ -752,7 +754,9 @@ class AlmacenamientoFalso:
         `recibido` sin pasar por el envío o la recepción. **Desde el ticket 26
         lo recibido va firmado** (`ck_renglon_recepcion`): `recibido_por` y
         `recibido_en` entran por argumento, y sin ellos esto rebota igual que
-        Postgres.
+        Postgres. **Desde el 27 dice también cuántas llegaron**
+        (`ck_renglon_piezas_recibidas`, `ck_renglon_completo_o_parcial`):
+        `piezas_recibidas` entra por argumento, y un `recibido` sin ella rebota.
         """
         self._revisar()
         encontrado = self._renglon_por_id(renglon_id)
@@ -772,6 +776,10 @@ class AlmacenamientoFalso:
             "recibido_con_compras": (
                 None if recibido_con_compras is None else list(recibido_con_compras)
             ),
+            # `numeric(12,3)`: se redondea como lo haría la columna.
+            "piezas_recibidas": (
+                None if piezas_recibidas is None else round(float(piezas_recibidas), 3)
+            ),
         }
         revisar_el_renglon(propuesta)
 
@@ -784,6 +792,7 @@ class AlmacenamientoFalso:
             recibido_por=propuesta["recibido_por"],
             recibido_en=propuesta["recibido_en"],
             recibido_con_compras=propuesta["recibido_con_compras"],
+            piezas_recibidas=propuesta["piezas_recibidas"],
         )
         return armar_guardado(lista, lista["renglones"])
 
@@ -1348,6 +1357,22 @@ class AlmacenamientoFalso:
     ) -> RenglonGuardado | None:
         """`_CONFIRMAR_LA_RECEPCION`, en memoria: las mismas condiciones, en el
         mismo orden, y la firma revisada por `revisar_el_renglon`."""
+        return self._recibir_con_compras(
+            negocio, renglon_id, compras, piezas, quien, RENGLON_RECIBIDO
+        )
+
+    def recibir_parcial_con_compras(
+        self, negocio: str, renglon_id: int, compras, piezas: float, quien: str
+    ) -> RenglonGuardado | None:
+        """`_RECIBIR_PARCIAL_CON_COMPRAS`, en memoria (ticket 27): lo mismo que
+        confirmar, con la cantidad al revés."""
+        return self._recibir_con_compras(
+            negocio, renglon_id, compras, piezas, quien, RENGLON_RECIBIDO_PARCIAL
+        )
+
+    def _recibir_con_compras(
+        self, negocio: str, renglon_id: int, compras, piezas: float, quien: str, estado: str
+    ) -> RenglonGuardado | None:
         self._revisar()
         compras = [int(c) for c in compras]
         if not compras:
@@ -1362,7 +1387,11 @@ class AlmacenamientoFalso:
         if pedido is None or pedido["estado"] != ENVIADO or pedido.get("proveedor_id") is None:
             return None
         pedidas = fila["cantidad_final"] if fila["cantidad_final"] is not None else fila["cantidad_propuesta"]
-        if not pedidas <= piezas:
+        # Confirmar: la evidencia alcanza lo pedido. Recibir parcial: trae
+        # menos, y algo (`:piezas > 0`). Cada una en su `WHERE`.
+        if estado == RENGLON_RECIBIDO and not pedidas <= piezas:
+            return None
+        if estado == RENGLON_RECIBIDO_PARCIAL and not 0 < piezas < pedidas:
             return None
         if set(fila.get("compras_rechazadas") or ()) & set(compras):
             return None
@@ -1378,12 +1407,67 @@ class AlmacenamientoFalso:
         # El instante real con zona que en la tabla pone `now()`.
         self.poner_estado_del_renglon(
             renglon_id,
-            RENGLON_RECIBIDO,
+            estado,
             recibido_por=quien,
             recibido_en=dt.datetime.now(dt.UTC),
             recibido_con_compras=compras,
+            piezas_recibidas=piezas,
         )
         return renglon_guardado_desde_columnas(fila)
+
+    def recibir_a_mano(
+        self, negocio: str, renglon_id: int, piezas: int, quien: str
+    ) -> RenglonGuardado | None:
+        """`_RECIBIR_A_MANO` y, si no movió nada, `_CORREGIR_LO_RECIBIDO` (27).
+
+        Las mismas condiciones, en el mismo orden, y el estado sale de las
+        piezas con la misma comparación del `case`. Lo que la corrección
+        conserva —las compras de la evidencia, si las había— se conserva aquí.
+        """
+        self._revisar()
+        encontrado = self._renglon_por_id(renglon_id)
+        if encontrado is None or piezas <= 0:
+            return None
+        fila, lista = encontrado
+        if fila["negocio"] != negocio:
+            return None
+        pedido = self._pedido_del_renglon(fila)
+        if pedido is None or pedido["estado"] != ENVIADO:
+            return None
+        if fila["estado"] == RENGLON_EN_TRANSITO:
+            compras = None
+        elif fila["estado"] in ESTADOS_QUE_CIERRAN_EL_TRANSITO:
+            if fila.get("piezas_recibidas") == piezas:
+                return None
+            if self._ya_se_atendio(negocio, fila["producto_id"], lista["fecha_del_pedido"]):
+                return None
+            compras = fila.get("recibido_con_compras")
+        else:
+            return None
+        pedidas = fila["cantidad_final"] if fila["cantidad_final"] is not None else fila["cantidad_propuesta"]
+        self.poner_estado_del_renglon(
+            renglon_id,
+            RENGLON_RECIBIDO if pedidas <= piezas else RENGLON_RECIBIDO_PARCIAL,
+            recibido_por=quien,
+            recibido_en=dt.datetime.now(dt.UTC),
+            recibido_con_compras=compras,
+            piezas_recibidas=piezas,
+        )
+        return renglon_guardado_desde_columnas(fila)
+
+    def _ya_se_atendio(self, negocio: str, producto_id: int, fecha: dt.date) -> bool:
+        """El `NOT EXISTS` de `_CORREGIR_LO_RECIBIDO`: una lista POSTERIOR ya
+        propuso el producto y se cerró, o el producto ya se volvió a pedir.
+        Las mismas condiciones que el "atendido" de `lo_ya_pedido`."""
+        return any(
+            otra["negocio"] == negocio
+            and otra["fecha_del_pedido"] > fecha
+            and fila["negocio"] == negocio
+            and fila["producto_id"] == producto_id
+            and (otra["estado"] == CERRADO or fila["estado"] in ESTADOS_QUE_ATIENDEN_EL_PRODUCTO)
+            for otra in self.listas
+            for fila in otra["renglones"]
+        )
 
     def rechazar_la_recepcion(
         self, negocio: str, renglon_id: int, compras, quien: str

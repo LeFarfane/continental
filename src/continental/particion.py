@@ -690,7 +690,7 @@ def frase_del_envio(pedido: PedidoGuardado) -> str:
 
 
 def frase_sin_nada_por_repartir(
-    en_transito: int, cancelados: int, recibidos: int = 0
+    en_transito: int, cancelados: int, recibidos: int = 0, sin_proveedor: int = 0
 ) -> str | None:
     """Por qué una lista ya no tiene nada que partir, cuando es porque se atendió.
 
@@ -705,8 +705,15 @@ def frase_sin_nada_por_repartir(
 
     `None` cuando no hay nada ya pedido ni cancelado: entonces "no hay en qué
     partir" quiere decir otra cosa —faltan precios o elecciones— y la pantalla
-    dice lo suyo. Quien llama la pide **solo** cuando ya no queda nada por
-    repartir.
+    dice lo suyo. Quien llama la pide cuando **la partición no tiene nada que
+    partir**.
+
+    **Desde el ticket 27, también en el caso mixto** (hilo abierto 18 de
+    `HANDOVER.md`): algo ya se pidió —o llegó— y `sin_proveedor` renglones
+    siguen sin a quién pedírselos. Hasta aquí la pantalla caía en su texto de
+    reserva —"esta lista ya se pidió entera… sus renglones están en
+    tránsito"—, que con lo recibido del 27 mentía dos veces. Ahora lo dice
+    Python, y no afirma "ya se puede cerrar": falta elegir.
     """
     partes = []
     if en_transito == 1:
@@ -728,6 +735,15 @@ def frase_sin_nada_por_repartir(
         )
     if not partes:
         return None
+    if sin_proveedor:
+        quedan = (
+            "Queda 1 renglón sin proveedor"
+            if sin_proveedor == 1
+            else f"Quedan {sin_proveedor} renglones sin proveedor"
+        )
+        # Sin "no queda nada por repartir" ni "ya se puede cerrar": las dos
+        # serían falsas mientras falte elegir.
+        return f"{'; '.join(partes)}. {quedan}: elige a quién se le pide."
     return f"No queda nada por repartir: {'; '.join(partes)}. Ya se puede cerrar."
 
 

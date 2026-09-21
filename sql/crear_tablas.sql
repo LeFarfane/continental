@@ -106,8 +106,13 @@
 --  10. `sql/migraciones/0010-la-recepcion-sugerida.sql` (ticket 26, ADR
 --      0014), que le da a `renglon` la firma de la recepción con sus compras
 --      y lo rechazado. NO crea tabla.
+--  11. `sql/migraciones/0011-recibido-parcial-y-a-mano.sql` (ticket 27, ADR
+--      0015), que le da a `renglon` cuántas piezas llegaron y las que faltaron
+--      de un pedido anterior y trae de vuelta. NO crea tabla, y NO toca el
+--      estado del pedido: `recibido` y `recibido parcial` del pedido se
+--      calculan.
 --
--- Las diez son idempotentes, así que correrlas sobre una base que ya las
+-- Las once son idempotentes, así que correrlas sobre una base que ya las
 -- tiene -o sobre una recién creada con este archivo- no rompe nada.
 --
 -- **La 0003 y la 0004 son distintas de las dos primeras y hay que decirlo**:
@@ -588,6 +593,12 @@ CREATE TABLE IF NOT EXISTS pedidos.renglon (
     compras_rechazadas      bigint[],
     recepcion_rechazada_por text,
     recepcion_rechazada_en  timestamptz,
+    -- RECIBIDO PARCIAL Y A MANO (ticket 27, ADR 0015, migración 0011).
+    -- Cuántas llegaron -de ahí sale recibido o recibido parcial, y cuánto
+    -- faltó-, y las piezas que faltaron en un pedido anterior y este renglón
+    -- trae de vuelta, ya sumadas a `cantidad_propuesta`.
+    piezas_recibidas        numeric(12,3),
+    piezas_que_faltaron     integer NOT NULL DEFAULT 0,
 
     CONSTRAINT pk_renglon
         PRIMARY KEY (renglon_id),
@@ -805,6 +816,26 @@ CREATE TABLE IF NOT EXISTS pedidos.renglon (
                AND (compras_rechazadas IS NULL
                     OR cardinality(compras_rechazadas) >= 1)),
 
+    -- CUÁNTAS LLEGARON (ticket 27, ADR 0015). Lo recibido -completo o parcial-
+    -- dice cuántas, y nunca cero: cero no es recibir. `recibido` es que
+    -- llegaron al menos las pedidas y `recibido parcial` que llegaron menos;
+    -- un `recibido` con piezas de menos cerraría el renglón en falso y lo que
+    -- faltó no volvería nunca.
+    CONSTRAINT ck_renglon_piezas_recibidas
+        CHECK ((estado IN ('recibido', 'recibido parcial'))
+                   = (piezas_recibidas IS NOT NULL)
+               AND (piezas_recibidas IS NULL OR piezas_recibidas > 0)),
+
+    CONSTRAINT ck_renglon_completo_o_parcial
+        CHECK (piezas_recibidas IS NULL
+               OR ((estado = 'recibido')
+                   = (piezas_recibidas >= coalesce(cantidad_final, cantidad_propuesta)))),
+
+    -- Lo que faltó antes se SUMA a lo vendido: cabe en la propuesta.
+    CONSTRAINT ck_renglon_piezas_que_faltaron
+        CHECK (piezas_que_faltaron >= 0
+               AND piezas_que_faltaron <= cantidad_propuesta),
+
     CONSTRAINT fk_renglon_sugerido
         FOREIGN KEY (pedido_sugerido_id, negocio)
         REFERENCES pedidos.pedido_sugerido (pedido_sugerido_id, negocio),
@@ -1004,6 +1035,16 @@ COMMENT ON COLUMN pedidos.renglon.recepcion_rechazada_por IS
 
 COMMENT ON COLUMN pedidos.renglon.recepcion_rechazada_en IS
     'Cuándo, instante con zona.';
+
+COMMENT ON COLUMN pedidos.renglon.piezas_recibidas IS
+    'Cuántas piezas llegaron, en total: lo dijo una persona (a mano) o la '
+    'evidencia de SICAR que juzgó. De aquí sale recibido o recibido parcial, y '
+    'cuánto faltó (ADR 0015). NULL si no se ha recibido.';
+
+COMMENT ON COLUMN pedidos.renglon.piezas_que_faltaron IS
+    'Piezas de un pedido anterior que llegó de menos y que este renglón trae de '
+    'vuelta, ya sumadas a cantidad_propuesta. Son piezas, no ventas (ADR 0015). '
+    'Casi siempre 0.';
 
 
 -- --------------------------------------------------------------------------

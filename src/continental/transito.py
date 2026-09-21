@@ -65,6 +65,21 @@ siempre está cerrada y no se deja modificar— y **lo que vuelve es el producto
 en la siguiente lista**, desde el principio de lo que ese renglón cubría:
 nunca se pidió, así que también vuelve lo que repuso. Es la misma memoria del
 ticket 24, con otro "desde" (`LoYaPedido.retiene_desde`).
+
+## Lo que faltó (ticket 27, ADR 0015)
+
+Un `recibido parcial` —pedí 10, llegaron 6— devuelve **dos cosas distintas**, y
+por eso la memoria tiene dos mapas:
+
+- **lo vendido mientras venía**, por fecha: desde el día siguiente al ancla,
+  igual que cualquier recibido (`desde`);
+- **lo que faltó**, por piezas: las 4 que se pidieron y no llegaron
+  (`faltaron`). Son ventas de la ventana ORIGINAL que el renglón cubría y que
+  no se repusieron; volver a leerlas por fecha propondría también las 6 que sí
+  llegaron.
+
+Las dos se olvidan juntas, con la misma regla: en cuanto una lista posterior
+cerrada trae el producto, o el producto se vuelve a pedir.
 """
 
 from __future__ import annotations
@@ -131,15 +146,26 @@ class MemoriaDeLoPedido:
       no se propuso. Sus ventas se cuentan **desde ese día**, esté antes o
       después del principio de la ventana.
 
+    Y un tercero, desde el ticket 27, que no es de fechas sino de **piezas**:
+
+    - `faltaron` — el producto llegó **de menos** (o se canceló trayendo algo
+      que faltó antes): esas piezas se **suman** a lo vendido en la siguiente
+      lista. Nunca junto con `en_camino`: lo que viene en camino le gana.
+
     Vacía, es exactamente la lista del ticket 09: recorta la ventana y nada
     más. Así la construye quien de verdad no tiene nada pedido.
     """
 
     en_camino: Mapping[int, "LoYaPedido"] = field(default_factory=dict)
     desde: Mapping[int, dt.date] = field(default_factory=dict)
+    faltaron: Mapping[int, int] = field(default_factory=dict)
 
     def esta_en_camino(self, producto_id: int) -> bool:
         return producto_id in self.en_camino
+
+    def piezas_que_faltaron(self, producto_id: int) -> int:
+        """Las piezas que faltaron y vuelven con ese producto, o cero."""
+        return self.faltaron.get(producto_id, 0)
 
     def desde_de_la_lectura(self, ventana: "Ventana") -> dt.date:
         """Desde qué día hay que leer ventas para que quepa lo que vuelve.
@@ -212,12 +238,20 @@ def memoria_de_lo_pedido(ya_pedidos: Iterable["LoYaPedido"]) -> MemoriaDeLoPedid
         if anterior is None or ya.ventas_hasta >= anterior.ventas_hasta:
             destino[ya.producto_id] = ya
 
+    # LO QUE FALTÓ (ticket 27) sale del MISMO renglón que dice desde cuándo:
+    # un solo renglón por producto manda, así que las piezas y las fechas no
+    # pueden venir de dos pedidos distintos y sumarse dos veces.
     return MemoriaDeLoPedido(
         en_camino=en_camino,
         desde={
             producto_id: ya.retiene_desde
             for producto_id, ya in llegados.items()
             if producto_id not in en_camino
+        },
+        faltaron={
+            producto_id: ya.piezas_que_vuelven
+            for producto_id, ya in llegados.items()
+            if producto_id not in en_camino and ya.piezas_que_vuelven > 0
         },
     )
 
@@ -423,6 +457,98 @@ def frase_de_la_ventana_propia(
         f"Solo cuenta lo vendido desde {fecha_en_palabras(ventas_desde)}: lo "
         "anterior ya venía en un pedido."
     )
+
+
+def frase_de_lo_que_falto(piezas: int) -> str | None:
+    """Lo que dice el renglón que trae de vuelta lo que faltó (ticket 27).
+
+    Es el par de `frase_de_la_ventana_propia`: sin esto, "pide 6" con 2
+    vendidas no se podría verificar mirando la pantalla. `None` con cero.
+    """
+    if not piezas:
+        return None
+    if piezas == 1:
+        return (
+            "Trae también 1 pieza que faltó en un pedido anterior: se pidió, "
+            "llegó de menos y no se perdió."
+        )
+    return (
+        f"Trae también {piezas} piezas que faltaron en un pedido anterior: se "
+        "pidieron, llegaron de menos y no se perdieron."
+    )
+
+
+def frase_de_lo_que_ya_no_falta(piezas: int) -> str:
+    """El aviso para un renglón **de hoy** que trae lo que faltó… y ya llegó.
+
+    Es el caso de las dos facturas, y el mismo borde que `frase_de_ya_en_camino`
+    (ADR 0012): la lista de hoy se armó con las piezas que faltaban, después
+    llegó el resto y alguien corrigió la cifra. Lo que se muestra es lo
+    guardado y no se recalcula, así que lo honesto es decirlo en el renglón.
+    Lo cazó el recorrido del navegador del ticket 27.
+    """
+    if piezas == 1:
+        cuales = "La pieza que faltó y este renglón trae ya no falta"
+    else:
+        cuales = f"Las {piezas} piezas que faltaron y este renglón trae ya no faltan"
+    return (
+        f"{cuales}: el resto llegó y se corrigió lo recibido. Si no las "
+        "necesitas, corrige esta cantidad; pedirlas sería pedirlas dos veces."
+    )
+
+
+def frase_de_cuantas_llegaron(piezas: float, pedidas: int) -> str:
+    """`llegaron 6 de 10`, y `llegó 1 de 2`: la concordancia la decide Python."""
+    verbo = "llegó" if piezas == 1 else "llegaron"
+    return f"{verbo} {_piezas(piezas)} de {pedidas}"
+
+
+def frase_de_lo_que_vuelve_de_menos(faltaron: int) -> str:
+    """`las 4 que faltaron vuelven…` / `la 1 que faltó vuelve…` (ticket 27)."""
+    if faltaron == 1:
+        return "la 1 que faltó vuelve a proponerse en la siguiente lista"
+    return f"las {faltaron} que faltaron vuelven a proponerse en la siguiente lista"
+
+
+#: Lo que dice el control de un renglón que ya llegó: se corrige la cifra.
+ETIQUETA_PARA_CORREGIR = "Corregir cuántas llegaron"
+
+
+def frase_de_lo_que_llego_de_menos(ya: "LoYaPedido", ya_en_esta_lista: bool = False) -> str:
+    """Un renglón de una lista anterior que llegó de menos (ticket 27).
+
+    Dice a quién se pidió, cuántas llegaron de cuántas, quién lo dijo y cuándo
+    —es una firma, regla 3— y adónde va lo que faltó: a la siguiente lista, o
+    **ya está en ésta** si la de hoy se armó después de recibirlo. Lo segundo lo
+    cazó el recorrido del navegador: "vuelven en la siguiente lista" debajo de
+    una lista que ya las traía.
+    """
+    renglon = ya.renglon
+    a_quien = ya.nombre_del_proveedor or "un proveedor que no quedó escrito"
+    firma = _firma_de_la_cancelacion(renglon.recibido_por, renglon.recibido_en)
+    llegaron = frase_de_cuantas_llegaron(renglon.piezas_recibidas or 0, renglon.cantidad_a_pedir)
+    faltaron = renglon.lo_que_falto
+    if ya_en_esta_lista:
+        adonde = (
+            "La 1 que faltó ya viene en esta lista."
+            if faltaron == 1
+            else f"Las {faltaron} que faltaron ya vienen en esta lista."
+        )
+    else:
+        adonde = f"{frase_de_lo_que_vuelve_de_menos(faltaron).capitalize()}."
+    return (
+        f"Pedido a {a_quien}: {llegaron}, lo dijo {firma}. {adonde} "
+        "Si el resto llegó en otra factura, o la cifra se capturó mal, corrígela."
+    )
+
+
+def frase_de_los_que_faltaron(cuantos: int) -> str | None:
+    """El encabezado de lo que llegó de menos. Con cero, calla."""
+    if not cuantos:
+        return None
+    if cuantos == 1:
+        return "1 renglón llegó de menos: lo que faltó vuelve a proponerse."
+    return f"{cuantos} renglones llegaron de menos: lo que faltó vuelve a proponerse."
 
 
 def frase_de_ya_en_camino(ya: "LoYaPedido", ahora: dt.datetime) -> str:
@@ -744,6 +870,8 @@ def en_camino_como_json(
     vuelven: Sequence["LoYaPedido"] = (),
     con_propuesta: Collection[int] = (),
     pedidos_con_algo_recibido: Collection[int] = (),
+    faltaron: Sequence["LoYaPedido"] = (),
+    faltaron_en_esta_lista: Collection[int] = (),
 ) -> dict:
     """El bloque de lo que viene en camino, como la pantalla lo lee.
 
@@ -760,6 +888,13 @@ def en_camino_como_json(
     propone como probablemente recibidos: esos no ofrecen devolver —sería
     pedirlo dos veces— y dicen por qué. Y `pedidos_con_algo_recibido` son los
     pedidos que ya no se pueden cancelar porque algo suyo llegó.
+
+    **Desde el ticket 27**, `faltaron` son los renglones de listas anteriores
+    que llegaron **de menos** y que ninguna lista ha atendido: se enseñan con
+    cuántas llegaron, quién lo dijo y que lo que faltó vuelve, y con el control
+    para corregir la cifra —la segunda factura, o un error de captura—.
+    `faltaron_en_esta_lista` son los productos cuya lista de HOY ya trae lo
+    que faltó: ésos lo dicen, en vez de mandarlo a "la siguiente".
 
     Las frases viajan **hechas**; los datos van además, porque la pantalla los
     usa para acomodar, no para decidir.
@@ -864,6 +999,22 @@ def en_camino_como_json(
             }
             for ya in vuelven
         ],
+        "frase_de_los_que_faltaron": frase_de_los_que_faltaron(len(faltaron)),
+        "faltaron": [
+            {
+                "renglon_id": ya.renglon.renglon_id,
+                "producto_id": ya.producto_id,
+                "clave": ya.renglon.propuesto.clave,
+                "descripcion": ya.renglon.propuesto.descripcion,
+                "cantidad": ya.renglon.cantidad_a_pedir,
+                "piezas_recibidas": ya.renglon.piezas_recibidas,
+                "frase": frase_de_lo_que_llego_de_menos(
+                    ya, ya.producto_id in frozenset(faltaron_en_esta_lista)
+                ),
+                "etiqueta_a_mano": ETIQUETA_PARA_CORREGIR,
+            }
+            for ya in faltaron
+        ],
     }
 
 
@@ -886,4 +1037,6 @@ def en_camino_con_hueco(detalle: str) -> dict:
         "pedidos": [],
         "frase_de_los_que_vuelven": None,
         "vuelven": [],
+        "frase_de_los_que_faltaron": None,
+        "faltaron": [],
     }

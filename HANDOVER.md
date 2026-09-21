@@ -411,7 +411,7 @@ calculado en Python; el mismo día del envío cuenta.
 pedido a QuePharma, y un producto que nunca ha aparecido en una compra de SICAR
 (606 de 3,429, 17.7%) —una lectura nueva del almacén, `productos_con_compras`,
 sobre la misma `fct_compras` que el rol ya lee—. Su única salida es el recibido
-a mano, y **la pantalla dice que todavía no existe** en vez de pintar un botón
+a mano —que desde el ticket 27 existe—, y **la pantalla decía que todavía no existía** en vez de pintar un botón
 que no hay. **Una noche de retraso se dice normal, no un error**, siempre, en
 el mismo bloque.
 
@@ -441,6 +441,74 @@ JavaScript, del ticket 21—. Queda anotado abajo, sin tocar.
 `_LO_YA_PEDIDO` y `_EN_TRANSITO` nombran las columnas nuevas. No crea tabla y no
 pide ningún permiso nuevo sobre `marts`: **`crear_rol.sql` no se vuelve a
 correr.**
+
+**Y desde el ticket 27 lo que llega de menos tiene salida, y lo que faltó
+vuelve solo.** Tres salidas nuevas, las tres de una persona y firmadas con el
+correo de Access (ADR 0015):
+
+- **Recibir a mano** —`POST /api/renglon/{id}/recepcion/a-mano {"piezas": N}`—:
+  cuántas llegaron **en total**, sin propuesta del sistema. Cada renglón en
+  camino tiene su campo en el bloque de la recepción, con propuesta o sin
+  ella. Es la única salida de QuePharma y del 17.7% del catálogo que nunca
+  aparece en compras, y la del pedido que llega en dos facturas. **La misma
+  pregunta corrige la cifra** de lo ya recibido —la segunda factura (6 → 10) o
+  un error de captura— mientras lo que faltó no lo haya atendido una lista
+  posterior (cerrada con el producto, o el producto vuelto a pedir).
+- **Recibir parcial con la evidencia** —`POST .../recepcion/parcial`—: la
+  propuesta del 26 que trae de menos (3 de 5) ya no se queda sin salida:
+  *"Llegaron solo 3 de 5: recibir parcial"*, con las garantías de confirmar y
+  la cantidad al revés.
+- **El estado sale de las piezas**: `recibido` si llegaron al menos las
+  pedidas, `recibido parcial` si menos. `renglon.piezas_recibidas` lo guarda y
+  `ck_renglon_completo_o_parcial` lo amarra en la tabla. Las piezas se validan
+  en el servidor (`recepcion.piezas_escritas`): entero, de 1 en adelante; cero
+  no es recibir, y **más de lo pedido se acepta** como `recibido` sin
+  descontar nada de ninguna lista.
+
+**La decisión del ticket es cómo vuelve "la diferencia", y vuelve como PIEZAS.**
+Pedí 10, llegaron 6: las 4 son ventas de la ventana *original* que no se
+repusieron, y no hay manera de saber de qué días; volver a leerlas por fecha
+propondría también las 6 que llegaron. Así que `LoYaPedido.piezas_que_vuelven`
+→ `MemoriaDeLoPedido.faltaron` (un tercer mapa, de piezas) →
+`calcular_pedido_sugerido(faltaron=)` las **suma** a lo vendido, y el renglón
+nuevo guarda cuántas trae en `renglon.piezas_que_faltaron` y lo dice: *"Trae
+también 4 piezas que faltaron en un pedido anterior"*. Lo vendido mientras venía
+sigue volviendo por el ancla del 24: son dos conjuntos de ventas que no se
+tocan. Los números: lunes 10, martes 3, miércoles 2, jueves llegan 6 y se vende
+1 → la del jueves propone 3 + 2 + 1 + 4 = **10**; la del viernes, **1**. Un
+cancelado que traía lo que faltó lo devuelve también ("con todo lo que
+cubría").
+
+**El estado del PEDIDO se calcula, no se guarda.** `recepcion.estado_del_pedido`:
+`recibido` si no le queda nada en camino y todos llegaron completos, `recibido
+parcial` si alguno llegó de menos o se dejó de esperar. Viaja como
+`estado_a_la_vista` con su frase; en la tabla sigue `enviado`, que es verdad. Un
+cuarto estado guardado habría roto los cuatro `WHERE` que exigen `p.estado =
+'enviado'` —el 25 ya midió que un tercero rompió `!fue_enviado`—. Cancelar un
+pedido con algo recibido parcial sigue prohibido, sin cambiar una línea.
+
+**Tres cosas del 27 que conviene no redescubrir.** (1) **`git stash` en esta
+torre convierte a CRLF los archivos modificados** (`core.autocrlf=true`; el
+`.gitattributes` solo fija LF para `.sh`, `.service`, `.timer` y `.sql`), y
+después ningún reemplazo exacto encuentra su texto. No se use para medir. (2)
+**Una llave de JSON con la palabra "parcial" tumba la prueba del 26** que impide
+componer frases en `pintarRecepcion`: por eso son `se_puede_recibir_lo_que_trae`
+y `etiqueta_de_lo_que_trae`. (3) **El recorrido del navegador cazó tres, la
+octava vez** (14, 15, 21, 22, 24, 25, 26, 27): lo que llegó de menos decía
+"vuelve en la siguiente lista" debajo de una lista que ya lo traía; la segunda
+factura corregida después de armar la lista de hoy dejaba ese renglón pidiendo
+lo que ya llegó sin decirlo (ahora lo avisa en ámbar, como "ya viene en camino"
+del 24); y **el hilo abierto 18 se disparó** —con lo recibido, la reserva decía
+"sus renglones están en tránsito" sobre lo que ya llegó—: la frase del caso
+mixto sale ahora de Python y el título dice "se pidió en parte".
+
+**La 0011 va ANTES de desplegar**: `_LEER_RENGLONES`, `_LEER_RENGLON_POR_ID`,
+`_LO_YA_PEDIDO` y `_EN_TRANSITO` nombran `piezas_recibidas` y
+`piezas_que_faltaron`, y `_INSERTAR_RENGLONES` escribe la segunda: sin ella, ni
+la pantalla ni el lote arman la lista. Rellena lo confirmado por el 26 con lo
+pedido antes de poner sus CHECK. No crea tabla ni toca `pedidos.pedido`:
+**`crear_rol.sql` no se vuelve a correr.** `verificar_rol.sql` gana la 36 y la
+37.
 
 **Lo sugerido NO se guarda y lo decidido SÍ, y ésa es la decisión del ticket.**
 Es la misma pregunta que el 11 resolvió con `cantidad_propuesta` /
@@ -482,7 +550,28 @@ python iniciar.py     # http://127.0.0.1:8585
 python -m continental.verificar   # los datos de producción, no el código (ticket 17)
 python -m continental.lote        # el lote nocturno, a mano (ticket 18)
 python -m continental.lote --tope-minutos 5   # ...con tope corto, para mirarlo
-pytest                # 1285 pruebas, 0 saltadas, 5.33-6.53 s (2026-09-21, ticket 26)
+pytest                # 1395 pruebas, 0 saltadas, 4.87-5.10 s (2026-09-21, ticket 27)
+                      # 1285 en el 26. Las 110 nuevas son 109 de `test_parcial.py`
+                      # (lo puro: cuánto faltó, cómo vuelve —por piezas, aparte
+                      # de lo vendido—, las piezas escritas, el estado del pedido
+                      # calculado y las frases; lo que se guarda: recibir a mano,
+                      # corregir, recibir parcial con compras, el candado de lo
+                      # ya atendido, los tres CHECK en Python, el SQL como texto,
+                      # la 0011 y `verificar_rol.sql`; lo que se ve: cinco
+                      # escenarios de varios días con los números escritos, el
+                      # estado del pedido en la partición, las reglas 3 y 5, el
+                      # 422 en español y la pantalla) y 1 que `test_compila.py`
+                      # gana sola por la migración 0011. Se ajustaron: las que
+                      # ponían `recibido` a pelo en el doble ahora dicen cuántas
+                      # llegaron (`test_ajuste`, `test_descarte`, `test_cancelar`,
+                      # `test_transito`, y la del CHECK del marcado manual en
+                      # `test_recepcion`), las dos del 26 que esperaban "todavía
+                      # no se puede" ahora esperan la salida a mano, y los tres
+                      # censos de `fetch('/api/` de 14 a 15. Medido: sin
+                      # `test_parcial.py`, 4.55 s ese mismo rato; las 109 solas,
+                      # 0.49 s. NINGUNA TOCA POSTGRES ni duerme.
+                      #
+                      # 1285 pruebas, 0 saltadas, 5.33-6.53 s (2026-09-21, ticket 26)
                       # 1191 en el 25. Las 94 nuevas son 92 de `test_recepcion.py`
                       # (lo puro: qué encaja y qué no, nunca el folio, el día de
                       # la farmacia, las cantidades, la compra compartida, los
@@ -635,8 +724,9 @@ pytest                # 1285 pruebas, 0 saltadas, 5.33-6.53 s (2026-09-21, ticke
 | `sql/` | el DDL de las **cinco** tablas, el rol acotado y `verificar_rol.sql`, que mira la **forma** de la base. **Se corren a mano, en ese orden, con credenciales de dueño** — no confundirlo con `continental.verificar`, que mira los **datos** en cada despliegue (la cabecera de ese módulo tiene la tabla que los separa) |
 | `docs/decisiones/0013` | **cancelar suelta el tránsito sin desenviarlo**, y lo que vuelve es el producto, no el renglón. Atrasado es una señal calculada y no se llama "vencido" |
 | `docs/decisiones/0014` | **"probablemente recibido" se calcula cada vez y lo decidido se guarda**: por qué no es un estado, por qué el rechazo guarda qué compra y no una fecha tope, por qué solo se confirma lo que trae al menos lo pedido, qué pasa con una compra que encaja con dos renglones, con el proveedor sin puente, y por qué el día del envío es el de la farmacia y el mismo día cuenta |
-| `src/continental/recepcion.py` | funciones puras: lo que está en tránsito + las compras de SICAR -> propuestas de *probablemente recibido* con su evidencia, y los renglones sin propuesta con su motivo (seis). Empareja por proveedor, producto y día; **nunca por folio**. Ahí viven las frases de la recepción, el aviso de la noche de retraso y la regla de la cantidad (ticket 26, ADR 0014) |
-| `sql/migraciones/` | **diez** archivos numerados: lo que le falta a una base donde las tablas YA existen: `crear_tablas.sql` usa `CREATE TABLE IF NOT EXISTS` y calla si la tabla ya está con otra forma. También a mano y con credenciales de dueño |
+| `docs/decisiones/0015` | **lo que faltó vuelve como piezas, lo recibido se dice en total, y el estado del pedido se calcula**: por qué no por fechas (propondría también lo que sí llegó) y por qué eso no rompe la reposición 1 a 1, los escenarios de varios días con sus números, por qué el pedido `recibido` no se guarda, por qué se corrige la cifra solo mientras nadie atendió lo que faltó, y por qué más de lo pedido se acepta |
+| `src/continental/recepcion.py` | funciones puras: lo que está en tránsito + las compras de SICAR -> propuestas de *probablemente recibido* con su evidencia, y los renglones sin propuesta con su motivo (seis). Empareja por proveedor, producto y día; **nunca por folio**. Ahí viven las frases de la recepción, el aviso de la noche de retraso y la regla de la cantidad (ticket 26, ADR 0014). Desde el 27, también **las piezas escritas a mano** (`piezas_escritas`), el estado que sale de ellas, **el estado del pedido calculado** (`estado_del_pedido`) y las frases de lo recibido a mano y parcial (ADR 0015) |
+| `sql/migraciones/` | **once** archivos numerados: lo que le falta a una base donde las tablas YA existen: `crear_tablas.sql` usa `CREATE TABLE IF NOT EXISTS` y calla si la tabla ya está con otra forma. También a mano y con credenciales de dueño |
 | `config/continental.yml` | puertos de los módulos y los parámetros del pedido |
 | `src/continental/web/app.py` | `/api/salud`, `/api/modulos`, el pedido sugerido y su cierre, la portada |
 | `src/continental/almacenamiento.py` | donde el pedido sugerido se guarda: el `Protocol`, el SQL real y las reglas de la tabla en un solo lugar |
@@ -1198,8 +1288,13 @@ más barato y se le pidió a otro.**
    disparo:** si el encargado reporta faltantes de productos que sí se
    vendieron, medir primero cuánto vende la farmacia después de las 18:51.
 
-18. **La partición miente cuando queda un renglón sin proveedor y otro ya se
-   envió.** Lo dejó ver el recorrido del navegador del ticket 26, y **no es de
+18. ~~**La partición miente cuando queda un renglón sin proveedor y otro ya se
+   envió.**~~ **Cerrado en el ticket 27**, que tocó `pintarParticion` —su
+   condición de disparo— y además lo empeoraba: con lo recibido, la reserva
+   decía "sus renglones están en tránsito" sobre lo que ya llegó. Ahora
+   `frase_sin_nada_por_repartir` se manda también en el caso mixto (con cuántos
+   quedan sin proveedor y sin "ya se puede cerrar") y el título dice "se pidió
+   en parte". Lo que sigue es la historia: Lo dejó ver el recorrido del navegador del ticket 26, y **no es de
    ese ticket**: viene del texto de reserva que `pintarParticion` escribe desde
    el 21 cuando no hay partición y sí hay pedidos enviados —*"Esta lista ya se
    pidió entera · No queda nada por repartir: todo lo que había se capturó en

@@ -360,7 +360,11 @@ def test_la_pantalla_pinta_la_existencia_del_renglon_y_no_la_vuelve_a_buscar(cli
     #
     # La del ticket 26: confirmar o rechazar una recepción, UNA sola llamada
     # para las dos acciones, que al terminar también vuelve a `cargarPedido`.
-    assert portada.count("fetch('/api/") == 14
+    #
+    # La del ticket 27: recibir a mano —o corregir cuántas llegaron—, que
+    # también vuelve a `cargarPedido`. Recibir parcial con la evidencia NO
+    # suma: reusa la llamada de confirmar y rechazar.
+    assert portada.count("fetch('/api/") == 15
     assert portada.count("fetch('/api/pedido-sugerido')") == 1
 
 

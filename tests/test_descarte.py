@@ -386,9 +386,15 @@ def test_un_renglon_que_no_esta_abierto_no_se_descarta(almacenamiento, estado):
         NEGOCIO, HOY, Ventana(HOY, HOY), lambda: (_renglon(1, "PARACETAMOL"),)
     )
     renglon_id = lista.renglones[0].renglon_id
-    # Desde el ticket 26 lo recibido va firmado (`ck_renglon_recepcion`).
+    # Desde el ticket 26 lo recibido va firmado (`ck_renglon_recepcion`), y
+    # desde el 27 dice cuántas llegaron (`ck_renglon_completo_o_parcial`): las 3
+    # pedidas, o 1 si fue parcial.
     firma = (
-        {"recibido_por": CORREO, "recibido_en": dt.datetime(2026, 9, 16, tzinfo=dt.UTC)}
+        {
+            "recibido_por": CORREO,
+            "recibido_en": dt.datetime(2026, 9, 16, tzinfo=dt.UTC),
+            "piezas_recibidas": 1 if estado == "recibido parcial" else 3,
+        }
         if estado.startswith("recibido")
         else {}
     )

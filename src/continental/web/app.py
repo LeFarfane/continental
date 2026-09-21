@@ -15,6 +15,7 @@ import datetime as dt
 import logging
 import time
 from pathlib import Path
+from typing import Any
 
 import httpx
 from fastapi import Depends, FastAPI, Request
@@ -88,15 +89,20 @@ from continental.proveedores import puente_como_json, puente_configurado
 from continental.recepcion import (
     Recepcion,
     desde_cuando_leer_compras,
+    estado_del_pedido,
+    frase_de_la_recepcion_del_pedido,
     frase_de_lo_recibido,
+    frase_de_lo_recibido_a_mano,
     frase_del_confirmado,
     frase_del_rechazado,
+    piezas_escritas,
     proponer,
     recepcion_como_json,
     recepcion_con_hueco,
 )
 from continental.sugerido import armar_la_lista
 from continental.transito import (
+    ETIQUETA_PARA_CORREGIR,
     MemoriaDeLoPedido,
     dias_en_transito,
     en_camino,
@@ -105,6 +111,8 @@ from continental.transito import (
     enviado_antes_de,
     esta_atrasado,
     frase_de_la_ventana_propia,
+    frase_de_lo_que_falto,
+    frase_de_lo_que_ya_no_falta,
     frase_de_ya_en_camino,
     frase_del_atraso,
     PROBABLEMENTE_LLEGO,
@@ -472,7 +480,7 @@ def pedido_sugerido(
     recepcion, con_propuesta, con_algo_recibido = _la_recepcion(
         almacen, almacenamiento, negocio
     )
-    bloque, ya_en_camino = _lo_que_viene_en_camino(
+    bloque, ya_en_camino, aun_faltan = _lo_que_viene_en_camino(
         almacen,
         almacenamiento,
         negocio,
@@ -490,6 +498,7 @@ def pedido_sugerido(
         ya_en_camino=ya_en_camino,
         recepcion=recepcion,
         con_propuesta=con_propuesta,
+        aun_faltan=aun_faltan,
     )
 
 
@@ -606,6 +615,12 @@ def _lo_que_viene_en_camino(
     cuando la lista ya existía, y existe para decir la tercera casilla con
     números: *eso que se vendió mientras tanto no se pierde*.
 
+    Y desde el ticket 27, `aun_faltan`: los productos de los que todavía hay
+    algo que faltó y ninguna lista ha atendido. Un renglón de hoy que trae lo
+    que faltó y cuyo producto ya NO está ahí —el resto llegó y se corrigió—
+    lo dice (`transito.frase_de_lo_que_ya_no_falta`). `None` si no se pudo
+    leer: entonces no se afirma nada.
+
     Devuelve también `ya_en_camino`, por producto: los renglones **de hoy** cuyo
     producto viene en camino desde una lista anterior lo dicen en su fila. Es
     el borde que la memoria no alcanza (ver `transito.frase_de_ya_en_camino`).
@@ -619,6 +634,7 @@ def _lo_que_viene_en_camino(
                 f"no se pudo leer lo que viene en camino ({type(exc).__name__})"
             ),
             {},
+            None,
         )
 
     viajando = en_camino(ya_pedidos)
@@ -626,6 +642,10 @@ def _lo_que_viene_en_camino(
     # no atendió ninguna lista. `lo_ya_pedido` ya lo trae —es la misma memoria—
     # y se enseña para que el número de mañana se pueda explicar hoy.
     vuelven = tuple(ya for ya in ya_pedidos if ya.fue_cancelado)
+    # LO QUE LLEGÓ DE MENOS (ticket 27): los parciales que todavía no atendió
+    # ninguna lista. Se enseñan para que lo que falta en la de mañana se pueda
+    # explicar hoy, y para corregir la cifra si el resto llegó en otra factura.
+    faltaron = tuple(ya for ya in ya_pedidos if ya.renglon.esta_recibido_parcial)
     vendido = {}
     if viajando:
         try:
@@ -652,8 +672,17 @@ def _lo_que_viene_en_camino(
             vuelven=vuelven,
             con_propuesta=con_propuesta,
             pedidos_con_algo_recibido=pedidos_con_algo_recibido,
+            faltaron=faltaron,
+            # La lista de hoy, si se armó después de recibirlo, ya trae lo que
+            # faltó: se dice "ya viene en esta lista" (recorrido del navegador).
+            faltaron_en_esta_lista={
+                r.propuesto.producto_id
+                for r in guardado.renglones
+                if r.propuesto.piezas_que_faltaron
+            },
         ),
         {ya.producto_id: ya for ya in viajando},
+        frozenset(ya.producto_id for ya in ya_pedidos if ya.piezas_que_vuelven),
     )
 
 
@@ -1519,6 +1548,7 @@ def _recibir_o_rechazar(
     firma = quien(request)
     vistas = sorted(set(cuerpo.compras))
     confirmar = accion == "confirmar"
+    parcial = accion == "parcial"
 
     try:
         propuesta = _la_propuesta_de_ahora(almacen, almacenamiento, negocio, renglon_id)
@@ -1539,8 +1569,25 @@ def _recibir_o_rechazar(
                 status_code=409,
                 content={"ok": False, "detalle": propuesta.motivo_para_no_confirmar},
             )
+        # RECIBIR PARCIAL (ticket 27): solo lo que trae de menos. Con lo pedido
+        # completo, lo que corresponde es confirmar.
+        if parcial and not propuesta.se_puede_recibir_parcial:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "ok": False,
+                    "detalle": (
+                        "Esa compra trae lo que se pidió: confírmala como "
+                        "recibida, no como parcial."
+                    ),
+                },
+            )
         if confirmar:
             renglon = almacenamiento.confirmar_la_recepcion(
+                negocio, renglon_id, propuesta.compras_ids, propuesta.piezas, firma
+            )
+        elif parcial:
+            renglon = almacenamiento.recibir_parcial_con_compras(
                 negocio, renglon_id, propuesta.compras_ids, propuesta.piezas, firma
             )
         else:
@@ -1574,7 +1621,7 @@ def _recibir_o_rechazar(
                 "ok": False,
                 "detalle": (
                     "Ese renglón ya no se puede "
-                    + ("recibir" if confirmar else "rechazar")
+                    + ("rechazar" if accion == "rechazar" else "recibir")
                     + ": o ya no está en camino, o esa compra ya se usó o se "
                     "rechazó. Vuelve a cargar la página para ver cómo quedó."
                 ),
@@ -1583,23 +1630,26 @@ def _recibir_o_rechazar(
 
     log.info(
         "%s %s la recepción del renglón %s (%s) de %s con las compras %s de SICAR "
-        "(ADR 0014).",
+        "(%s piezas; ADR 0014 y 0015).",
         firma,
-        "confirmó" if confirmar else "rechazó",
+        {"confirmar": "confirmó", "parcial": "recibió parcial", "rechazar": "rechazó"}[accion],
         renglon_id,
         renglon.propuesto.descripcion,
         negocio,
         list(propuesta.compras_ids),
+        propuesta.piezas,
     )
+    if confirmar:
+        frase = frase_del_confirmado(renglon.propuesto.descripcion)
+    elif parcial:
+        frase = frase_de_lo_recibido_a_mano(renglon, antes=None)
+    else:
+        frase = frase_del_rechazado(renglon.propuesto.descripcion)
     return {
         "ok": True,
         "renglon_id": renglon.renglon_id,
         "estado": renglon.estado,
-        "frase": (
-            frase_del_confirmado(renglon.propuesto.descripcion)
-            if confirmar
-            else frase_del_rechazado(renglon.propuesto.descripcion)
-        ),
+        "frase": frase,
     }
 
 
@@ -1639,6 +1689,132 @@ def rechazar_la_recepcion(
     return _recibir_o_rechazar(
         "rechazar", renglon_id, cuerpo, request, almacen, almacenamiento
     )
+
+
+@app.post("/api/renglon/{renglon_id}/recepcion/parcial")
+def recibir_parcial_con_la_evidencia(
+    renglon_id: int,
+    cuerpo: ComprasVistas,
+    request: Request,
+    almacen: LecturaDelAlmacen = Depends(obtener_almacen),
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+):
+    """"Llegó solo eso": `en tránsito` → `recibido parcial` con la evidencia (27).
+
+    La salida que el 26 no tenía para una propuesta que trae de menos: 3 de 5.
+    La misma ida y vuelta que confirmar —el servidor recalcula la propuesta y
+    se niega si ya no es la que la persona vio— y la misma firma (regla 3). Lo
+    que faltó vuelve a proponerse en la siguiente lista (ADR 0015).
+    """
+    return _recibir_o_rechazar(
+        "parcial", renglon_id, cuerpo, request, almacen, almacenamiento
+    )
+
+
+class PiezasRecibidas(BaseModel):
+    """Lo único que el navegador manda al recibir a mano: cuántas llegaron.
+
+    **Sin tipo**, a propósito, igual que `CantidadNueva` no lleva `ge=1`: con
+    `int`, pydantic contestaría en inglés, aceptaría `true` como un 1 y `"6"`
+    como un 6. La validación la hace `recepcion.piezas_escritas`, con palabras
+    de persona y con pruebas. Sin el campo es `None`, y eso también se dice.
+    """
+
+    piezas: Any = None
+
+
+@app.post("/api/renglon/{renglon_id}/recepcion/a-mano")
+def recibir_a_mano(
+    renglon_id: int,
+    cuerpo: PiezasRecibidas,
+    request: Request,
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+):
+    """Decir cuántas piezas llegaron, **en total** (ticket 27, ADR 0015).
+
+    Las casillas 1, 3 y 5 del ticket en una ruta: cuántas llegaron de un
+    renglón, **a mano** —sin propuesta del sistema: lo que nunca va a tener
+    una (QuePharma, el 17.7% del catálogo), o la compra de 10 que surtió dos
+    pedidos—, firmado con quién y cuándo. Es **firma y nunca permiso** (regla
+    3).
+
+    - Si el renglón **viene en camino**, pasa a `recibido` o a `recibido
+      parcial` según las piezas. Lo que faltó vuelve en la siguiente lista.
+    - Si **ya se recibió**, la cifra se corrige: la segunda factura (6 hoy, el
+      resto el jueves → 10), o un error de captura. Solo mientras lo que faltó
+      no se haya atendido en una lista posterior; la respuesta avisa que una
+      lista ya armada no se recalcula.
+
+    Respuestas: `422` si las piezas no son un entero de 1 en adelante (se dice
+    por qué, en español); `409` si el `WHERE` dijo que no; `200` con `ok:
+    false` y el **tipo** de la falla si el almacenamiento se cayó (regla 5);
+    `200` con la frase de lo que pasa después.
+    """
+    piezas, motivo = piezas_escritas(cuerpo.piezas)
+    if motivo is not None:
+        return JSONResponse(status_code=422, content={"ok": False, "detalle": motivo})
+
+    negocio = cargar().negocio
+    firma = quien(request)
+    try:
+        # Se lee ANTES solo para la frase: decir "de 6 a 10" necesita el 6. La
+        # decisión es del `WHERE`, no de esta lectura.
+        antes = almacenamiento.leer_renglon(negocio, renglon_id)
+        renglon = almacenamiento.recibir_a_mano(negocio, renglon_id, piezas, firma)
+    except Exception as exc:  # noqa: BLE001 — un borde caído es un hueco
+        log.exception("No se pudo recibir a mano el renglón %s", renglon_id)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "detalle": f"no se pudo recibir a mano ({type(exc).__name__})",
+            },
+        )
+
+    if renglon is None:
+        log.info(
+            "%s quiso decir que del renglón %s de %s llegaron %s piezas y el "
+            "WHERE dijo que no.",
+            firma,
+            renglon_id,
+            negocio,
+            piezas,
+        )
+        ya_recibido = antes is not None and antes.esta_recibido
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "detalle": (
+                    "Esa cifra ya no se puede corregir: lo que faltó ya se volvió a "
+                    "proponer en una lista posterior que se cerró, o el producto ya "
+                    "se volvió a pedir (o la cifra ya era ésa). Si llegó de más, "
+                    "descuéntalo en la lista de hoy. Vuelve a cargar la página."
+                    if ya_recibido
+                    else "Ese renglón no se puede recibir: no viene en camino. "
+                    "Vuelve a cargar la página para ver cómo quedó."
+                ),
+            },
+        )
+
+    corrigio = antes is not None and antes.esta_recibido
+    log.info(
+        "%s dijo que del renglón %s (%s) de %s llegaron %s piezas%s: quedó «%s», "
+        "sin compra de SICAR (ADR 0015).",
+        firma,
+        renglon_id,
+        renglon.propuesto.descripcion,
+        negocio,
+        piezas,
+        f" (antes decía {antes.piezas_recibidas})" if corrigio else "",
+        renglon.estado,
+    )
+    return {
+        "ok": True,
+        "renglon_id": renglon.renglon_id,
+        "estado": renglon.estado,
+        "frase": frase_de_lo_recibido_a_mano(renglon, antes if corrigio else None),
+    }
 
 
 @app.get("/api/pedido-sugerido/{pedido_sugerido_id}/pedido/{pedido_id}/csv")
@@ -2673,6 +2849,7 @@ def _como_json(
     ya_en_camino: dict | None = None,
     recepcion: dict | None = None,
     con_propuesta: frozenset[int] = frozenset(),
+    aun_faltan: frozenset[int] | None = None,
 ) -> dict:
     """La lista guardada, como la pantalla la lee.
 
@@ -2712,6 +2889,11 @@ def _como_json(
         for r in guardado.renglones
     }
     por_pedido = {p.pedido_id: p for p in (pedidos or ())}
+    # LA PARTICIÓN, calculada una vez: la pinta la vista previa y de ella sale
+    # si hay algo que partir, que decide la frase de abajo (ticket 27).
+    la_particion = partir(
+        guardado.por_repartir, comparaciones, precios or {}, puente_configurado()
+    )
     ahora = _ahora()
     # EL N DEL TICKET 25, leído una vez por respuesta. Si el YAML no lo trae
     # bien, los renglones en tránsito se enseñan sin decir si están atrasados.
@@ -2750,6 +2932,7 @@ def _como_json(
                 ahora=ahora,
                 umbral=umbral,
                 con_propuesta=con_propuesta,
+                aun_faltan=aun_faltan,
             )
             for r in guardado.renglones
         ],
@@ -2829,25 +3012,25 @@ def _como_json(
         # no conozca a QuePharma es una propiedad de la instalación, no de un
         # producto.
         "particion": {
-            **particion_como_json(
-                partir(
-                    guardado.por_repartir,
-                    comparaciones,
-                    precios or {},
-                    puente_configurado(),
-                )
-            ),
+            **particion_como_json(la_particion),
             # POR QUÉ NO QUEDA NADA QUE PARTIR, cuando es porque ya se atendió
             # (ticket 25). Solo si de verdad no queda nada por repartir: con
             # renglones abiertos sin precio, "no hay en qué partir" es otra
             # cosa y la pantalla dice lo suyo.
+            #
+            # DESDE EL TICKET 27, también cuando la partición no tiene nada que
+            # partir aunque quede algo abierto SIN PROVEEDOR (hilo abierto 18):
+            # la pantalla caía en su texto de reserva —"esta lista ya se pidió
+            # entera… sus renglones están en tránsito"—, que con lo recibido
+            # mentía dos veces. Ahora lo dice Python, con cuántos faltan.
             "sin_nada_por_repartir": (
                 None
-                if guardado.por_repartir
+                if la_particion.hay
                 else frase_sin_nada_por_repartir(
                     guardado.en_transito,
                     sum(1 for r in guardado.renglones if r.esta_cancelado),
                     sum(1 for r in guardado.renglones if r.esta_recibido),
+                    sin_proveedor=len(la_particion.sin_proveedor),
                 )
             ),
         },
@@ -2874,6 +3057,7 @@ def _como_json(
                         for r in guardado.renglones
                         if r.pedido_id == p.pedido_id and r.esta_recibido
                     ),
+                    renglones_de_la_lista=guardado.renglones,
                 )
                 for p in pedidos
             ]
@@ -2927,6 +3111,7 @@ def _pedido_como_json(
     captura: Captura | None = None,
     en_camino_dentro: int = 0,
     recibidos_dentro: int = 0,
+    renglones_de_la_lista=(),
 ) -> dict:
     """Un pedido ya guardado, como la pantalla lo lee.
 
@@ -2958,6 +3143,15 @@ def _pedido_como_json(
         "proveedor_id": pedido.proveedor_id,
         "tiene_puente": pedido.tiene_puente,
         "estado": pedido.estado,
+        # LOS OTROS DOS ESTADOS (ticket 27, ADR 0015): `recibido` y `recibido
+        # parcial` se CALCULAN de sus renglones y no se guardan. `estado` sigue
+        # diciendo lo guardado —`enviado` es verdad: alguien lo capturó—, y las
+        # tres banderas de abajo siguen significando lo mismo; lo que la
+        # pantalla enseña de la recepción viaja aparte, hecho frase.
+        "estado_a_la_vista": estado_del_pedido(pedido, renglones_de_la_lista),
+        "frase_de_la_recepcion": frase_de_la_recepcion_del_pedido(
+            pedido, renglones_de_la_lista
+        ),
         "es_borrador": pedido.es_borrador,
         "fue_enviado": pedido.fue_enviado,
         # CANCELAR (ticket 25, ADR 0013). La firma y lo que la pantalla dice
@@ -3062,6 +3256,7 @@ def _renglon_como_json(
     ahora: dt.datetime | None = None,
     umbral: int | None = None,
     con_propuesta: frozenset[int] = frozenset(),
+    aun_faltan: frozenset[int] | None = None,
 ) -> dict:
     """Un renglón guardado, como la pantalla lo lee.
 
@@ -3115,6 +3310,18 @@ def _renglon_como_json(
         # arriba. De él cuelgan la marca, los controles apagados y el conteo.
         "esta_recibido": renglon.esta_recibido,
         "frase_de_lo_recibido": frase_de_lo_recibido(renglon),
+        # CUÁNTAS LLEGARON, Y CORREGIRLO (ticket 27). Un renglón de hoy que ya
+        # llegó se puede corregir —la segunda factura, un error de captura—:
+        # ninguna lista posterior lo ha atendido todavía. La garantía es el
+        # `WHERE` de `_CORREGIR_LO_RECIBIDO`.
+        "piezas_recibidas": renglon.piezas_recibidas,
+        "se_puede_corregir": renglon.esta_recibido,
+        "etiqueta_a_mano": ETIQUETA_PARA_CORREGIR if renglon.esta_recibido else None,
+        # LO QUE FALTÓ Y ESTE RENGLÓN TRAE (ticket 27): sin la frase, "pide 6"
+        # con 2 vendidas no se puede verificar. La cifra ya viene de `asdict`.
+        "frase_de_lo_que_falto": frase_de_lo_que_falto(
+            renglon.propuesto.piezas_que_faltaron
+        ),
         "cancelado_por": renglon.cancelado_por,
         "cancelado_en": (
             renglon.cancelado_en.isoformat() if renglon.cancelado_en else None
@@ -3197,13 +3404,20 @@ def _renglon_como_json(
         "pedido_id": renglon.pedido_id,
         **_porque_no_hay_lectura_como_json(renglon, comparacion, precios, corrida),
         **_transito_del_renglon_como_json(
-            renglon, ventana, pedido, ya_en_camino, ahora, umbral, con_propuesta
+            renglon, ventana, pedido, ya_en_camino, ahora, umbral, con_propuesta, aun_faltan
         ),
     }
 
 
 def _transito_del_renglon_como_json(
-    renglon, ventana, pedido, ya_en_camino, ahora, umbral=None, con_propuesta=frozenset()
+    renglon,
+    ventana,
+    pedido,
+    ya_en_camino,
+    ahora,
+    umbral=None,
+    con_propuesta=frozenset(),
+    aun_faltan=None,
 ) -> dict:
     """Las tres frases del ticket 24 que cuelgan de un renglón de la lista.
 
@@ -3275,6 +3489,18 @@ def _transito_del_renglon_como_json(
         salida["ya_viene_en_camino"] = (
             frase_de_ya_en_camino(ya, ahora)
             if ya is not None and renglon.se_puede_repartir
+            else None
+        )
+    # LO QUE FALTÓ… Y YA LLEGÓ (ticket 27): la segunda factura se corrigió
+    # después de armar esta lista. Solo si se pudo leer lo que aún falta
+    # (`None` no afirma nada) y solo mientras el renglón se pueda repartir.
+    if aun_faltan is not None:
+        faltaron = renglon.propuesto.piezas_que_faltaron
+        salida["ya_no_falta"] = (
+            frase_de_lo_que_ya_no_falta(faltaron)
+            if faltaron
+            and renglon.se_puede_repartir
+            and renglon.propuesto.producto_id not in aun_faltan
             else None
         )
     return salida

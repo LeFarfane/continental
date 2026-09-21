@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import datetime as dt
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
@@ -160,6 +160,14 @@ class Renglon:
     tres, se piden tres" es aritmética que el encargado verifica de un vistazo,
     y un renglón que pide 4 en una lista de un solo día con 1 venta no se
     podría verificar sin saber que sus ventas empiezan el martes.
+
+    **`piezas_que_faltaron` son las piezas de un pedido anterior que llegó de
+    menos y que este renglón trae de vuelta** (ticket 27, ADR 0015). Casi
+    siempre cero. Ya van **sumadas** en `cantidad_propuesta` —"se vendieron 2 y
+    faltaron 4, se piden 6"— y se guardan aparte por la misma razón que
+    `piezas_vendidas`: sin la cifra, un 6 al lado de 2 vendidas no se podría
+    verificar. Son **piezas y no ventas**: lo que faltó se sabe como "pedí 10,
+    llegaron 6", no como qué días se vendieron esas 4 (ver el ADR).
     """
 
     producto_id: int
@@ -172,6 +180,7 @@ class Renglon:
     dias_de_cobertura: float | None
     clasificacion: str
     ventas_desde: dt.date | None = None
+    piezas_que_faltaron: int = 0
 
     @property
     def esta_agotado(self) -> bool:
@@ -246,6 +255,7 @@ def calcular_pedido_sugerido(
     catalogo: Sequence[Producto],
     ventas_del_ritmo: Sequence[LineaDeVenta] | None = None,
     reglas: ReglasDeClasificacion | None = None,
+    faltaron: Mapping[int, int] | None = None,
 ) -> PedidoSugerido:
     """Ventas + catálogo → el pedido sugerido, en reposición 1 a 1 y por urgencia.
 
@@ -285,11 +295,21 @@ def calcular_pedido_sugerido(
     lee `config/continental.yml` ni ningún otro archivo. Sin ellas todo sale
     `sin clasificar`, que se muestra siempre y marcado — el default que menos
     daño hace si alguien despliega con el YAML a medias.
+
+    `faltaron` son las piezas que **faltaron** en un recibido parcial, por
+    producto (ticket 27, ADR 0015): se **suman** a lo vendido, y un producto que
+    faltó entra a la lista **aunque no se haya vuelto a vender** —esas piezas se
+    vendieron antes, se pidieron y no llegaron—. Sin una sola venta no hay
+    lista, y lo que faltó espera a la primera que haya: no se pierde, porque
+    nadie lo atendió y la memoria lo sigue trayendo.
     """
     if not ventas:
         return PedidoSugerido(fecha_de_ventas=None, renglones=())
 
     por_producto = _piezas_por_producto(ventas)
+    faltaron = {p: n for p, n in (faltaron or {}).items() if n > 0}
+    for producto_id in faltaron:
+        por_producto.setdefault(producto_id, 0.0)
     ritmo = _ritmo_diario(ventas if ventas_del_ritmo is None else ventas_del_ritmo)
     productos = {p.producto_id: p for p in catalogo}
 
@@ -300,6 +320,7 @@ def calcular_pedido_sugerido(
             productos.get(producto_id),
             ritmo.get(producto_id, 0.0),
             reglas if reglas is not None else ReglasDeClasificacion(),
+            faltaron.get(producto_id, 0),
         )
         for producto_id, piezas in por_producto.items()
     ]
@@ -357,6 +378,7 @@ def _renglon(
     producto: Producto | None,
     ritmo: float,
     reglas: ReglasDeClasificacion,
+    faltaron: int = 0,
 ) -> Renglon:
     """Un renglón, esté o no el producto en el catálogo.
 
@@ -386,7 +408,10 @@ def _renglon(
             else f"Producto {producto_id} — no está en el catálogo"
         ),
         piezas_vendidas=piezas,
-        cantidad_propuesta=_piezas_a_pedir(piezas),
+        # Lo vendido, subido al entero, MÁS lo que faltó (ticket 27): las dos
+        # cifras se guardan aparte para que la suma se pueda verificar.
+        cantidad_propuesta=_piezas_a_pedir(piezas) + faltaron,
+        piezas_que_faltaron=faltaron,
         esta_en_el_catalogo=producto is not None,
         existencia=existencia,
         dias_de_cobertura=_dias_de_cobertura(existencia, ritmo),
@@ -550,6 +575,9 @@ def armar_la_lista(
         catalogo=catalogo,
         ventas_del_ritmo=[v for v in leidas if v.fecha >= desde_del_ritmo],
         reglas=reglas,
+        # Lo que faltó en un recibido parcial (ticket 27, ADR 0015): piezas,
+        # no ventas, y por eso no pasa por `recortar`.
+        faltaron=memoria.faltaron,
     )
     return PedidoSugerido(
         fecha_de_ventas=lista.fecha_de_ventas,

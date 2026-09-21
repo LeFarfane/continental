@@ -730,6 +730,49 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
          END),
  NULL),
 
+-- CUÁNTAS LLEGARON (ticket 27, ADR 0015, migración 0011). Sin ella la lista
+-- del día no se puede leer -`_LEER_RENGLONES` nombra la columna- y recibir a
+-- mano rebotaría. Lo recibido dice cuántas, y cuál es cuál sale de ahí.
+(36,
+ 'Un renglón recibido dice cuántas llegaron, y completo o parcial sale de ahí',
+ 'las restricciones y la columna',
+ (SELECT CASE
+           WHEN NOT EXISTS (SELECT 1 FROM pg_constraint con
+                             WHERE con.conrelid = to_regclass('pedidos.renglon')
+                               AND con.conname = 'ck_renglon_piezas_recibidas')
+                THEN 'NO EXISTE ck_renglon_piezas_recibidas'
+           WHEN NOT EXISTS (SELECT 1 FROM pg_constraint con
+                             WHERE con.conrelid = to_regclass('pedidos.renglon')
+                               AND con.conname = 'ck_renglon_completo_o_parcial')
+                THEN 'NO EXISTE ck_renglon_completo_o_parcial'
+           WHEN NOT EXISTS (SELECT 1 FROM pg_attribute a
+                             WHERE a.attrelid = to_regclass('pedidos.renglon')
+                               AND NOT a.attisdropped
+                               AND a.attname = 'piezas_recibidas')
+                THEN 'falta piezas_recibidas en renglon'
+           ELSE 'las restricciones y la columna'
+         END),
+ NULL),
+
+-- LO QUE FALTÓ Y VUELVE (ticket 27). Sin la columna, armar la lista rebota
+-- -`_INSERTAR_RENGLONES` la escribe- y el lote de la noche se corta.
+(37,
+ 'Un renglón dice cuántas piezas que faltaron antes trae de vuelta',
+ 'la restricción y la columna',
+ (SELECT CASE
+           WHEN NOT EXISTS (SELECT 1 FROM pg_constraint con
+                             WHERE con.conrelid = to_regclass('pedidos.renglon')
+                               AND con.conname = 'ck_renglon_piezas_que_faltaron')
+                THEN 'NO EXISTE ck_renglon_piezas_que_faltaron'
+           WHEN NOT EXISTS (SELECT 1 FROM pg_attribute a
+                             WHERE a.attrelid = to_regclass('pedidos.renglon')
+                               AND NOT a.attisdropped
+                               AND a.attname = 'piezas_que_faltaron')
+                THEN 'falta piezas_que_faltaron en renglon'
+           ELSE 'la restricción y la columna'
+         END),
+ NULL),
+
 -- AVISO y no MAL: una tabla temporal vive en la sesión, no puede leer nada que
 -- el rol no pueda leer ya, y desaparece al desconectarse. El permiso llega por
 -- el TEMPORARY que PUBLIC tiene sobre la base por omisión, y quitarlo sería

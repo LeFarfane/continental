@@ -302,15 +302,16 @@ def test_sin_hora_de_envio_no_se_inventa_que_compra_es_posterior():
 def test_casilla_7_un_producto_que_nunca_aparece_en_compras_lo_dice():
     """606 de 3,429 artículos (17.7%) nunca aparecen en compras: para ésos
     nunca va a haber propuesta, y la pantalla no puede dejarlos esperando sin
-    decirlo. Su salida es el marcado manual (ticket 27), que todavía no existe:
-    la frase dice eso, sin prometer un botón que no hay."""
+    decirlo. Su salida es el marcado manual: hasta el 26 la frase decía que
+    "todavía no" existía; desde el 27 existe, y la frase dice cómo usarlo."""
     [sin] = proponer([_ya(1)], [], productos_con_compras=frozenset({2, 3})).sin_propuesta
 
     assert sin.motivo == MOTIVO_NUNCA_EN_COMPRAS
     frase = frase_del_motivo(MOTIVO_NUNCA_EN_COMPRAS)
     assert "nunca ha aparecido en una compra" in frase or "nunca han aparecido en una compra" in frase
     assert "a mano" in frase
-    assert "todavía no" in frase
+    assert "cuántas piezas llegaron" in frase
+    assert "todavía no" not in frase
 
 
 def test_sin_saber_si_se_compro_alguna_vez_no_se_afirma_que_nunca():
@@ -907,9 +908,15 @@ def test_la_lista_de_compras_de_la_recepcion_no_va_vacia():
 
 
 def test_recibido_sin_compras_es_valido_para_el_marcado_manual_del_27():
-    """La puerta del 27, en el CHECK: recibido y firmado, sin compra de SICAR."""
+    """La puerta del 27, en el CHECK: recibido y firmado, sin compra de SICAR.
+    Desde el 27 dice además cuántas llegaron (las 5 pedidas)."""
     revisar_el_renglon(
-        _columnas(estado=RENGLON_RECIBIDO, recibido_por=DUENO, recibido_en=_local(MARTES))
+        _columnas(
+            estado=RENGLON_RECIBIDO,
+            recibido_por=DUENO,
+            recibido_en=_local(MARTES),
+            piezas_recibidas=5,
+        )
     )
 
 
@@ -1415,7 +1422,9 @@ def test_casilla_7_lo_que_nunca_aparece_en_compras_se_dice(
 
     [grupo] = _abrir(cliente)["recepcion"]["esperan"]
     assert grupo["motivo"] == MOTIVO_NUNCA_EN_COMPRAS
-    assert "todavía no se puede" in grupo["frase"]
+    # Hasta el 26 decía "todavía no se puede"; desde el 27 la salida existe.
+    assert "a mano" in grupo["frase"]
+    assert "cuántas piezas llegaron" in grupo["frase"]
 
 
 def test_un_atrasado_con_propuesta_no_ofrece_devolverlo(
