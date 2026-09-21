@@ -537,6 +537,51 @@ vigila, y el ayudante exige exactamente una hoja y un script. (2) **`/` y
 en `web/app.py`): sin eso un despliegue podía dejar al mostrador con el HTML
 nuevo y el JavaScript de ayer. El navegador revalida y Starlette contesta 304.
 
+**Y desde el ticket 29 la pantalla dice qué pasó cuando algo falla, y qué
+hacer.** El servidor ya fallaba ruidoso desde el primer commit; lo que faltaba
+era la pantalla, y el inventario del ticket (25 rutas y 17 `fetch`, en su
+archivo) encontró que el servidor estaba bien en lo esencial y la pantalla no:
+**un 500 se leía como "el almacén no tiene ni una venta registrada"**, dos
+botones se quedaban apagados para siempre con el HTML de un 502 del túnel, y
+los precios o los pedidos que no se leían se pintaban en silencio como "sin
+consultar" y "sin partir". Ahora:
+
+- **Doyle caído se dice arriba de la tabla**, no abajo en "Módulos": `GET
+  /api/doyle`, aparte de la lista y al mismo tiempo, porque la lista no
+  depende de Doyle y un Doyle colgado no la puede hacer esperar.
+- **Cada falla dice qué hacer**, o que desde ahí no hay nada que hacer y a
+  quién avisarle: `fallas.que_hacer`, seis casos. **El contacto es
+  `a_quien_avisar` en `config/continental.yml`** ("a quien administra
+  atlas"): el JavaScript decía "Avísale a Eddie".
+- **"No hubo ventas" lo afirma el servidor**, distinto de "no pude leer":
+  `ventas` en cada carga dice qué tan recientes son las ventas que sí leyó
+  contra el horario de la cadena. Un lunes por la mañana la lista del viernes
+  dice que es lo más reciente que puede haber y que los domingos la farmacia
+  cierra; si falta un día que ya debía estar, dice que **no sabe por qué** —cero
+  filas no es "cerraron"— y a quién avisarle si la farmacia sí abrió.
+- **Ningún detalle viaja al navegador, y no se prueba ruta por ruta**: el
+  recorrido de `tests/test_fallas.py` toma `app.routes` e inyecta la falla en
+  cada llamada a cada borde (26 rutas, 71 fallas). La ruta de mañana entra
+  sola.
+- **En el JavaScript todo pasa por `respuestaDe`**, que no truena, y las
+  únicas frases de falla que escribe viven en `SIN_RESPUESTA`. Ninguna acción
+  afirma ya "se quedó como estaba" sin respuesta: la petición pudo llegar.
+
+**Dos cosas del 29 que conviene no redescubrir.** (1) **Sin los precios
+leídos no se calcula nada de lo que sale de ellos**: con `{}` el conteo decía
+"5 de 5 sin comparar" y ofrecía completarlos —cuatro visitas a portales por
+renglón, por precios que sí existen—. Lo cazó el recorrido del navegador (la
+novena vez), no el suite. (2) **El reloj entra para una sola pregunta**: si lo
+más reciente del almacén es lo más reciente que puede haber. La lista se sigue
+anclando en `max(fecha)`.
+
+**Con el 29, el módulo de Pedido está completo en código: sus 29 tickets.**
+**No está terminado**: terminado es lo de "Lo que falta, en orden" —un día de
+operación real con la lista armada sola de noche, los precios de los cuatro,
+el pedido capturado leyendo de la pantalla y la recepción propuesta al día
+siguiente—, y eso no ha pasado. Continental ni siquiera está desplegado en
+atlas todavía (`docs/despliegue-en-atlas.md`).
+
 **Lo sugerido NO se guarda y lo decidido SÍ, y ésa es la decisión del ticket.**
 Es la misma pregunta que el 11 resolvió con `cantidad_propuesta` /
 `cantidad_final`, y **aquí la respuesta es distinta a propósito**: la sugerencia
@@ -577,7 +622,20 @@ python iniciar.py     # http://127.0.0.1:8585
 python -m continental.verificar   # los datos de producción, no el código (ticket 17)
 python -m continental.lote        # el lote nocturno, a mano (ticket 18)
 python -m continental.lote --tope-minutos 5   # ...con tope corto, para mirarlo
-pytest                # 1442 pruebas, 0 saltadas, 5.20-5.26 s (2026-09-21, ticket 28)
+pytest                # 1558 pruebas, 0 saltadas, 6.48-8.04 s (2026-09-21, ticket 29)
+                      # 1442 en el 28. Las 116 nuevas son 115 de
+                      # `test_fallas.py` (el qué hacer, el estado de las
+                      # ventas contra el horario de la cadena, los huecos de la
+                      # carga, Doyle aparte, el recorrido de `app.routes` —26
+                      # rutas, 71 fallas inyectadas— y del manejador global,
+                      # el 422, la guardia sobre el código y la pantalla) y 1
+                      # que `test_compila.py` gana sola por `fallas.py`.
+                      # Se ajustaron los tres censos de `fetch('/api/` (15 a
+                      # 16, por `/api/doyle`), con su párrafo. Medido: sin
+                      # `test_fallas.py`, 5.37 s ese mismo rato; las 115 solas,
+                      # 1.36 s. NINGUNA TOCA POSTGRES, NI DOYLE, NI DUERME.
+                      #
+                      # 1442 pruebas, 0 saltadas, 5.20-5.26 s (2026-09-21, ticket 28)
                       # 1395 en el 27. Las 47 nuevas son todas de
                       # `test_pasada_visual.py` (los tres archivos y nada de
                       # fuera, los colores solo en `:root`, el oscuro completo,
@@ -783,6 +841,7 @@ pytest                # 1442 pruebas, 0 saltadas, 5.20-5.26 s (2026-09-21, ticke
 | `src/continental/transito.py` | funciones puras: lo ya pedido + las ventas + un `ahora` -> qué producto se queda fuera de la lista (viene en camino), desde qué día vuelve el que ya llegó (`MemoriaDeLoPedido`), cuánto se ha vendido desde que se pidió, y las frases de la pantalla: "Pedido el martes a NADRO, sin recibir.", la firma, lo vendido y la advertencia de que solo sabe de lo que pasó por Continental (ticket 24, ADR 0012). Desde el 25, **el atraso** —cuántos días lleva, si pasó de N, y el límite que recibe el `WHERE` (`dias_en_transito`, `esta_atrasado`, `enviado_antes_de`)— y las frases de cancelar y de lo que vuelve en la siguiente lista (ADR 0013) |
 | `src/continental/exportar.py` | funciones puras: el pedido guardado + su captura -> los bytes del CSV (`csv_del_pedido`), su nombre (`nombre_del_archivo`) y su `Content-Disposition`. No escribe un archivo: la ruta sirve los bytes. Ahí vive por qué la clave va como `="..."`, medido contra el Excel de la torre (ticket 23) |
 | `src/continental/faltantes.py` | funciones puras: la corrida del lote + las comparaciones -> **por qué** le falta el precio a cada renglón, y **cuáles** va a consultar el botón de completar. Ahí vive la decisión cara del ticket 19: qué cuenta como "faltante", que son ~36 s de navegador por renglón de más si se estira |
+| `src/continental/fallas.py` | funciones puras (ticket 29): **qué hacer** ante cada falla (`que_hacer`, seis casos, con el contacto de `a_quien_avisar` del YAML entrando por argumento), las frases de los huecos de la carga, y **qué tan recientes son las ventas** contra el horario de la cadena (`estado_de_las_ventas`): lo que distingue "el domingo no hay ventas" de "no llegaron". El reloj entra por argumento |
 | `src/continental/latido.py` | el latido a Uptime Kuma, con monitor propio. `mandar_el_latido` **no levanta nunca** y el borde HTTP entra por argumento, así que ninguna prueba manda uno de verdad. El token vive en `KUMA_PUSH_URL_CONTINENTAL` del `.env`, jamás en el YAML |
 
 ## Lo que falta, en orden
@@ -802,7 +861,8 @@ pytest                # 1442 pruebas, 0 saltadas, 5.20-5.26 s (2026-09-21, ticke
    siquiera la nombra, a propósito, porque un `select clase_abc` se llevaría
    por delante la lista del día entera—. El paso 6 del despliegue lo imprime
    como PENDIENTE hasta entonces.
-3. **El módulo de Pedido.**
+3. **El módulo de Pedido.** Completo en código desde el ticket 29 (los 29
+   tickets); lo que falta es desplegarlo y el día de operación real de abajo.
 4. **Absorber la interfaz de Marlowe**, que pasa a ser API como Doyle. Después
    del Pedido: es reescribir una interfaz que ya funciona y no agrega ninguna
    capacidad nueva.

@@ -18,6 +18,13 @@ modulos:
     url: "http://127.0.0.1:8484"
     timeout_seg: 10
 
+# A QUIÉN AVISARLE cuando algo falla y desde la pantalla no hay nada más que
+# hacer (ticket 29): "Si sigue igual, avísale <esto>." Es una FRASE, con su
+# "a" por delante, y no un nombre ni un teléfono escritos en el código: el día
+# que cambie quién administra atlas, cambia aquí y en ningún otro lado. Si
+# falta, la pantalla dice "a quien administra atlas".
+a_quien_avisar: "a quien administra atlas"
+
 # El módulo de Pedido. El porqué de cada número está en
 # docs/decisiones/0002-pedido-sugerido-por-reposicion-de-lo-vendido.md.
 pedido:

@@ -82,6 +82,105 @@ const nota = (id, texto, clase) => {
   p.hidden = !texto;
 };
 
+// ------------------------------------------ cuando no hay respuesta (ticket 29)
+
+// LAS ÚNICAS FRASES DE FALLA QUE ESCRIBE ESTE ARCHIVO, y viven aquí juntas. Todas
+// las demás llegan hechas del servidor —`detalle`, `frase` y `que_hacer`— desde
+// Python, donde hay pruebas. Éstas no pueden: son justo los casos en que NO hay
+// respuesta del servidor, o lo que llegó no es suyo.
+//
+// "Continental no contestó" seguido de que lo apretado seguía igual, que era
+// lo que decían los botones, afirmaba algo que no se sabe: la petición pudo llegar y aplicarse
+// antes de que se perdiera la respuesta (un 524 del túnel pasa a los 100 s con
+// el servidor todavía trabajando). Por eso al guardar se manda a MIRAR.
+const SIN_RESPUESTA = {
+  red: 'No llegó respuesta de Continental: o se cortó la conexión, o Continental no está corriendo.',
+  no_es_de_continental: 'Llegó una respuesta que no es de Continental (código {codigo}): lo que está en medio, el túnel, no lo alcanzó.',
+  al_leer: 'Vuelve a cargar la página en un minuto. Si sigue igual, avísale {a_quien}.',
+  al_guardar: 'No se sabe si se guardó: la petición pudo llegar antes de que se perdiera la respuesta. Vuelve a cargar la página para ver cómo quedó antes de intentarlo otra vez; si sigue igual, avísale {a_quien}.',
+};
+
+// A quién avisarle. Sale de `/api/salud` —del YAML, no de aquí— en cuanto la
+// pantalla carga; mientras tanto, lo que el servidor dice por omisión.
+let A_QUIEN_AVISAR = 'a quien administra atlas';
+
+// TODA respuesta del servidor pasa por aquí, y aquí NUNCA se truena. Devuelve
+// siempre un objeto; si algo salió mal, con `ok: false`, `detalle` y
+// `que_hacer`, igual que las fallas que manda el servidor:
+//
+// - `fetch` rechaza (la red, o Continental apagado): `SIN_RESPUESTA.red`.
+// - Llega algo que no es JSON (el 502 del túnel es HTML): hasta el ticket 29
+//   dos botones se quedaban apagados para siempre con esto, porque su
+//   lectura del JSON estaba fuera del `try`.
+// - Llega un JSON que no es 2xx y no dice `ok` (un servidor viejo): se trata
+//   como falla. Un 500 que se leyera como datos es exactamente cómo la lista
+//   decía "el almacén no tiene ni una venta" sobre un servidor que tronó.
+//
+// `cuando` elige qué hacer: 'al_leer' (la de omisión) o 'al_guardar'.
+const respuestaDe = async (peticion, cuando = 'al_leer') => {
+  const sinRespuesta = (detalle) => ({
+    ok: false,
+    sin_respuesta: true,
+    detalle,
+    que_hacer: SIN_RESPUESTA[cuando].replace('{a_quien}', A_QUIEN_AVISAR),
+  });
+  let respuesta;
+  try {
+    respuesta = await peticion;
+  } catch (e) {
+    return sinRespuesta(SIN_RESPUESTA.red);
+  }
+  const ajena = SIN_RESPUESTA.no_es_de_continental.replace('{codigo}', respuesta.status);
+  let datos;
+  try {
+    datos = await respuesta.json();
+  } catch (e) {
+    return sinRespuesta(ajena);
+  }
+  if (!datos || typeof datos !== 'object' || Array.isArray(datos)) return sinRespuesta(ajena);
+  if (!respuesta.ok && datos.ok !== false) {
+    return { ...sinRespuesta(ajena), ...datos, ok: false };
+  }
+  return datos;
+};
+
+// Una falla, pintada. Lo que dice llega hecho —del servidor, o de
+// `SIN_RESPUESTA`—; aquí solo se acomoda. **No depende solo del color**
+// (ticket 28): lleva un rótulo escrito delante y el qué hacer con su nombre.
+// Con `que_hacer` es una falla de verdad (un borde que no contestó); sin él es
+// un "eso ya no se puede" del servidor, que ya dice qué hacer en su `detalle`.
+// `comoAviso` la rotula "Ojo:" aunque traiga qué hacer: lo que no es una falla
+// de lectura —las ventas que no han llegado— no se pinta como una.
+const notaDeFalla = (id, falla, comoAviso) => {
+  const p = document.getElementById(id);
+  const esFalla = !!falla.que_hacer && !comoAviso;
+  p.className = 'nota falla ' + (esFalla ? 'mal' : 'aviso');
+  const rotulo = document.createElement('b');
+  rotulo.className = 'rotulo';
+  rotulo.textContent = esFalla ? 'Falla:' : 'Ojo:';
+  p.replaceChildren(rotulo, ' ', falla.frase || falla.detalle || '');
+  if (falla.frase && falla.detalle && !falla.frase.includes(falla.detalle)) {
+    const motivo = document.createElement('span');
+    motivo.className = 'motivo';
+    motivo.textContent = ' (' + falla.detalle + ')';
+    p.append(motivo);
+  }
+  if (falla.que_hacer) {
+    const hacer = document.createElement('span');
+    hacer.className = 'que-hacer';
+    const titulo = document.createElement('b');
+    titulo.textContent = 'Qué hacer: ';
+    hacer.append(titulo, falla.que_hacer);
+    p.append(hacer);
+  }
+  p.hidden = false;
+};
+
+// Lo mismo en una sola línea de texto, para los sitios que solo tienen un
+// `textContent` (la nota de la captura, el detalle del cierre).
+const fallaEnUnaLinea = (falla) =>
+  [falla.frase || falla.detalle, falla.que_hacer].filter(Boolean).join(' ');
+
 // Las cifras se escriben cortas: "12" y no "12.0", "2.7" y no "2.7000000001".
 // Solo el granel trae decimales de verdad (5 artículos con `granel = 1`).
 const cifra = (n) => Number.isInteger(n) ? String(n) : n.toFixed(1);
@@ -1033,20 +1132,14 @@ const cerrarLista = async (id, boton, detalle, alCerrarse) => {
   boton.disabled = true;
   detalle.textContent = 'Cerrando…';
 
-  let respuesta;
-  try {
-    respuesta = await fetch('/api/pedido-sugerido/' + id + '/cerrar', { method: 'POST' });
-  } catch (e) {
-    boton.disabled = false;
-    detalle.textContent = 'No se pudo cerrar: Continental no contestó. Inténtalo otra vez.';
-    return;
-  }
-
-  const datos = await respuesta.json();
+  const datos = await respuestaDe(fetch('/api/pedido-sugerido/' + id + '/cerrar',
+    { method: 'POST' }), 'al_guardar');
   if (!datos.ok) {
     // El motivo viene del servidor y es genérico a propósito (regla 5): el
-    // detalle está en la bitácora.
-    detalle.textContent = datos.detalle || 'No se pudo cerrar la lista.';
+    // detalle está en la bitácora. Hasta el ticket 29 el botón se quedaba
+    // apagado aquí para siempre si la respuesta no era JSON.
+    boton.disabled = false;
+    detalle.textContent = fallaEnUnaLinea(datos);
     return;
   }
 
@@ -1060,32 +1153,72 @@ const cerrarLista = async (id, boton, detalle, alCerrarse) => {
   alCerrarse(datos);
 };
 
+// QUÉ TAN RECIENTES SON LAS VENTAS (ticket 29, casilla 3). Todo llega hecho:
+// si es lo más reciente que puede haber (un lunes por la mañana, el viernes),
+// o si falta un día que ya debía estar —y entonces con qué hacer—. Aquí no se
+// mira el reloj ni se decide nada.
+const pintarVentas = (ventas) => {
+  const p = document.getElementById('pedido-ventas');
+  if (!ventas || !ventas.frase) { p.hidden = true; return; }
+  if (ventas.que_hacer) {
+    // Falta un día que ya debía estar, o no hay ni una venta: el servidor LEYÓ
+    // —no es una falla de lectura— y dice qué hacer. Se rotula como aviso.
+    notaDeFalla('pedido-ventas', ventas, true);
+    return;
+  }
+  nota('pedido-ventas', ventas.frase, 'ventas');
+};
+
+// Lo que no se pudo leer y NO tumbó la lista (ticket 29): los precios o los
+// pedidos. Cada aviso llega con su frase —que dice que ese vacío no es un
+// dato— y su qué hacer.
+const pintarAvisos = (avisos) => {
+  const caja = document.getElementById('pedido-avisos');
+  caja.replaceChildren();
+  (avisos || []).forEach((aviso, i) => {
+    const p = document.createElement('p');
+    p.id = 'pedido-aviso-' + i;
+    caja.append(p);
+    notaDeFalla(p.id, aviso);
+  });
+  caja.hidden = !caja.children.length;
+};
+
 async function cargarPedido() {
   const corte = document.getElementById('corte');
   const tabla = document.getElementById('pedido-tabla');
-  let datos;
-
-  try {
-    datos = await (await fetch('/api/pedido-sugerido')).json();
-  } catch (e) {
-    corte.textContent = 'No se pudo armar el pedido sugerido.';
-    nota('pedido-nota', 'Continental no contestó. Vuelve a cargar la página; si sigue igual, avísale a Eddie.', 'mal');
-    return;
-  }
+  let datos = await respuestaDe(fetch('/api/pedido-sugerido'));
 
   // Un hueco con su motivo, nunca una lista vacía: vacío se lee "hoy no se
-  // vendió nada" y el pedido del día no se hace.
+  // vendió nada" y el pedido del día no se hace. Entra aquí TODO lo que no es
+  // la lista: el hueco del servidor, su 500 y la falta de respuesta. Hasta el
+  // ticket 29 el 500 se colaba a la rama de abajo y la pantalla decía que el
+  // almacén no tenía ni una venta.
   if (datos.ok === false) {
+    // Si el servidor mandó su frase, ésa ya dice qué no se pudo armar: el
+    // titular se esconde para no decirlo dos veces (recorrido del ticket 29).
+    // Sin respuesta no hay frase, y el titular da el contexto.
     corte.textContent = 'No se pudo armar el pedido sugerido.';
-    nota('pedido-nota', datos.detalle + '. La lista no está vacía: no se pudo leer. Avísale a Eddie.', 'mal');
+    corte.hidden = !!datos.frase;
+    notaDeFalla('pedido-nota', datos);
     return;
   }
 
+  // Qué tan recientes son las ventas que SÍ se leyeron, dicho por el servidor
+  // (ticket 29): un lunes por la mañana, la lista del viernes es lo normal, y
+  // esto lo dice. Si falta un día que ya debía estar, lo dice también.
+  pintarVentas(datos.ventas);
+
+  // Ni una venta en el almacén: el servidor lo AFIRMA —leyó y no había—, con
+  // su frase en `ventas`. No se escribe nada más.
   if (!datos.fecha_de_ventas) {
-    corte.textContent = 'Todavía no hay ventas de las cuales reponer.';
-    nota('pedido-nota', 'El almacén no tiene ni una venta registrada.', 'aviso');
+    corte.hidden = true;
     return;
   }
+
+  // Lo que se leyó y no tumbó la lista, pero dejó un vacío que no es un dato:
+  // los precios o los pedidos que no se pudieron leer (ticket 29).
+  pintarAvisos(datos.avisos);
 
   // Quiénes son los cuatro y cómo se escribe cada nombre, del SERVIDOR. No
   // escritos a mano aquí: el glosario manda sobre el nombre de cualquier cosa
@@ -1163,7 +1296,9 @@ async function cargarPedido() {
     cerrarLista(datos.pedido_sugerido_id, boton, detalle, (cerrada) => alCerrarse(cerrada)));
 
   if (!datos.renglones.length) {
-    nota('pedido-nota', 'Ese día no se vendió nada que reponer.', 'aviso');
+    // La frase llega de Python (ticket 29): "no se vendió nada" era falso —el
+    // último día de la ventana siempre tiene ventas—.
+    nota('pedido-nota', datos.lista_vacia || '', 'aviso');
     return;
   }
 
@@ -1377,23 +1512,15 @@ async function cargarPedido() {
     boton.disabled = true;
     nota('pedido-accion', '');
 
-    let respuesta;
-    try {
-      respuesta = await (await fetch(
+    const respuesta = await respuestaDe(fetch(
         '/api/pedido-sugerido/' + datos.pedido_sugerido_id + '/partir',
-        { method: 'POST' })).json();
-    } catch (e) {
-      boton.disabled = false;
-      nota('pedido-accion',
-        'Continental no contestó. La lista se quedó como estaba; inténtalo otra vez.', 'mal');
-      return;
-    }
+        { method: 'POST' }), 'al_guardar');
 
     if (!respuesta.ok) {
       boton.disabled = false;
       // Genérico a propósito (regla 5 de CLAUDE.md): el detalle está en la
       // bitácora del servidor.
-      nota('pedido-accion', respuesta.detalle || 'No se pudo partir la lista.', 'aviso');
+      notaDeFalla('pedido-accion', respuesta);
       return;
     }
 
@@ -1425,22 +1552,14 @@ async function cargarPedido() {
     boton.disabled = true;
     nota('pedido-accion', '');
 
-    let respuesta;
-    try {
-      respuesta = await (await fetch(
-        '/api/pedido/' + pedidoId + '/enviar', { method: 'POST' })).json();
-    } catch (e) {
-      boton.disabled = false;
-      nota('pedido-accion',
-        'Continental no contestó. El pedido se quedó como estaba; inténtalo otra vez.', 'mal');
-      return;
-    }
+    const respuesta = await respuestaDe(fetch(
+        '/api/pedido/' + pedidoId + '/enviar', { method: 'POST' }), 'al_guardar');
 
     if (!respuesta.ok) {
       boton.disabled = false;
       // Genérico a propósito (regla 5 de CLAUDE.md): el detalle está en la
       // bitácora del servidor.
-      nota('pedido-accion', respuesta.detalle || 'No se pudo enviar el pedido.', 'aviso');
+      notaDeFalla('pedido-accion', respuesta);
       return;
     }
 
@@ -1476,28 +1595,20 @@ async function cargarPedido() {
     const aviso = casilla.closest('.captura')?.querySelector('.nota-captura');
     if (aviso) aviso.textContent = '';
 
-    let respuesta;
-    try {
-      respuesta = await (await fetch('/api/renglon/' + renglonId + '/capturado', {
+    const respuesta = await respuestaDe(fetch('/api/renglon/' + renglonId + '/capturado', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ capturado: capturado }),
-      })).json();
-    } catch (e) {
-      respuesta = null;
-    }
+      }), 'al_guardar');
 
-    if (!respuesta || !respuesta.ok) {
+    if (!respuesta.ok) {
       // Falla ruidoso (regla 4): la casilla vuelve a como estaba y se dice por
       // qué, al lado de la lista y no arriba de la tabla, que queda lejos.
-      // Genérico a propósito (regla 5): el detalle vive en la bitácora.
+      // Genérico a propósito (regla 5): el detalle vive en la bitácora. Sin
+      // respuesta NO se afirma que la marca no se guardó: se manda a mirar.
       casilla.checked = !capturado;
       casilla.disabled = false;
-      if (aviso) {
-        aviso.textContent = respuesta
-          ? (respuesta.detalle || 'No se pudo guardar la marca.')
-          : 'Continental no contestó: la marca NO se guardó. Inténtalo otra vez.';
-      }
+      if (aviso) aviso.textContent = fallaEnUnaLinea(respuesta);
       return;
     }
 
@@ -1531,22 +1642,14 @@ async function cargarPedido() {
     boton.disabled = true;
     nota('pedido-accion', '');
 
-    let respuesta;
-    try {
-      respuesta = await (await fetch('/api/renglon/' + r.renglon_id + '/precio',
-                                     { method: 'POST' })).json();
-    } catch (e) {
-      boton.disabled = false;
-      nota('pedido-accion',
-        'Continental no contestó. El renglón se quedó como estaba; inténtalo otra vez.', 'mal');
-      return;
-    }
+    const respuesta = await respuestaDe(fetch('/api/renglon/' + r.renglon_id + '/precio',
+                                     { method: 'POST' }), 'al_guardar');
 
     if (!respuesta.ok) {
       boton.disabled = false;
       // El motivo viene del servidor y es genérico a propósito (regla 5): el
       // detalle está en la bitácora.
-      nota('pedido-accion', respuesta.detalle || 'No se pudo consultar el precio.', 'aviso');
+      notaDeFalla('pedido-accion', respuesta);
       return;
     }
 
@@ -1571,21 +1674,13 @@ async function cargarPedido() {
     boton.disabled = true;
     nota('pedido-accion', '');
 
-    let respuesta;
-    try {
-      respuesta = await (await fetch('/api/pedido-sugerido/' +
-        datos.pedido_sugerido_id + '/completar', { method: 'POST' })).json();
-    } catch (e) {
-      boton.disabled = false;
-      nota('pedido-accion',
-        'Continental no contestó. No se consultó nada; inténtalo otra vez.', 'mal');
-      return;
-    }
+    const respuesta = await respuestaDe(fetch('/api/pedido-sugerido/' +
+        datos.pedido_sugerido_id + '/completar', { method: 'POST' }), 'al_guardar');
 
     if (!respuesta.ok) {
       boton.disabled = false;
       // El motivo viene del servidor y es genérico a propósito (regla 5).
-      nota('pedido-accion', respuesta.detalle || 'No se pudo completar.', 'aviso');
+      notaDeFalla('pedido-accion', respuesta);
       return;
     }
 
@@ -1623,20 +1718,12 @@ async function cargarPedido() {
     boton.disabled = true;
     nota('pedido-accion', '');
 
-    let respuesta;
-    try {
-      respuesta = await (await fetch('/api/sesion/' + sesion.proveedor + '/abrir',
-                                     { method: 'POST' })).json();
-    } catch (e) {
-      boton.disabled = false;
-      nota('pedido-accion',
-        'Continental no contestó. No se abrió ninguna sesión; inténtalo otra vez.', 'mal');
-      return;
-    }
+    const respuesta = await respuestaDe(fetch('/api/sesion/' + sesion.proveedor + '/abrir',
+                                     { method: 'POST' }), 'al_guardar');
 
     boton.disabled = false;
     if (!respuesta.ok) {
-      nota('pedido-accion', respuesta.detalle || 'No se pudo abrir la sesión.', 'mal');
+      notaDeFalla('pedido-accion', respuesta);
       return;
     }
     // LO QUE FALTA, DICHO, y por eso no se escribe "listo": lo que hay es una
@@ -1649,20 +1736,12 @@ async function cargarPedido() {
     boton.disabled = true;
     nota('pedido-accion', '');
 
-    let respuesta;
-    try {
-      respuesta = await (await fetch('/api/sesion/' + sesion.proveedor + '/confirmar',
-                                     { method: 'POST' })).json();
-    } catch (e) {
-      boton.disabled = false;
-      nota('pedido-accion',
-        'Continental no contestó. Vuelve a cargar la página antes de confirmar otra vez.', 'mal');
-      return;
-    }
+    const respuesta = await respuestaDe(fetch('/api/sesion/' + sesion.proveedor + '/confirmar',
+                                     { method: 'POST' }), 'al_guardar');
 
     boton.disabled = false;
     if (!respuesta.ok) {
-      nota('pedido-accion', respuesta.detalle || 'No se pudo guardar la sesión.', 'mal');
+      notaDeFalla('pedido-accion', respuesta);
       return;
     }
     // El aviso honesto de Doyle —"la página seguía viéndose como un login"— se
@@ -1679,6 +1758,17 @@ async function cargarPedido() {
   const aplicarPrecios = (renglonId, respuesta) => {
     const r = datos.renglones.find(x => x.renglon_id === renglonId);
     if (!r) return;
+    // LOS PRECIOS QUE NO SE PUDIERON LEER NO BORRAN LOS QUE HAY (ticket 29).
+    // Hasta entonces llegaban como `[]` y se pintaban encima: un renglón con
+    // tres cotizaciones pasaba a "sin consultar" porque una lectura falló.
+    // Ahora llegan `null` con `precios_sin_leer`, y la fila se queda como
+    // estaba —con el estado de la consulta al día— y la falla se dice.
+    if (respuesta.precios_sin_leer) {
+      r.consulta = respuesta.consulta || r.consulta;
+      notaDeFalla('pedido-accion', respuesta.precios_sin_leer);
+      repintar();
+      return;
+    }
     r.precios = respuesta.precios || [];
     // La comparación llega ya hecha: quién gana, la diferencia de cada uno y el
     // ahorro contra NADRO. Recalcularla aquí pondría la regla que decide a
@@ -1718,13 +1808,12 @@ async function cargarPedido() {
   function sondear(renglonId) {
     const desde = Date.now();
     const vuelta = async () => {
-      let respuesta;
-      try {
-        respuesta = await (await fetch('/api/renglon/' + renglonId + '/precio')).json();
-      } catch (e) {
-        nota('pedido-accion',
-          'Se perdió el contacto con Continental mientras se consultaba el precio. ' +
-          'Vuelve a cargar la página: si Doyle terminó, el precio está guardado.', 'aviso');
+      const respuesta = await respuestaDe(fetch('/api/renglon/' + renglonId + '/precio'));
+      if (!respuesta.ok) {
+        // Sin respuesta, o un 500: la fila se queda como estaba —no se pinta
+        // una respuesta que no es de precios— y se deja de preguntar. Lo que
+        // Doyle haya contestado se guarda solo, del lado del servidor.
+        notaDeFalla('pedido-accion', respuesta);
         return;
       }
 
@@ -2077,23 +2166,15 @@ const pintarRecepcion = (recepcion) => {
 const recibirORechazar = async (accion, renglonId, compras, boton) => {
   boton.disabled = true;
   nota('pedido-accion', '');
-  let respuesta;
-  try {
-    respuesta = await (await fetch('/api/renglon/' + renglonId + '/recepcion/' + accion, {
+  const respuesta = await respuestaDe(fetch('/api/renglon/' + renglonId + '/recepcion/' + accion, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ compras }),
-    })).json();
-  } catch (e) {
-    boton.disabled = false;
-    nota('pedido-accion',
-      'Continental no contestó. El renglón sigue como estaba; inténtalo otra vez.', 'mal');
-    return;
-  }
+    }), 'al_guardar');
   if (!respuesta.ok) {
     boton.disabled = false;
     // Genérico a propósito (regla 5): el detalle está en la bitácora.
-    nota('pedido-accion', respuesta.detalle || 'No se pudo guardar.', 'aviso');
+    notaDeFalla('pedido-accion', respuesta);
     return;
   }
   await cargarPedido();
@@ -2140,23 +2221,15 @@ const recibirAMano = async (renglonId, escrito, boton) => {
   const piezas = escrito === '' ? null : (Number.isFinite(numero) ? numero : escrito);
   boton.disabled = true;
   nota('pedido-accion', '');
-  let respuesta;
-  try {
-    respuesta = await (await fetch('/api/renglon/' + renglonId + '/recepcion/a-mano', {
+  const respuesta = await respuestaDe(fetch('/api/renglon/' + renglonId + '/recepcion/a-mano', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ piezas }),
-    })).json();
-  } catch (e) {
-    boton.disabled = false;
-    nota('pedido-accion',
-      'Continental no contestó. El renglón sigue como estaba; inténtalo otra vez.', 'mal');
-    return;
-  }
+    }), 'al_guardar');
   if (!respuesta.ok) {
     boton.disabled = false;
     // Genérico a propósito (regla 5): el detalle está en la bitácora.
-    nota('pedido-accion', respuesta.detalle || 'No se pudo guardar.', 'aviso');
+    notaDeFalla('pedido-accion', respuesta);
     return;
   }
   await cargarPedido();
@@ -2174,20 +2247,12 @@ const recibirAMano = async (renglonId, escrito, boton) => {
 const cancelarPedido = async (pedidoId, boton) => {
   boton.disabled = true;
   nota('pedido-accion', '');
-  let respuesta;
-  try {
-    respuesta = await (await fetch('/api/pedido/' + pedidoId + '/cancelar',
-      { method: 'POST' })).json();
-  } catch (e) {
-    boton.disabled = false;
-    nota('pedido-accion',
-      'Continental no contestó. El pedido se quedó como estaba; inténtalo otra vez.', 'mal');
-    return;
-  }
+  const respuesta = await respuestaDe(fetch('/api/pedido/' + pedidoId + '/cancelar',
+      { method: 'POST' }), 'al_guardar');
   if (!respuesta.ok) {
     boton.disabled = false;
     // Genérico a propósito (regla 5): el detalle está en la bitácora.
-    nota('pedido-accion', respuesta.detalle || 'No se pudo cancelar el pedido.', 'aviso');
+    notaDeFalla('pedido-accion', respuesta);
     return;
   }
   await cargarPedido();
@@ -2197,19 +2262,11 @@ const cancelarPedido = async (pedidoId, boton) => {
 const devolverAtrasado = async (renglonId, boton) => {
   boton.disabled = true;
   nota('pedido-accion', '');
-  let respuesta;
-  try {
-    respuesta = await (await fetch('/api/renglon/' + renglonId + '/devolver-atrasado',
-      { method: 'POST' })).json();
-  } catch (e) {
-    boton.disabled = false;
-    nota('pedido-accion',
-      'Continental no contestó. El renglón sigue en camino; inténtalo otra vez.', 'mal');
-    return;
-  }
+  const respuesta = await respuestaDe(fetch('/api/renglon/' + renglonId + '/devolver-atrasado',
+      { method: 'POST' }), 'al_guardar');
   if (!respuesta.ok) {
     boton.disabled = false;
-    nota('pedido-accion', respuesta.detalle || 'No se pudo devolver el renglón.', 'aviso');
+    notaDeFalla('pedido-accion', respuesta);
     return;
   }
   await cargarPedido();
@@ -3076,25 +3133,15 @@ const moverRenglon = async (id, ruta, control, alTerminar, cuerpo, alFallar) => 
     peticion.body = JSON.stringify(cuerpo);
   }
 
-  const fallo = (texto, clase) => {
-    control.disabled = false;
-    if (alFallar) alFallar();
-    nota('pedido-accion', texto, clase);
-  };
-
-  let respuesta;
-  try {
-    respuesta = await fetch('/api/renglon/' + id + ruta, peticion);
-  } catch (e) {
-    fallo('Continental no contestó. El renglón se quedó como estaba; inténtalo otra vez.', 'mal');
-    return;
-  }
-
-  const datos = await respuesta.json();
+  // Hasta el ticket 29 la lectura del JSON iba fuera del `try`: con el HTML de un 502
+  // el control se quedaba apagado y la pantalla no decía nada.
+  const datos = await respuestaDe(fetch('/api/renglon/' + id + ruta, peticion), 'al_guardar');
   if (!datos.ok) {
     // El motivo viene del servidor y es genérico a propósito (regla 5): el
     // detalle está en la bitácora.
-    fallo(datos.detalle || 'No se pudo mover el renglón.', 'aviso');
+    control.disabled = false;
+    if (alFallar) alFallar();
+    notaDeFalla('pedido-accion', datos);
     return;
   }
   alTerminar(datos);
@@ -3103,25 +3150,46 @@ const moverRenglon = async (id, ruta, control, alTerminar, cuerpo, alFallar) => 
 // ------------------------------------------------------------- el esqueleto
 
 async function cargar() {
-  try {
-    const salud = await (await fetch('/api/salud')).json();
+  const salud = await respuestaDe(fetch('/api/salud'));
+  if (salud.ok) {
+    // A quién avisarle, del YAML: lo usan las frases de `SIN_RESPUESTA`.
+    if (salud.a_quien_avisar) A_QUIEN_AVISAR = salud.a_quien_avisar;
     pintar('estado', [
       fila('Continental ' + salud.version, true, 'negocio: ' + salud.negocio),
       fila('Entrando como', null, salud.quien),
     ]);
-  } catch (e) {
-    pintar('estado', [fila('Continental no contesta', false)]);
+  } else {
+    // Hasta el ticket 29 un 500 pintaba "Continental undefined" en verde.
+    pintar('estado', [fila('Continental no contesta', false, salud.detalle)]);
   }
 
-  try {
-    const { modulos } = await (await fetch('/api/modulos')).json();
-    pintar('modulos', modulos.length
-      ? modulos.map(m => fila(m.nombre, m.ok, m.detalle || m.url))
+  const respuesta = await respuestaDe(fetch('/api/modulos'));
+  if (Array.isArray(respuesta.modulos)) {
+    pintar('modulos', respuesta.modulos.length
+      ? respuesta.modulos.map(m => fila(m.nombre, m.ok, m.detalle || m.url))
       : [fila('Ninguno configurado', null)]);
-  } catch (e) {
-    pintar('modulos', [fila('No se pudo consultar', false)]);
+  } else {
+    pintar('modulos', [fila('No se pudo consultar', false, respuesta.detalle)]);
   }
 }
 
+// ¿DOYLE CONTESTA? (ticket 29, casilla 1). Aparte de la lista y al mismo
+// tiempo: la lista no depende de Doyle —los precios guardados se leen de la
+// base— y un Doyle colgado no la puede hacer esperar. Si no contesta, arriba
+// de la tabla se dice que no hay precios nuevos, por qué y qué
+// hacer; todo eso llega hecho del servidor.
+async function revisarDoyle() {
+  const doyle = await respuestaDe(fetch('/api/doyle'));
+  // Sin respuesta del servidor no se sabe nada de Doyle, y la carga de la
+  // lista ya lo va a decir en su propia nota: no se repite aquí.
+  if (doyle.sin_respuesta) return;
+  if (doyle.ok === false || doyle.contesta === false) {
+    notaDeFalla('pedido-doyle', doyle);
+    return;
+  }
+  document.getElementById('pedido-doyle').hidden = true;
+}
+
 cargarPedido();
+revisarDoyle();
 cargar();

@@ -365,7 +365,11 @@ def test_la_pantalla_pinta_la_existencia_del_renglon_y_no_la_vuelve_a_buscar(cli
     # La del ticket 27: recibir a mano —o corregir cuántas llegaron—, que
     # también vuelve a `cargarPedido`. Recibir parcial con la evidencia NO
     # suma: reusa la llamada de confirmar y rechazar.
-    assert portada.count("fetch('/api/") == 15
+    #
+    # La del ticket 29: `/api/doyle`, que pregunta si Doyle contesta APARTE de
+    # la lista y al mismo tiempo —la lista no depende de Doyle, y un Doyle
+    # colgado no la puede hacer esperar—. No vuelve a pedir la lista.
+    assert portada.count("fetch('/api/") == 16
     assert portada.count("fetch('/api/pedido-sugerido')") == 1
 
 

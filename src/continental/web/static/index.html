@@ -14,6 +14,17 @@
   <section>
     <h2>Pedido sugerido</h2>
     <p class="corte" id="corte">Armando la lista…</p>
+    <!-- QUÉ TAN RECIENTES SON LAS VENTAS (ticket 29). Pegado al corte porque
+         lo explica: la lista del viernes vista un lunes por la mañana dice si
+         eso es lo normal o si falta algo que ya debía haber llegado. -->
+    <p class="nota" id="pedido-ventas" hidden></p>
+    <!-- DOYLE NO CONTESTA (ticket 29). Arriba de la tabla y no abajo en
+         "Módulos", que es donde se decía antes: quien trabaja la lista tiene
+         que saber que los precios no están disponibles antes de mirarlos. -->
+    <p class="nota" id="pedido-doyle" hidden></p>
+    <!-- Lo que no se pudo leer y NO tumbó la lista: los precios o los pedidos
+         guardados. Sin esto su vacío se leería como un dato. -->
+    <div id="pedido-avisos" hidden></div>
     <p class="armado" id="armado" hidden></p>
     <div class="cierre" id="cierre" hidden>
       <button type="button" id="cerrar">Cerrar la lista</button>

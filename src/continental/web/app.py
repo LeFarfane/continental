@@ -19,6 +19,7 @@ from typing import Any
 
 import httpx
 from fastapi import Depends, FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -61,6 +62,21 @@ from continental.exportar import (
     csv_del_pedido,
     disposicion_de_descarga,
     nombre_del_archivo,
+)
+from continental.fallas import (
+    AL_GUARDAR,
+    AL_LEER,
+    CONFIGURACION,
+    DOYLE,
+    PETICION,
+    SERVIDOR,
+    estado_de_las_ventas,
+    frase_de_doyle_caido,
+    frase_de_la_lista_vacia,
+    frase_de_pedidos_sin_leer,
+    frase_de_precios_sin_leer,
+    frase_del_hueco,
+    que_hacer,
 )
 from continental.faltantes import (
     NUNCA_SE_CONSULTO,
@@ -185,6 +201,20 @@ def quien(request: Request) -> str:
     return request.headers.get("Cf-Access-Authenticated-User-Email") or "sin-identificar"
 
 
+def _que_hacer(caso: str) -> str:
+    """Qué puede hacer la persona ante esa falla (ticket 29, `fallas.que_hacer`).
+
+    A quién avisarle sale del YAML (`a_quien_avisar`) y no de un nombre escrito
+    aquí: `cargar()` está cacheado, así que no relee el archivo por petición.
+    """
+    return que_hacer(caso, cargar().a_quien_avisar)
+
+
+#: Lo que dice el 500 genérico. Es una frase fija a propósito: el detalle de
+#: una excepción que nadie atrapó es justo lo que no puede salir de aquí.
+ALGO_FALLO = "Algo falló del lado del servidor."
+
+
 @app.exception_handler(Exception)
 async def error_generico(request: Request, exc: Exception):
     """El detalle va a la consola del servidor; al navegador, un mensaje corto.
@@ -192,11 +222,53 @@ async def error_generico(request: Request, exc: Exception):
     Esto corre detrás de un túnel: un `str(exc)` de SQLAlchemy lleva la cadena
     de conexión con contraseña. Doyle puede darse el lujo de devolver el texto
     del error porque solo escucha en 127.0.0.1; aquí no.
+
+    **Lleva `ok: false` desde el ticket 29**, con la misma forma que cualquier
+    otra falla —`detalle`, `frase` y `que_hacer`—. Hasta entonces era
+    `{"error": …}` a secas, y la pantalla, que pregunta por `ok`, lo leía como
+    una lista sin ventas: "el almacén no tiene ni una venta registrada" sobre un
+    servidor que había tronado. `error` se conserva por quien ya lo lea.
     """
     log.exception("Error atendiendo %s %s", request.method, request.url.path)
     return JSONResponse(
         status_code=500,
-        content={"error": "Algo falló del lado del servidor. Revisa la bitácora."},
+        content={
+            "ok": False,
+            "error": ALGO_FALLO + " Revisa la bitácora.",
+            "detalle": ALGO_FALLO,
+            "frase": (
+                ALGO_FALLO + " Esta respuesta no trae datos: lo que no se vea en "
+                "la pantalla no quiere decir que no exista, quiere decir que no "
+                "se pudo leer."
+            ),
+            "que_hacer": _que_hacer(SERVIDOR),
+        },
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def peticion_con_otra_forma(request: Request, exc: RequestValidationError):
+    """Un cuerpo que no tiene la forma que la ruta espera: el 422 de validación.
+
+    El de FastAPI contesta en inglés, sin `ok` ni `detalle`, y **devuelve lo
+    que se le mandó**. Lo mandado no es un secreto del servidor, pero la forma
+    es la de las demás fallas desde el ticket 29: `ok: false`, un motivo corto
+    y qué hacer. Lo que pydantic dijo, entero, a la bitácora. En la práctica
+    esto pasa con una pantalla vieja contra un servidor nuevo.
+    """
+    log.warning(
+        "Petición con otra forma en %s %s: %s",
+        request.method,
+        request.url.path,
+        exc.errors(),
+    )
+    return JSONResponse(
+        status_code=422,
+        content={
+            "ok": False,
+            "detalle": "la petición no tiene la forma que el servidor espera",
+            "que_hacer": _que_hacer(PETICION),
+        },
     )
 
 
@@ -210,6 +282,10 @@ async def salud(request: Request):
         "negocio": ajustes.negocio,
         "quien": quien(request),
         "modulos": sorted(ajustes.modulos),
+        # A quién avisarle (ticket 29). Viaja aquí porque la pantalla lo
+        # necesita justo cuando NO hay respuesta del servidor: lo aprende al
+        # cargar y lo usa en sus propias frases de "no llegó respuesta".
+        "a_quien_avisar": ajustes.a_quien_avisar,
     }
 
 
@@ -295,6 +371,40 @@ def bordes(
     return {"bordes": resultado}
 
 
+@app.get("/api/doyle")
+def doyle_contesta(doyle: ClienteDeDoyle = Depends(obtener_doyle)):
+    """¿Doyle contesta? La pregunta de la casilla 1 del ticket 29, aparte de la lista.
+
+    **La lista no depende de Doyle** —los precios que ya estaban guardados se
+    leen de `pedidos`— y por eso esto es una ruta aparte y no una lectura más
+    dentro de `GET /api/pedido-sugerido`: un Doyle colgado haría esperar a la
+    lista entera sus diez segundos de timeout, y lo que la casilla pide es
+    justo lo contrario, que la lista **igual se vea**. La pantalla pide las dos
+    a la vez y pinta cada una cuando llega.
+
+    `ok` es verdadero también cuando Doyle no contesta: la pregunta se atendió y
+    la respuesta es "no". Lo que falló se dice en `contesta`, con su motivo
+    —el TIPO, nunca el texto (regla 5)— y qué hacer.
+
+    Pregunta por las sesiones porque es la llamada corta que el cliente ya
+    tiene (`/api/bordes` hace lo mismo): ningún portal se visita. Es `def` por
+    lo mismo que `bordes`: el cliente de Doyle es síncrono.
+    """
+    try:
+        doyle.sesiones()
+    except Exception as exc:  # noqa: BLE001 — Doyle caído es un hueco, no un 500
+        log.exception("Doyle no contestó")
+        detalle = f"Doyle no responde ({type(exc).__name__})"
+        return {
+            "ok": True,
+            "contesta": False,
+            "detalle": detalle,
+            "frase": frase_de_doyle_caido(detalle),
+            "que_hacer": _que_hacer(DOYLE),
+        }
+    return {"ok": True, "contesta": True, "frase": None, "que_hacer": None}
+
+
 @app.get("/api/pedido-sugerido")
 def pedido_sugerido(
     almacen: LecturaDelAlmacen = Depends(obtener_almacen),
@@ -362,12 +472,22 @@ def pedido_sugerido(
         log.exception("El almacén no contestó al preguntar por la última venta")
         return _hueco(f"el almacén no contestó ({type(exc).__name__})")
 
+    # QUÉ TAN RECIENTES SON LAS VENTAS QUE SÍ SE LEYERON (ticket 29). Es un
+    # hecho que el servidor afirma —leyó, y esto es lo que hay—, distinto del
+    # hueco de arriba. El reloj entra solo para decir si lo más reciente es lo
+    # más reciente que puede haber; la lista se sigue anclando en `ultima`.
+    ventas = estado_de_las_ventas(ultima, _ahora(), cargar().a_quien_avisar)
+
     if ultima is None:
-        # Un día sin ventas existe de verdad: la farmacia cierra los domingos y
-        # no hay una sola venta en domingo en 33 meses. No se guarda una lista
-        # vacía —ocuparía el UNIQUE del día y el rol no puede borrarla— y se
-        # distingue de la falla porque `ok` sigue siendo verdadero.
-        return _sin_ventas()
+        # Un almacén sin una sola venta existe de verdad (una instalación
+        # nueva). No se guarda una lista vacía —ocuparía el UNIQUE del día y el
+        # rol no puede borrarla— y se distingue de la falla porque `ok` sigue
+        # siendo verdadero y `ventas` lo afirma con su frase.
+        #
+        # OJO: esto NO es "el domingo". Un domingo no llega aquí: la lista se
+        # ancla en `max(fecha)`, que es el último día que SÍ tuvo ventas, y
+        # `ventas` dice si eso es lo normal para hoy.
+        return _sin_ventas(ventas)
 
     try:
         # Primero vencer, después abrir. El orden importa: si se abriera
@@ -437,16 +557,35 @@ def pedido_sugerido(
     # Su falla es un hueco y no tumba la lista: un pedido sugerido sin precios
     # todavía sirve para pedir, y la quinta casilla del ticket dice que un
     # precio que no se pudo leer se ve como hueco, nunca como cero.
+    # LO QUE NO SE PUDO LEER Y NO TUMBA LA LISTA (ticket 29). Cada lectura de
+    # abajo que falla deja la lista viéndose —sirve para pedir— y agrega aquí
+    # su aviso, para que el vacío que deja no se lea como un dato.
+    avisos: list[dict] = []
+    precios_sin_leer = False
+
     try:
         precios = almacenamiento.precios_de_la_lista(
             negocio, guardado.pedido_sugerido_id
         )
-    except Exception:  # noqa: BLE001 — sin precios la lista sigue sirviendo
+    except Exception as exc:  # noqa: BLE001 — sin precios la lista sigue sirviendo
         log.exception(
             "No se pudieron leer los precios congelados de la lista %s",
             guardado.pedido_sugerido_id,
         )
+        # HASTA EL TICKET 29 ESTO ERA `{}` EN SILENCIO, y la tabla entera decía
+        # "nadie lo consultó". Se sigue pintando sin precios —no hay otros—,
+        # pero con un aviso arriba que dice que esos huecos no son de verdad.
         precios = {}
+        precios_sin_leer = True
+        avisos.append(
+            {
+                "detalle": (
+                    f"no se pudieron leer los precios guardados ({type(exc).__name__})"
+                ),
+                "frase": frase_de_precios_sin_leer(),
+                "que_hacer": _que_hacer(AL_LEER),
+            }
+        )
 
     # Los pedidos en que ya se partió esta lista (ticket 20). Una consulta más
     # por carga, de un puñado de filas -- como mucho una por proveedor--, y
@@ -461,12 +600,23 @@ def pedido_sugerido(
         pedidos = almacenamiento.pedidos_de_la_lista(
             negocio, guardado.pedido_sugerido_id
         )
-    except Exception:  # noqa: BLE001 — sin los pedidos la lista sigue sirviendo
+    except Exception as exc:  # noqa: BLE001 — sin los pedidos la lista sigue sirviendo
         log.exception(
             "No se pudieron leer los pedidos de la lista %s",
             guardado.pedido_sugerido_id,
         )
         pedidos = None
+        # La pantalla pinta `null` igual que "todavía no se parte" y ofrece
+        # partir: sin este aviso, sobre una lista que quizá ya se envió.
+        avisos.append(
+            {
+                "detalle": (
+                    f"no se pudieron leer los pedidos de la lista ({type(exc).__name__})"
+                ),
+                "frase": frase_de_pedidos_sin_leer(),
+                "que_hacer": _que_hacer(AL_LEER),
+            }
+        )
 
     # LO QUE VIENE EN CAMINO DE LISTAS ANTERIORES (ticket 24, casillas 2, 4 y
     # 5). Viaja en la MISMA respuesta que la lista por la razón de siempre: dos
@@ -489,7 +639,7 @@ def pedido_sugerido(
         pedidos_con_algo_recibido=con_algo_recibido,
     )
 
-    return _como_json(
+    respuesta = _como_json(
         guardado,
         precios,
         _ultima_corrida(almacenamiento, negocio, guardado.pedido_sugerido_id),
@@ -500,6 +650,32 @@ def pedido_sugerido(
         con_propuesta=con_propuesta,
         aun_faltan=aun_faltan,
     )
+    # LO QUE SOLO TRAE LA CARGA (ticket 29), igual que `en_camino`: partir,
+    # enviar y tachar no lo cambian y la pantalla lo pinta una vez.
+    respuesta["ventas"] = ventas
+    respuesta["avisos"] = avisos
+    # Una lista vacía que SÍ se leyó dice por qué está vacía, con palabras de
+    # Python: "no se vendió nada" sería falso —su último día tiene ventas—.
+    respuesta["lista_vacia"] = (
+        None
+        if guardado.renglones
+        else frase_de_la_lista_vacia(guardado.ventana.desde, guardado.ventana.hasta)
+    )
+    if precios_sin_leer:
+        # SIN LOS PRECIOS, LO QUE SALE DE ELLOS SE INVENTARÍA. Lo cazó el
+        # recorrido del navegador del ticket 29: con `{}` el conteo decía "5 de
+        # 5 sin comparar", cada renglón "nadie le ha pedido el precio", y el
+        # botón ofrecía completar los cinco — cuatro visitas a portales ajenos
+        # por renglón, por precios que sí existen. Viajan `null`, como ya hacen
+        # las respuestas de un renglón cuando no pueden leerlos, y el aviso de
+        # arriba dice por qué.
+        respuesta["conteo_de_precios"] = None
+        respuesta["faltantes"] = None
+        respuesta["sesiones_caducadas"] = []
+        for renglon in respuesta["renglones"]:
+            renglon.pop("porque_no_hay_lectura", None)
+            renglon["huecos_reintentables"] = []
+    return respuesta
 
 
 def _la_recepcion(
@@ -530,7 +706,7 @@ def _la_recepcion(
     except Exception as exc:  # noqa: BLE001 — sin la recepción, la lista sigue
         log.exception("No se pudo leer lo que está en tránsito para la recepción")
         return (
-            recepcion_con_hueco(
+            _recepcion_con_hueco(
                 f"no se pudo leer lo que viene en camino ({type(exc).__name__})"
             ),
             frozenset(),
@@ -546,7 +722,7 @@ def _la_recepcion(
     except Exception as exc:  # noqa: BLE001
         log.exception("No se pudo leer lo ya recibido para la recepción")
         return (
-            recepcion_con_hueco(
+            _recepcion_con_hueco(
                 f"no se pudo leer lo ya recibido ({type(exc).__name__})"
             ),
             frozenset(),
@@ -562,7 +738,7 @@ def _la_recepcion(
         except Exception as exc:  # noqa: BLE001
             log.exception("No se pudieron leer las compras para la recepción")
             return (
-                recepcion_con_hueco(
+                _recepcion_con_hueco(
                     f"no se pudieron leer las compras ({type(exc).__name__})"
                 ),
                 frozenset(),
@@ -630,7 +806,7 @@ def _lo_que_viene_en_camino(
     except Exception as exc:  # noqa: BLE001 — sin el bloque, la lista sigue sirviendo
         log.exception("No se pudo leer lo que viene en camino para %s", negocio)
         return (
-            en_camino_con_hueco(
+            _en_camino_con_hueco(
                 f"no se pudo leer lo que viene en camino ({type(exc).__name__})"
             ),
             {},
@@ -728,6 +904,7 @@ def cerrar_pedido_sugerido(
             content={
                 "ok": False,
                 "detalle": f"no se pudo cerrar la lista ({type(exc).__name__})",
+                "que_hacer": _que_hacer(AL_GUARDAR),
             },
         )
 
@@ -1152,6 +1329,7 @@ def partir_en_pedidos(
             content={
                 "ok": False,
                 "detalle": f"no se pudo partir la lista ({type(exc).__name__})",
+                "que_hacer": _que_hacer(AL_GUARDAR),
             },
         )
 
@@ -1261,6 +1439,7 @@ def enviar_el_pedido(
             content={
                 "ok": False,
                 "detalle": f"no se pudo enviar el pedido ({type(exc).__name__})",
+                "que_hacer": _que_hacer(AL_GUARDAR),
             },
         )
 
@@ -1311,6 +1490,7 @@ def enviar_el_pedido(
             content={
                 "ok": False,
                 "detalle": "el pedido se envió, pero no se pudo releer la lista",
+                "que_hacer": _que_hacer(AL_LEER),
             },
         )
     return _como_json(
@@ -1358,6 +1538,7 @@ def cancelar_el_pedido(
             content={
                 "ok": False,
                 "detalle": f"no se pudo cancelar el pedido ({type(exc).__name__})",
+                "que_hacer": _que_hacer(AL_GUARDAR),
             },
         )
 
@@ -1436,6 +1617,7 @@ def devolver_el_renglon_atrasado(
             content={
                 "ok": False,
                 "detalle": f"no se puede decir qué está atrasado: {detalle_del_umbral}",
+                "que_hacer": _que_hacer(CONFIGURACION),
             },
         )
 
@@ -1452,6 +1634,7 @@ def devolver_el_renglon_atrasado(
                 "detalle": (
                     f"no se pudo devolver el renglón a la lista ({type(exc).__name__})"
                 ),
+                "que_hacer": _que_hacer(AL_GUARDAR),
             },
         )
 
@@ -1604,6 +1787,7 @@ def _recibir_o_rechazar(
                 "detalle": (
                     f"no se pudo {accion} la recepción ({type(exc).__name__})"
                 ),
+                "que_hacer": _que_hacer(AL_GUARDAR),
             },
         )
 
@@ -1768,6 +1952,7 @@ def recibir_a_mano(
             content={
                 "ok": False,
                 "detalle": f"no se pudo recibir a mano ({type(exc).__name__})",
+                "que_hacer": _que_hacer(AL_GUARDAR),
             },
         )
 
@@ -1878,6 +2063,7 @@ def exportar_el_pedido(
             content={
                 "ok": False,
                 "detalle": f"no se pudo armar el archivo del pedido ({type(exc).__name__})",
+                "que_hacer": _que_hacer(AL_LEER),
             },
         )
 
@@ -1971,6 +2157,7 @@ def marcar_el_renglon_como_capturado(
             content={
                 "ok": False,
                 "detalle": f"no se pudo {verbo} el renglón ({type(exc).__name__})",
+                "que_hacer": _que_hacer(AL_GUARDAR),
             },
         )
 
@@ -2072,6 +2259,7 @@ def consultar_el_precio(
             content={
                 "ok": False,
                 "detalle": f"no se pudo leer el renglón ({type(exc).__name__})",
+                "que_hacer": _que_hacer(AL_LEER),
             },
         )
 
@@ -2222,6 +2410,7 @@ def completar_lo_que_falta(
             content={
                 "ok": False,
                 "detalle": f"no se pudo leer la lista ({type(exc).__name__})",
+                "que_hacer": _que_hacer(AL_LEER),
             },
         )
 
@@ -2257,6 +2446,7 @@ def completar_lo_que_falta(
                     "no se pudieron leer los precios guardados, así que no se "
                     "sabe cuáles faltan"
                 ),
+                "que_hacer": _que_hacer(AL_LEER),
             },
         )
 
@@ -2420,6 +2610,7 @@ def abrir_la_sesion(
                     f"{nombre_del_proveedor(proveedor)} ({type(exc).__name__}). "
                     "Mira si está encendido."
                 ),
+                "que_hacer": _que_hacer(DOYLE),
             },
         )
 
@@ -2484,6 +2675,7 @@ def confirmar_la_sesion(
                     "Puede que la ventana se cerrara antes de confirmar: "
                     "vuelve a darle a «Abrir sesión»."
                 ),
+                "que_hacer": _que_hacer(DOYLE),
             },
         )
 
@@ -2540,19 +2732,30 @@ def _cantidad_a_pedir(almacenamiento, negocio: str, renglon_id: int) -> int | No
     return None if renglon is None else renglon.cantidad_a_pedir
 
 
-def _precios_del_renglon(almacenamiento, negocio: str, renglon_id: int):
-    """Lo congelado de un renglón, o nada si el almacenamiento no contestó.
+@dataclasses.dataclass(frozen=True)
+class _SinLeer:
+    """Una lectura que falló, con su motivo corto (el tipo, nunca el texto)."""
 
-    Una tupla vacía cuando la lectura falla y no una excepción hacia arriba: el
-    estado de la consulta sigue siendo información aunque la tabla no conteste,
-    y la falla ya quedó entera en la bitácora. Lo que no puede pasar es que un
-    borde caído deje la pantalla sin decir nada (regla 4).
+    detalle: str
+
+
+def _precios_del_renglon(almacenamiento, negocio: str, renglon_id: int):
+    """Lo congelado de un renglón, o `_SinLeer` si el almacenamiento no contestó.
+
+    No una excepción hacia arriba: el estado de la consulta sigue siendo
+    información aunque la tabla no conteste, y la falla ya quedó entera en la
+    bitácora.
+
+    **Hasta el ticket 29 devolvía una tupla vacía**, y eso era la falla
+    silenciosa que la regla 4 prohíbe: la pantalla la pintaba encima de los
+    precios que ya tenía, y un renglón con tres cotizaciones pasaba a "sin
+    consultar" porque una lectura no contestó.
     """
     try:
         return almacenamiento.precios_del_renglon(negocio, renglon_id)
-    except Exception:  # noqa: BLE001 — leer precios caído no puede tumbar la pantalla
+    except Exception as exc:  # noqa: BLE001 — leer precios caído no puede tumbar la pantalla
         log.exception("No se pudieron leer los precios del renglón %s", renglon_id)
-        return ()
+        return _SinLeer(f"no se pudieron leer los precios guardados ({type(exc).__name__})")
 
 
 def _precios_de_la_lista(almacenamiento, negocio: str, pedido_sugerido_id: int):
@@ -2622,7 +2825,12 @@ def _consulta_como_json(
     y en `detalle`, que es lo que la pantalla pinta como hueco con su motivo.
     Un `ok: false` aquí haría que el JavaScript lo tratara como "no se pudo
     preguntar", que es otra cosa.
+
+    `precios` puede ser `_SinLeer` (ticket 29): la tabla no contestó. Entonces
+    `precios` y `comparacion` viajan `null` —no vacíos— y `precios_sin_leer`
+    dice por qué y qué hacer.
     """
+    sin_leer = isinstance(precios, _SinLeer)
     return {
         "ok": True,
         "nueva": nueva,
@@ -2643,12 +2851,21 @@ def _consulta_como_json(
                 "detalle": consulta.detalle,
             }
         ),
-        "precios": lecturas_como_json(precios),
+        "precios": None if sin_leer else lecturas_como_json(precios),
         # La comparación viaja también por aquí y no solo dentro del renglón de
         # la lista: cuando el botón vuelve, la pantalla sustituye la celda
         # entera con lo que llegó. Si tuviera que recalcular el ganador ahí, la
         # regla viviría en dos lugares y uno de los dos no tendría pruebas.
-        "comparacion": comparacion_como_json(comparar(precios, cantidad)),
+        "comparacion": (
+            None if sin_leer else comparacion_como_json(comparar(precios, cantidad))
+        ),
+        # `null` en los dos de arriba quiere decir "no se pudieron leer", no "no
+        # hay": la pantalla conserva lo que ya tenía pintado y dice esto.
+        "precios_sin_leer": (
+            {"detalle": precios.detalle, "que_hacer": _que_hacer(AL_LEER)}
+            if sin_leer
+            else None
+        ),
     }
 
 
@@ -2698,6 +2915,7 @@ def _mover_el_renglon(
             content={
                 "ok": False,
                 "detalle": f"no se pudo {verbo} ({type(exc).__name__})",
+                "que_hacer": _que_hacer(AL_GUARDAR),
             },
         )
 
@@ -3559,9 +3777,26 @@ def _porque_no_hay_lectura_como_json(
     return salida
 
 
-def _sin_ventas() -> dict:
-    """Ni una venta en el almacén. No es un error y no se guarda nada."""
+def _recepcion_con_hueco(detalle: str) -> dict:
+    """El bloque de la recepción que no se pudo leer, con qué hacer (ticket 29)."""
+    return {**recepcion_con_hueco(detalle), "que_hacer": _que_hacer(AL_LEER)}
+
+
+def _en_camino_con_hueco(detalle: str) -> dict:
+    """El bloque de lo que viene en camino que no se pudo leer, con qué hacer."""
+    return {**en_camino_con_hueco(detalle), "que_hacer": _que_hacer(AL_LEER)}
+
+
+def _sin_ventas(ventas: dict | None = None) -> dict:
+    """Ni una venta en el almacén. No es un error y no se guarda nada.
+
+    `ventas` es lo que el servidor afirma sobre eso (ticket 29), con su frase:
+    el almacén contestó y está vacío. `None` en el hueco, que no leyó nada.
+    """
     return {
+        "ventas": ventas,
+        "avisos": [],
+        "lista_vacia": None,
         "ok": True,
         "pedido_sugerido_id": None,
         "estado": None,
@@ -3581,8 +3816,19 @@ def _sin_ventas() -> dict:
 
 
 def _hueco(detalle: str) -> dict:
-    """Un borde caído, con su motivo y sin una sola lista vacía que lo disfrace."""
-    return {**_sin_ventas(), "ok": False, "detalle": detalle}
+    """Un borde caído, con su motivo y sin una sola lista vacía que lo disfrace.
+
+    Desde el ticket 29 dice además, con palabras de Python, que el vacío NO es
+    "no se vendió nada", y qué hacer: hasta entonces esas dos frases las
+    remataba el JavaScript, con un nombre de persona escrito dentro.
+    """
+    return {
+        **_sin_ventas(),
+        "ok": False,
+        "detalle": detalle,
+        "frase": frase_del_hueco(detalle),
+        "que_hacer": _que_hacer(AL_LEER),
+    }
 
 
 def _vistas() -> list[dict]:

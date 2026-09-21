@@ -134,6 +134,14 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
 .nota { margin: 0 0 1rem; color: var(--tenue); font-size: .9rem; }
 .nota.mal { color: var(--mal); }
 .nota.aviso { color: var(--aviso); }
+/* LAS FALLAS (ticket 29) no se distinguen solo por el color (ticket 28): llevan
+   un rótulo escrito delante —"Falla:" u "Ojo:"—, una barra a la izquierda, y el
+   qué hacer en su propio renglón con su nombre. */
+.nota.falla { border-left: 3px solid currentColor; padding-left: .6rem; }
+.nota .rotulo { font-weight: 700; }
+.nota .que-hacer { display: block; margin-top: .25rem; color: var(--tinta); }
+.nota .motivo { color: var(--tenue); }
+.nota.ventas { font-size: .85rem; }
 /* EL CONTEO DE LO QUE FALTA POR COMPARAR (ticket 15, cuarta casilla: *el
    conteo es legible sin abrir cada renglón*). Va con recuadro y no como una
    nota más porque no describe un renglón ni un problema del catálogo: dice

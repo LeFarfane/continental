@@ -33,6 +33,11 @@ class Ajustes:
     warehouse_url: str | None
     modulos: dict[str, Modulo]
     pedido: dict
+    #: A quién le dice la pantalla que avise cuando algo falla y desde el
+    #: navegador no hay nada más que hacer (ticket 29). Es una frase y no un
+    #: nombre: "a quien administra atlas". Con valor por omisión para que un
+    #: YAML sin la llave no deje ninguna falla sin su "a quién avisarle".
+    a_quien_avisar: str = "a quien administra atlas"
 
 
 @lru_cache(maxsize=1)
@@ -68,4 +73,8 @@ def cargar() -> Ajustes:
         warehouse_url=os.environ.get("WAREHOUSE_URL"),
         modulos=modulos,
         pedido=crudo.get("pedido") or {},
+        # Vacío o ausente es la frase por omisión, no una cadena vacía: una
+        # falla que termina en "avísale ." no dice a quién.
+        a_quien_avisar=str(crudo.get("a_quien_avisar") or "").strip()
+        or "a quien administra atlas",
     )
