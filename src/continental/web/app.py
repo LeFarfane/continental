@@ -85,6 +85,16 @@ from continental.particion import (
 )
 from continental.precios import NOMBRES_DE_PROVEEDOR, nombre_del_proveedor
 from continental.proveedores import puente_como_json, puente_configurado
+from continental.recepcion import (
+    Recepcion,
+    desde_cuando_leer_compras,
+    frase_de_lo_recibido,
+    frase_del_confirmado,
+    frase_del_rechazado,
+    proponer,
+    recepcion_como_json,
+    recepcion_con_hueco,
+)
 from continental.sugerido import armar_la_lista
 from continental.transito import (
     MemoriaDeLoPedido,
@@ -97,6 +107,7 @@ from continental.transito import (
     frase_de_la_ventana_propia,
     frase_de_ya_en_camino,
     frase_del_atraso,
+    PROBABLEMENTE_LLEGO,
     frase_del_pedido_cancelado,
     frase_del_renglon_cancelado,
     frase_del_renglon_devuelto,
@@ -454,8 +465,20 @@ def pedido_sugerido(
     # lecturas en dos momentos pueden no coincidir. Su falla es un hueco dentro
     # del bloque y NO tumba la lista — la lista ya está armada y guardada, y lo
     # que se pierde es enseñar lo que viene en camino, no la protección.
+    # LA RECEPCIÓN SUGERIDA (ticket 26, ADR 0014). Va ANTES del bloque de lo
+    # que viene en camino porque ese bloque la usa: un renglón con propuesta no
+    # ofrece devolver, y un pedido con algo recibido no ofrece cancelar. Su
+    # falla es un hueco dentro de su bloque y NO tumba la lista.
+    recepcion, con_propuesta, con_algo_recibido = _la_recepcion(
+        almacen, almacenamiento, negocio
+    )
     bloque, ya_en_camino = _lo_que_viene_en_camino(
-        almacen, almacenamiento, negocio, guardado
+        almacen,
+        almacenamiento,
+        negocio,
+        guardado,
+        con_propuesta=con_propuesta,
+        pedidos_con_algo_recibido=con_algo_recibido,
     )
 
     return _como_json(
@@ -465,6 +488,98 @@ def pedido_sugerido(
         pedidos,
         en_camino=bloque,
         ya_en_camino=ya_en_camino,
+        recepcion=recepcion,
+        con_propuesta=con_propuesta,
+    )
+
+
+def _la_recepcion(
+    almacen: LecturaDelAlmacen,
+    almacenamiento: AlmacenamientoDelPedido,
+    negocio: str,
+) -> tuple[dict, frozenset[int], frozenset[int]]:
+    """El bloque de la recepción, y lo que los otros dos bloques necesitan de él.
+
+    Devuelve `(json, con_propuesta, pedidos_con_algo_recibido)`: los renglones
+    que la recepción propone como probablemente recibidos —esos no ofrecen
+    devolver— y los pedidos con algo ya recibido —esos no ofrecen cancelar—.
+
+    **Cuatro lecturas, y cada una falla por su lado** (regla 4): lo que está en
+    tránsito y lo recibido salen de `pedidos`; las compras y qué productos se
+    han comprado alguna vez salen de `marts`. Si falla una de las tres
+    primeras, el bloque es un hueco con su motivo —el TIPO de la falla, nunca
+    su texto (regla 5)—. Si falla la cuarta, la recepción se calcula igual y no
+    afirma que un producto nunca aparezca en compras.
+
+    Las compras se leen **una vez**, desde el envío más viejo que puede tener
+    propuesta, y **solo si hay algo que puede tenerla**. Ninguna fecha sale
+    del reloj: sale de cuándo se envió cada pedido.
+    """
+    ahora = _ahora()
+    try:
+        en_transito = almacenamiento.lo_que_esta_en_transito(negocio)
+    except Exception as exc:  # noqa: BLE001 — sin la recepción, la lista sigue
+        log.exception("No se pudo leer lo que está en tránsito para la recepción")
+        return (
+            recepcion_con_hueco(
+                f"no se pudo leer lo que viene en camino ({type(exc).__name__})"
+            ),
+            frozenset(),
+            frozenset(),
+        )
+
+    try:
+        recibido = almacenamiento.lo_recibido(
+            negocio,
+            {ya.producto_id for ya in en_transito},
+            {ya.renglon.pedido_id for ya in en_transito if ya.renglon.pedido_id},
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.exception("No se pudo leer lo ya recibido para la recepción")
+        return (
+            recepcion_con_hueco(
+                f"no se pudo leer lo ya recibido ({type(exc).__name__})"
+            ),
+            frozenset(),
+            frozenset(),
+        )
+    con_algo_recibido = frozenset(r.pedido_id for r in recibido if r.pedido_id)
+
+    desde = desde_cuando_leer_compras(en_transito)
+    compras = []
+    if desde is not None:
+        try:
+            compras = almacen.compras_desde(desde)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("No se pudieron leer las compras para la recepción")
+            return (
+                recepcion_con_hueco(
+                    f"no se pudieron leer las compras ({type(exc).__name__})"
+                ),
+                frozenset(),
+                con_algo_recibido,
+            )
+
+    try:
+        comprados = (
+            almacen.productos_con_compras({ya.producto_id for ya in en_transito})
+            if en_transito
+            else frozenset()
+        )
+    except Exception:  # noqa: BLE001 — sin esto no se afirma "nunca"
+        log.exception("No se pudo saber qué productos aparecen en compras")
+        comprados = None
+
+    calculada = proponer(
+        en_transito,
+        compras,
+        ya_usadas={c for r in recibido for c in r.compras},
+        productos_con_compras=comprados,
+    )
+    return (
+        recepcion_como_json(calculada, ahora),
+        frozenset(p.renglon_id for p in calculada.propuestas),
+        con_algo_recibido,
     )
 
 
@@ -473,6 +588,9 @@ def _lo_que_viene_en_camino(
     almacenamiento: AlmacenamientoDelPedido,
     negocio: str,
     guardado: PedidoSugeridoGuardado,
+    *,
+    con_propuesta: frozenset[int] = frozenset(),
+    pedidos_con_algo_recibido: frozenset[int] = frozenset(),
 ):
     """El bloque de lo que viene en camino, y lo que ya viene de cada producto.
 
@@ -532,6 +650,8 @@ def _lo_que_viene_en_camino(
             umbral=umbral,
             detalle_del_umbral=detalle_del_umbral,
             vuelven=vuelven,
+            con_propuesta=con_propuesta,
+            pedidos_con_algo_recibido=pedidos_con_algo_recibido,
         ),
         {ya.producto_id: ya for ya in viajando},
     )
@@ -1341,6 +1461,184 @@ def devolver_el_renglon_atrasado(
         "renglon_id": devuelto.renglon_id,
         "frase": frase_del_renglon_devuelto(devuelto.propuesto.descripcion),
     }
+
+
+class ComprasVistas(BaseModel):
+    """Lo único que el navegador manda al confirmar o rechazar: qué compras vio.
+
+    No es la evidencia —ésa la vuelve a calcular el servidor—: es **lo que la
+    persona juzgó**. Si la propuesta de ahora ya no es esa misma —apareció otra
+    compra, otra pestaña rechazó una—, se niega en vez de confirmar algo que
+    nadie vio.
+    """
+
+    compras: list[int]
+
+
+def _la_propuesta_de_ahora(
+    almacen: LecturaDelAlmacen,
+    almacenamiento: AlmacenamientoDelPedido,
+    negocio: str,
+    renglon_id: int,
+):
+    """La propuesta de ese renglón **recalculada ahora**, con las mismas cuatro
+    lecturas que la pantalla. `None` si hoy ya no la tiene."""
+    en_transito = almacenamiento.lo_que_esta_en_transito(negocio)
+    if not any(ya.renglon.renglon_id == renglon_id for ya in en_transito):
+        return None
+    recibido = almacenamiento.lo_recibido(
+        negocio, {ya.producto_id for ya in en_transito}, set()
+    )
+    desde = desde_cuando_leer_compras(en_transito)
+    compras = [] if desde is None else almacen.compras_desde(desde)
+    return proponer(
+        en_transito, compras, ya_usadas={c for r in recibido for c in r.compras}
+    ).propuesta_de(renglon_id)
+
+
+def _recibir_o_rechazar(
+    accion: str,
+    renglon_id: int,
+    cuerpo: ComprasVistas,
+    request: Request,
+    almacen: LecturaDelAlmacen,
+    almacenamiento: AlmacenamientoDelPedido,
+):
+    """Lo común de confirmar y rechazar (ticket 26): recalcular, comparar, escribir.
+
+    Tres respuestas y ninguna más:
+
+    - `409` si la propuesta de ahora no es la que la persona vio, si no se
+      puede confirmar —la evidencia no alcanza lo pedido—, o si el `WHERE`
+      dijo que no. Nada cambia.
+    - `200` con `ok: false` y el **tipo** de la falla si un borde se cayó
+      (regla 5: el texto no viaja).
+    - `200` con la frase de lo que pasó.
+    """
+    negocio = cargar().negocio
+    firma = quien(request)
+    vistas = sorted(set(cuerpo.compras))
+    confirmar = accion == "confirmar"
+
+    try:
+        propuesta = _la_propuesta_de_ahora(almacen, almacenamiento, negocio, renglon_id)
+        if propuesta is None or vistas != sorted(propuesta.compras_ids):
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "ok": False,
+                    "detalle": (
+                        "Esa propuesta ya no es la que se ve en la pantalla: o el "
+                        "renglón ya no está en camino, o cambiaron las compras que "
+                        "encajan. Vuelve a cargar la página para verla como está."
+                    ),
+                },
+            )
+        if confirmar and not propuesta.se_puede_confirmar:
+            return JSONResponse(
+                status_code=409,
+                content={"ok": False, "detalle": propuesta.motivo_para_no_confirmar},
+            )
+        if confirmar:
+            renglon = almacenamiento.confirmar_la_recepcion(
+                negocio, renglon_id, propuesta.compras_ids, propuesta.piezas, firma
+            )
+        else:
+            renglon = almacenamiento.rechazar_la_recepcion(
+                negocio, renglon_id, propuesta.compras_ids, firma
+            )
+    except Exception as exc:  # noqa: BLE001 — un borde caído es un hueco
+        # Regla 5: el detalle a la bitácora, al navegador solo el tipo.
+        log.exception("No se pudo %s la recepción del renglón %s", accion, renglon_id)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "detalle": (
+                    f"no se pudo {accion} la recepción ({type(exc).__name__})"
+                ),
+            },
+        )
+
+    if renglon is None:
+        log.info(
+            "%s quiso %s la recepción del renglón %s de %s y el WHERE dijo que no.",
+            firma,
+            accion,
+            renglon_id,
+            negocio,
+        )
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "detalle": (
+                    "Ese renglón ya no se puede "
+                    + ("recibir" if confirmar else "rechazar")
+                    + ": o ya no está en camino, o esa compra ya se usó o se "
+                    "rechazó. Vuelve a cargar la página para ver cómo quedó."
+                ),
+            },
+        )
+
+    log.info(
+        "%s %s la recepción del renglón %s (%s) de %s con las compras %s de SICAR "
+        "(ADR 0014).",
+        firma,
+        "confirmó" if confirmar else "rechazó",
+        renglon_id,
+        renglon.propuesto.descripcion,
+        negocio,
+        list(propuesta.compras_ids),
+    )
+    return {
+        "ok": True,
+        "renglon_id": renglon.renglon_id,
+        "estado": renglon.estado,
+        "frase": (
+            frase_del_confirmado(renglon.propuesto.descripcion)
+            if confirmar
+            else frase_del_rechazado(renglon.propuesto.descripcion)
+        ),
+    }
+
+
+@app.post("/api/renglon/{renglon_id}/recepcion/confirmar")
+def confirmar_la_recepcion(
+    renglon_id: int,
+    cuerpo: ComprasVistas,
+    request: Request,
+    almacen: LecturaDelAlmacen = Depends(obtener_almacen),
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+):
+    """"Sí llegó, completo": `en tránsito` → `recibido`, firmado (ticket 26).
+
+    **Nunca pasa solo**: la propuesta se calcula y se enseña, y esto es el clic
+    de una persona que la juzgó (ADR 0002, 0014). La firma es la de Access y es
+    firma, no permiso (regla 3). Con esto lo retenido del ticket 24 vuelve solo
+    en la siguiente lista: `recibido` cierra el tránsito.
+    """
+    return _recibir_o_rechazar(
+        "confirmar", renglon_id, cuerpo, request, almacen, almacenamiento
+    )
+
+
+@app.post("/api/renglon/{renglon_id}/recepcion/rechazar")
+def rechazar_la_recepcion(
+    renglon_id: int,
+    cuerpo: ComprasVistas,
+    request: Request,
+    almacen: LecturaDelAlmacen = Depends(obtener_almacen),
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+):
+    """"Esa compra no es este pedido": el renglón **sigue en tránsito** (26).
+
+    Se guarda qué compras no son suyas, firmado, para que no se vuelvan a
+    proponer mañana; una compra distinta sí se propondrá.
+    """
+    return _recibir_o_rechazar(
+        "rechazar", renglon_id, cuerpo, request, almacen, almacenamiento
+    )
 
 
 @app.get("/api/pedido-sugerido/{pedido_sugerido_id}/pedido/{pedido_id}/csv")
@@ -2373,6 +2671,8 @@ def _como_json(
     pedidos: tuple | None = None,
     en_camino: dict | None = None,
     ya_en_camino: dict | None = None,
+    recepcion: dict | None = None,
+    con_propuesta: frozenset[int] = frozenset(),
 ) -> dict:
     """La lista guardada, como la pantalla la lee.
 
@@ -2449,6 +2749,7 @@ def _como_json(
                 ya_en_camino=ya_en_camino,
                 ahora=ahora,
                 umbral=umbral,
+                con_propuesta=con_propuesta,
             )
             for r in guardado.renglones
         ],
@@ -2546,6 +2847,7 @@ def _como_json(
                 else frase_sin_nada_por_repartir(
                     guardado.en_transito,
                     sum(1 for r in guardado.renglones if r.esta_cancelado),
+                    sum(1 for r in guardado.renglones if r.esta_recibido),
                 )
             ),
         },
@@ -2567,6 +2869,11 @@ def _como_json(
                         for r in guardado.renglones
                         if r.pedido_id == p.pedido_id and r.esta_en_transito
                     ),
+                    recibidos_dentro=sum(
+                        1
+                        for r in guardado.renglones
+                        if r.pedido_id == p.pedido_id and r.esta_recibido
+                    ),
                 )
                 for p in pedidos
             ]
@@ -2578,6 +2885,9 @@ def _como_json(
         # tachar y cerrar, que no lo cambian — la pantalla conserva el de la
         # carga en vez de leerlo otra vez por cada clic.
         "en_camino": en_camino,
+        # LA RECEPCIÓN SUGERIDA (ticket 26). Igual que `en_camino`: solo la trae
+        # la carga de la lista, y la pantalla conserva la de la carga.
+        "recepcion": recepcion,
     }
 
 
@@ -2616,6 +2926,7 @@ def _pedido_como_json(
     total_envejecido: bool = False,
     captura: Captura | None = None,
     en_camino_dentro: int = 0,
+    recibidos_dentro: int = 0,
 ) -> dict:
     """Un pedido ya guardado, como la pantalla lo lee.
 
@@ -2638,6 +2949,8 @@ def _pedido_como_json(
     el encargado crea que Continental le mandó el pedido a NADRO.
     """
     motivo = motivo_para_no_enviar(pedido, renglones_dentro, total_envejecido)
+    # Un pedido con algo recibido sí se capturó (ticket 26): no se cancela.
+    motivo_de_cancelar = motivo_para_no_cancelar(pedido, recibidos_dentro)
     return {
         "pedido_id": pedido.pedido_id,
         "proveedor": pedido.proveedor,
@@ -2655,11 +2968,11 @@ def _pedido_como_json(
         "cancelado_en": (
             pedido.cancelado_en.isoformat() if pedido.cancelado_en else None
         ),
-        "se_puede_cancelar": motivo_para_no_cancelar(pedido) is None,
-        "motivo_para_no_cancelar": motivo_para_no_cancelar(pedido),
+        "se_puede_cancelar": motivo_de_cancelar is None,
+        "motivo_para_no_cancelar": motivo_de_cancelar,
         "frase_para_cancelar": (
             frase_para_cancelar(pedido.nombre, en_camino_dentro)
-            if motivo_para_no_cancelar(pedido) is None
+            if motivo_de_cancelar is None
             else None
         ),
         "armado_en": pedido.armado_en.isoformat(),
@@ -2748,6 +3061,7 @@ def _renglon_como_json(
     ya_en_camino: dict | None = None,
     ahora: dt.datetime | None = None,
     umbral: int | None = None,
+    con_propuesta: frozenset[int] = frozenset(),
 ) -> dict:
     """Un renglón guardado, como la pantalla lo lee.
 
@@ -2797,6 +3111,10 @@ def _renglon_como_json(
         # `esta_en_transito`: de él cuelgan la marca, los controles apagados y
         # el conteo de "por atender", y la regla vive en `RenglonGuardado`.
         "esta_cancelado": renglon.esta_cancelado,
+        # YA LLEGÓ (ticket 26): resuelto aquí por lo mismo que los dos de
+        # arriba. De él cuelgan la marca, los controles apagados y el conteo.
+        "esta_recibido": renglon.esta_recibido,
+        "frase_de_lo_recibido": frase_de_lo_recibido(renglon),
         "cancelado_por": renglon.cancelado_por,
         "cancelado_en": (
             renglon.cancelado_en.isoformat() if renglon.cancelado_en else None
@@ -2879,13 +3197,13 @@ def _renglon_como_json(
         "pedido_id": renglon.pedido_id,
         **_porque_no_hay_lectura_como_json(renglon, comparacion, precios, corrida),
         **_transito_del_renglon_como_json(
-            renglon, ventana, pedido, ya_en_camino, ahora, umbral
+            renglon, ventana, pedido, ya_en_camino, ahora, umbral, con_propuesta
         ),
     }
 
 
 def _transito_del_renglon_como_json(
-    renglon, ventana, pedido, ya_en_camino, ahora, umbral=None
+    renglon, ventana, pedido, ya_en_camino, ahora, umbral=None, con_propuesta=frozenset()
 ) -> dict:
     """Las tres frases del ticket 24 que cuelgan de un renglón de la lista.
 
@@ -2935,7 +3253,12 @@ def _transito_del_renglon_como_json(
         "dias_en_transito": dias,
         "atrasado": atrasado,
         "frase_del_atraso": frase_del_atraso(dias, umbral),
-        "se_puede_devolver": bool(atrasado),
+        # Con una compra que encaja (ticket 26), no se ofrece devolverlo: lo
+        # probable es que llegó, y devolverlo sería pedirlo dos veces.
+        "se_puede_devolver": bool(atrasado) and renglon.renglon_id not in con_propuesta,
+        "frase_de_la_recepcion": (
+            PROBABLEMENTE_LLEGO if renglon.renglon_id in con_propuesta else None
+        ),
         "frase_del_transito": (
             frase_del_transito(pedido.nombre, pedido.enviado_en, ahora)
             if renglon.esta_en_transito and pedido is not None

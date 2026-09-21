@@ -264,14 +264,19 @@ def _cerrar(cliente, lista: dict) -> None:
 def _recibir(almacenamiento, producto_id: int) -> None:
     """Pone en `recibido` el renglón en tránsito de ese producto.
 
-    Es lo que hará el ticket 26 con un clic. Hoy ningún código lo escribe, y
-    `poner_estado_del_renglon` existe en el doble exactamente para esto: poder
-    probar hoy el enganche que ese ticket va a usar.
+    Es lo que el ticket 26 hace con un clic (`confirmar_la_recepcion`). Aquí
+    va por `poner_estado_del_renglon` para probar el enganche sin compras de
+    por medio; desde el 26 lleva firma, porque `ck_renglon_recepcion` la exige.
     """
     for lista in almacenamiento.listas:
         for fila in lista["renglones"]:
             if fila["producto_id"] == producto_id and fila["estado"] == RENGLON_EN_TRANSITO:
-                almacenamiento.poner_estado_del_renglon(fila["renglon_id"], "recibido")
+                almacenamiento.poner_estado_del_renglon(
+                    fila["renglon_id"],
+                    "recibido",
+                    recibido_por="encargado@farmacia.mx",
+                    recibido_en=dt.datetime(2026, 9, 16, 16, 0, tzinfo=dt.UTC),
+                )
                 return
     raise AssertionError(f"No había renglón en tránsito del producto {producto_id}.")
 

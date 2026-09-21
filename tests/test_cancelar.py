@@ -346,9 +346,10 @@ def test_la_frase_de_los_atrasados_cuenta_y_calla_con_cero():
 
 
 def test_la_advertencia_al_devolver_dice_lo_que_cuesta_equivocarse():
-    """Hasta el ticket 26 NADA pasa a `recibido`: todo lo que llegó sigue en
-    tránsito y termina atrasado. Devolver lo que sí llegó es pedirlo dos veces.
-    La advertencia lo dice, y dice que el portal no se toca."""
+    """Devolver lo que sí llegó es pedirlo dos veces. Desde el ticket 26 lo que
+    llega con compra en SICAR se puede recibir —y mientras tenga propuesta no
+    se ofrece devolverlo—, pero no todo deja compra: la advertencia lo dice, y
+    dice que el portal no se toca."""
     assert "llegó" in ADVERTENCIA_AL_DEVOLVER
     assert "dos veces" in ADVERTENCIA_AL_DEVOLVER
     assert "portal" in ADVERTENCIA_AL_DEVOLVER
@@ -737,7 +738,9 @@ def test_un_pedido_con_algo_recibido_no_se_cancela(almacenamiento):
     """Si algo llegó, el pedido SÍ se capturó: "nunca se capturó" es falso."""
     lunes = _lista_con(almacenamiento, LUNES, [1, 2])
     enviado = _enviar_en_el_doble(almacenamiento, lunes, {1, 2})
-    almacenamiento.poner_estado_del_renglon(lunes.renglones[0].renglon_id, "recibido")
+    almacenamiento.poner_estado_del_renglon(
+        lunes.renglones[0].renglon_id, "recibido", recibido_por=CORREO, recibido_en=_local(MARTES)
+    )
 
     assert almacenamiento.cancelar_el_pedido(NEGOCIO, enviado.pedido.pedido_id, DUENO) is None
     assert _estados(almacenamiento)[2] == RENGLON_EN_TRANSITO
@@ -866,7 +869,9 @@ def test_un_recibido_se_olvida_si_una_lista_posterior_lo_cancelo(almacenamiento)
     memoria): recordar los dos serían dos intervalos del mismo producto."""
     lunes = _lista_con(almacenamiento, LUNES, [1])
     _enviar_en_el_doble(almacenamiento, lunes, {1})
-    almacenamiento.poner_estado_del_renglon(lunes.renglones[0].renglon_id, "recibido")
+    almacenamiento.poner_estado_del_renglon(
+        lunes.renglones[0].renglon_id, "recibido", recibido_por=CORREO, recibido_en=_local(MARTES)
+    )
     martes = almacenamiento.insertar_la_lista(
         NEGOCIO, MARTES, Ventana(MARTES, MARTES), [_renglon(1, ventas_desde=MARTES)]
     )

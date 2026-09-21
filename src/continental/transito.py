@@ -70,7 +70,7 @@ ticket 24, con otro "desde" (`LoYaPedido.retiene_desde`).
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -542,17 +542,31 @@ def frase_de_los_atrasados(cuantos: int, umbral: int | None) -> str | None:
 
 #: Lo que cuesta equivocarse al devolver, dicho junto al botón.
 #:
-#: **Hasta el ticket 26 nada pasa a `recibido`**: todo lo que llegó sigue en
-#: tránsito y, a los N días, se ve atrasado igual que lo que no llegó. Devolver
-#: lo que sí llegó es volverlo a proponer entero — pedirlo dos veces. Y
-#: Continental no cancela nada en ningún portal: si el proveedor todavía lo tiene
-#: pedido, allá sigue.
+#: **Desde el ticket 26 lo que llegó se puede recibir** —cuando su compra
+#: aparece en SICAR, la recepción lo propone, y mientras haya propuesta el botón
+#: de devolver no se ofrece (`PROBABLEMENTE_LLEGO`)—. Pero no todo deja rastro:
+#: un pedido a un proveedor que SICAR no conoce, un producto que nunca aparece
+#: en compras (17.7% del catálogo), o la compra que todavía no llega al almacén.
+#: Eso sigue en tránsito aunque haya llegado, a los N días se ve atrasado, y
+#: devolverlo es volverlo a proponer entero — pedirlo dos veces. Y Continental no
+#: cancela nada en ningún portal: si el proveedor todavía lo tiene pedido, allá
+#: sigue.
 ADVERTENCIA_AL_DEVOLVER = (
     "Devolver a la lista es decir que no llegó ni va a llegar: se vuelve a "
     "proponer en la siguiente lista, con todo lo que cubría. Si sí llegó, no lo "
-    "devuelvas: se pediría dos veces. Y si el proveedor todavía lo tiene pedido "
-    "en su portal, cancélalo allá también — Continental no cancela nada en "
-    "ningún portal."
+    "devuelvas: se pediría dos veces — y ojo, que no todo lo que llega deja una "
+    "compra en SICAR para proponerlo recibido. Y si el proveedor todavía lo "
+    "tiene pedido en su portal, cancélalo allá también — Continental no cancela "
+    "nada en ningún portal."
+)
+
+#: Lo que dice un renglón en camino **con propuesta de recepción** (ticket 26),
+#: en lugar del botón de devolver: si hay una compra que encaja, lo probable es
+#: que sí llegó, y devolverlo sería pedirlo dos veces. Primero se confirma o se
+#: rechaza; si se rechaza y sigue atrasado, el botón vuelve.
+PROBABLEMENTE_LLEGO = (
+    "Probablemente ya llegó: hay una compra de SICAR que encaja, en la "
+    "recepción. Confírmala o recházala antes de pensar en devolverlo a la lista."
 )
 
 
@@ -594,12 +608,13 @@ def frase_para_cancelar(nombre_del_proveedor: str, renglones_en_camino: int) -> 
     )
 
 
-def motivo_para_no_cancelar(pedido) -> str | None:
+def motivo_para_no_cancelar(pedido, recibidos: int = 0) -> str | None:
     """Por qué no se puede cancelar, o `None` si sí se puede.
 
     La misma decisión que el `WHERE` de `_CANCELAR_EL_PEDIDO`, y **no la
-    garantía**: sirve para no pintar un botón que contestaría 409. Lo recibido
-    no se mira aquí —hoy nada lo escribe— y el `WHERE` sí lo mira.
+    garantía**: sirve para no pintar un botón que contestaría 409. Desde el
+    ticket 26 lo recibido sí existe, y quien llama dice cuántos renglones de ese
+    pedido llegaron: si algo llegó, el pedido sí se capturó.
     """
     if pedido.fue_cancelado:
         return "ese pedido ya está cancelado"
@@ -608,7 +623,17 @@ def motivo_para_no_cancelar(pedido) -> str | None:
             "un borrador todavía no se le pidió a nadie: no hay nada que "
             "cancelar, se vuelve a partir"
         )
+    if recibidos:
+        return motivo_para_no_cancelar_por_lo_recibido()
     return None
+
+
+def motivo_para_no_cancelar_por_lo_recibido() -> str:
+    """El motivo de `motivo_para_no_cancelar` cuando algo del pedido llegó."""
+    return (
+        "algo de este pedido ya se recibió: sí se capturó en el portal, y "
+        "cancelarlo diría lo contrario"
+    )
 
 
 def frase_del_pedido_cancelado(nombre_del_proveedor: str, cuantos: int) -> str:
@@ -717,6 +742,8 @@ def en_camino_como_json(
     umbral: int | None = None,
     detalle_del_umbral: str | None = None,
     vuelven: Sequence["LoYaPedido"] = (),
+    con_propuesta: Collection[int] = (),
+    pedidos_con_algo_recibido: Collection[int] = (),
 ) -> dict:
     """El bloque de lo que viene en camino, como la pantalla lo lee.
 
@@ -729,9 +756,16 @@ def en_camino_como_json(
     pudo leer, `detalle_del_umbral` dice por qué y `atrasado` va `null` en cada
     renglón —no se sabe, que no es "no"—.
 
+    **Desde el ticket 26**, `con_propuesta` son los renglones que la recepción
+    propone como probablemente recibidos: esos no ofrecen devolver —sería
+    pedirlo dos veces— y dicen por qué. Y `pedidos_con_algo_recibido` son los
+    pedidos que ya no se pueden cancelar porque algo suyo llegó.
+
     Las frases viajan **hechas**; los datos van además, porque la pantalla los
     usa para acomodar, no para decidir.
     """
+    con_propuesta = frozenset(con_propuesta)
+    con_algo_recibido = frozenset(pedidos_con_algo_recibido)
     renglones = []
     pedidos: dict[int, dict] = {}
     for ya in ya_pedidos:
@@ -779,13 +813,30 @@ def en_camino_como_json(
                 "dias_en_transito": dias,
                 "atrasado": atrasado,
                 "frase_del_atraso": frase_del_atraso(dias, umbral),
-                "se_puede_devolver": bool(atrasado),
+                # Con una compra que encaja, lo probable es que llegó: no se
+                # ofrece devolverlo hasta que alguien rechace la propuesta.
+                "se_puede_devolver": bool(atrasado)
+                and ya.renglon.renglon_id not in con_propuesta,
+                "frase_de_la_recepcion": (
+                    PROBABLEMENTE_LLEGO
+                    if ya.renglon.renglon_id in con_propuesta
+                    else None
+                ),
             }
         )
     for grupo in pedidos.values():
         grupo["frase_para_cancelar"] = frase_para_cancelar(
             grupo["nombre"], grupo["renglones_en_camino"]
         )
+        # Lo mismo que el `NOT EXISTS` de `_CANCELAR_EL_PEDIDO` (ticket 26): un
+        # pedido con algo recibido sí se capturó. No se pinta un botón que
+        # contestaría 409.
+        grupo["motivo_para_no_cancelar"] = (
+            motivo_para_no_cancelar_por_lo_recibido()
+            if grupo["pedido_id"] in con_algo_recibido
+            else None
+        )
+        grupo["se_puede_cancelar"] = grupo["motivo_para_no_cancelar"] is None
     atrasados = sum(1 for r in renglones if r["atrasado"])
     return {
         "ok": True,

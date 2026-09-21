@@ -66,7 +66,8 @@ sistema a partir de lo que se vendió. No se le envía a nadie.
 - `en tránsito` — ya se le pidió a un proveedor y todavía no llega. **No se
   vuelve a proponer mientras esté así**, porque eso sería pedirlo dos veces.
   Se ve igual en la pantalla, atenuado y con cuándo se pidió y a quién.
-- `recibido` — llegó completo.
+- `recibido` — llegó completo. Lo dice **una persona**, con su firma: nunca
+  pasa solo (ver *probablemente recibido*).
 - `recibido parcial` — llegó menos de lo pedido. Lo que faltó vuelve a
   proponerse.
 - `descartado` — una persona decidió no pedirlo.
@@ -104,9 +105,12 @@ pedido: pasa a `cancelado`.
 > eso tienen nombres distintos: una lista vencida con un renglón atrasado son
 > dos hechos sobre dos cosas.
 >
-> **Y mientras no exista la recepción (ticket 26), lo que llegó también se ve
-> atrasado**: nada lo pasa a `recibido`. Devolver a la lista lo que sí llegó es
-> volverlo a pedir entero.
+> **Lo que llegó sin dejar compra en SICAR también se ve atrasado.** Desde el
+> ticket 26, lo que llega con su compra se propone como *probablemente
+> recibido*, y mientras tenga propuesta no se ofrece devolverlo. Pero un pedido
+> a un proveedor que SICAR no conoce, o un producto que nunca aparece en
+> compras, no tiene con qué proponerse: sigue en tránsito aunque haya llegado,
+> y devolverlo a la lista es volverlo a pedir entero.
 
 **Pedido** — lo que se le pide a **un** proveedor: nace de renglones de un
 pedido sugerido. Un pedido sugerido puede repartirse en varios pedidos, uno por
@@ -156,6 +160,30 @@ siga en borrador.
 **Probablemente recibido** — apareció una compra que encaja con un renglón en
 tránsito, pero los datos no alcanzan para afirmar que sea la misma mercancía.
 Es una sugerencia que espera confirmación de una persona, nunca un hecho.
+
+- **Encaja** quiere decir: mismo proveedor (su `pro_id` de SICAR), mismo
+  producto, y una compra del mismo día del envío o posterior, contado en días
+  de la farmacia. **Nunca por folio**: su significado no está verificado, y se
+  enseña solo para buscarlo en la factura.
+- **No es un estado del renglón**: se calcula cada vez que se mira. El renglón
+  sigue `en tránsito` hasta que una persona decide:
+  - **confirmar** — pasa a `recibido`, firmado, con las compras que lo
+    sostienen. Solo se puede si la compra trae al menos lo que se pidió: con
+    menos sería un recibido parcial, y eso no se marca así.
+  - **rechazar** — sigue `en tránsito`, y **esa** compra ya no se le vuelve a
+    proponer. Una compra distinta, sí.
+- **Una compra confirma un solo renglón.** Si encaja con dos pedidos del mismo
+  producto, se propone en los dos y cada uno lo dice.
+- **Una noche de retraso es normal**: una compra aparece hasta la cadena de la
+  noche siguiente a su captura en SICAR.
+- **Hay lo que nunca va a tener propuesta**, y se dice: un pedido a un
+  proveedor que SICAR no conoce (QuePharma hoy), y un producto que nunca ha
+  aparecido en una compra (606 de 3,429 artículos, 17.7%). Su única salida es
+  recibirlo a mano.
+
+> **Probablemente recibido no es recibido.** Lo primero lo dice el sistema con
+> la evidencia a la vista; lo segundo lo dice una persona y lleva su firma. Ver
+> el ADR 0014.
 
 **Reposición** — comprar lo que se vendió, pieza por pieza. Es la regla con la
 que el sistema propone cantidades; no considera mínimos, máximos ni empaques.

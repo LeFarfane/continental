@@ -689,7 +689,9 @@ def frase_del_envio(pedido: PedidoGuardado) -> str:
     )
 
 
-def frase_sin_nada_por_repartir(en_transito: int, cancelados: int) -> str | None:
+def frase_sin_nada_por_repartir(
+    en_transito: int, cancelados: int, recibidos: int = 0
+) -> str | None:
     """Por qué una lista ya no tiene nada que partir, cuando es porque se atendió.
 
     **Nació del recorrido del navegador del ticket 25** —la sexta vez que el
@@ -697,6 +699,9 @@ def frase_sin_nada_por_repartir(en_transito: int, cancelados: int) -> str | None
     pedido de hoy cancelado, la pantalla decía *"Todavía no hay en qué partir
     esta lista · Elige a quién se le pide cada renglón"* sobre renglones que ya
     no se pueden repartir. Es el mismo tropiezo del ticket 21 con otro estado.
+
+    Desde el ticket 26 cuenta también lo que ya **llegó**: un renglón de hoy
+    que se pidió en la mañana y se recibió en la tarde tampoco se reparte.
 
     `None` cuando no hay nada ya pedido ni cancelado: entonces "no hay en qué
     partir" quiere decir otra cosa —faltan precios o elecciones— y la pantalla
@@ -708,6 +713,10 @@ def frase_sin_nada_por_repartir(en_transito: int, cancelados: int) -> str | None
         partes.append("1 renglón ya se pidió y viene en camino")
     elif en_transito:
         partes.append(f"{en_transito} renglones ya se pidieron y vienen en camino")
+    if recibidos == 1:
+        partes.append("1 renglón ya se pidió y llegó")
+    elif recibidos:
+        partes.append(f"{recibidos} renglones ya se pidieron y llegaron")
     if cancelados == 1:
         partes.append(
             "1 renglón se dejó de esperar y vuelve a proponerse en la siguiente lista"

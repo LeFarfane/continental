@@ -685,6 +685,51 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
          END),
  NULL),
 
+-- LA RECEPCIÓN CONFIRMADA (ticket 26, ADR 0014, migración 0010). Sin ella la
+-- lista del día no se puede leer -`_LEER_RENGLONES` nombra las columnas- y el
+-- primer "Confirmar" rebotaría. Recibido va firmado y con sus compras.
+(34,
+ 'Un renglón recibido va firmado y con sus compras de SICAR',
+ 'las restricciones y las tres columnas',
+ (SELECT CASE
+           WHEN NOT EXISTS (SELECT 1 FROM pg_constraint con
+                             WHERE con.conrelid = to_regclass('pedidos.renglon')
+                               AND con.conname = 'ck_renglon_recepcion')
+                THEN 'NO EXISTE ck_renglon_recepcion'
+           WHEN NOT EXISTS (SELECT 1 FROM pg_constraint con
+                             WHERE con.conrelid = to_regclass('pedidos.renglon')
+                               AND con.conname = 'ck_renglon_compras_de_la_recepcion')
+                THEN 'NO EXISTE ck_renglon_compras_de_la_recepcion'
+           WHEN (SELECT count(*) FROM pg_attribute a
+                  WHERE a.attrelid = to_regclass('pedidos.renglon')
+                    AND NOT a.attisdropped
+                    AND a.attname IN ('recibido_por', 'recibido_en',
+                                      'recibido_con_compras')) <> 3
+                THEN 'falta recibido_por, recibido_en o recibido_con_compras'
+           ELSE 'las restricciones y las tres columnas'
+         END),
+ NULL),
+
+-- LO RECHAZADO, pareado con su firma. Sin esto, rechazar una propuesta no se
+-- podría guardar y la misma compra volvería a proponerse cada mañana.
+(35,
+ 'Una propuesta rechazada va firmada: qué compras, quién y cuándo',
+ 'la restricción y las tres columnas',
+ (SELECT CASE
+           WHEN NOT EXISTS (SELECT 1 FROM pg_constraint con
+                             WHERE con.conrelid = to_regclass('pedidos.renglon')
+                               AND con.conname = 'ck_renglon_rechazo')
+                THEN 'NO EXISTE ck_renglon_rechazo'
+           WHEN (SELECT count(*) FROM pg_attribute a
+                  WHERE a.attrelid = to_regclass('pedidos.renglon')
+                    AND NOT a.attisdropped
+                    AND a.attname IN ('compras_rechazadas', 'recepcion_rechazada_por',
+                                      'recepcion_rechazada_en')) <> 3
+                THEN 'falta compras_rechazadas, recepcion_rechazada_por o recepcion_rechazada_en'
+           ELSE 'la restricción y las tres columnas'
+         END),
+ NULL),
+
 -- AVISO y no MAL: una tabla temporal vive en la sesión, no puede leer nada que
 -- el rol no pueda leer ya, y desaparece al desconectarse. El permiso llega por
 -- el TEMPORARY que PUBLIC tiene sobre la base por omisión, y quitarlo sería

@@ -359,8 +359,9 @@ mismo. (2) **Un tercer estado del pedido rompe `!fue_enviado`**, que la pantalla
 usaba como "borrador" para pintar la captura: ahora es `es_borrador`, y
 `motivo_para_no_enviar` mira `fue_cancelado` antes del conteo —si no, un
 cancelado "se podía enviar"—. (3) **Hasta el ticket 26, lo que llegó también se
-ve atrasado**: nada lo pasa a `recibido`, y devolverlo es pedirlo dos veces. La
-advertencia va junto al botón. Y el recorrido del navegador cazó dos, **la
+veía atrasado**: nada lo pasaba a `recibido`, y devolverlo era pedirlo dos veces.
+*Desde el 26 eso vale solo para lo que llega sin dejar compra en SICAR* (ver
+abajo); la advertencia sigue junto al botón, con ese alcance. Y el recorrido del navegador cazó dos, **la
 sexta vez** (14, 15, 21, 22, 24, 25): con todo cancelado la partición mandaba a
 "elegir a quién se le pide" renglones que ya no se reparten, y lo que vuelve no
 tenía encabezado.
@@ -368,6 +369,78 @@ tenía encabezado.
 **La 0009 va ANTES de desplegar**: `_LEER_RENGLONES`, `_LEER_PEDIDOS` y
 `_LO_YA_PEDIDO` nombran las columnas nuevas. No crea tabla: `crear_rol.sql` no
 se vuelve a correr.
+
+**Y desde el ticket 26 lo que llegó se puede recibir — pero nunca solo.** Cuando
+una compra de SICAR encaja con un renglón en tránsito —**mismo proveedor (su
+`pro_id`), mismo producto, y del mismo día del envío o después, en días de la
+farmacia; nunca por folio**—, la pantalla lo propone como **probablemente
+recibido**, con su evidencia a la vista: a quién, qué día, cuántas piezas,
+cuántos días después del envío y el folio (*"se enseña para buscarlo en la
+factura; no se usó para emparejar"*). Una persona **confirma** —el renglón pasa
+a `recibido`, firmado con el correo de Access y con los `compra_id` que juzgó—
+o **rechaza** —sigue en tránsito, y esa compra ya no se le vuelve a proponer;
+una distinta, sí—. Con confirmar basta para que **lo retenido del ticket 24
+vuelva solo**: `recibido` está en `ESTADOS_QUE_CIERRAN_EL_TRANSITO` y nadie tuvo
+que tocar `transito.py`. Es la primera vez que algún código escribe `recibido`.
+
+**La decisión del ticket es que la propuesta NO se guarda** (ADR 0014, con las
+alternativas descartadas). `recepcion.proponer` es pura y se recalcula en cada
+carga: si la compra desaparece del almacén —se canceló en SICAR, o la cadena no
+corrió—, la propuesta desaparece con ella en vez de quedar escrita afirmando
+algo sin evidencia. Un estado guardado además habría sacado el renglón de
+`en tránsito` y su producto **se habría vuelto a proponer** antes de que nadie
+confirmara nada. Lo que sí se guarda son las dos decisiones de una persona, en
+seis columnas de `pedidos.renglon` (migración **0010**, sin tabla nueva):
+`recibido_por`, `recibido_en`, `recibido_con_compras`, `compras_rechazadas`,
+`recepcion_rechazada_por` y `recepcion_rechazada_en`. **El rechazo guarda QUÉ
+compra, no una fecha tope**: una compra del viernes capturada a las 19:30 llega
+al almacén hasta el lunes, y una fecha tope se la habría tragado.
+
+**Las otras cuatro decisiones, en una línea cada una.** (1) **Cantidades**: se
+enseñan siempre; solo se confirma si la evidencia trae al menos lo pedido
+—`recibido` es "llegó completo"— y la condición está en la función pura **y** en
+el `WHERE` (`:piezas`, el patrón del límite del 25). Con menos, se dice que es
+un recibido parcial, que es el ticket 27, y no se ofrece el clic. Dos facturas
+del mismo producto se suman. (2) **Una compra que encaja con dos renglones** se
+propone en los dos, cada uno lo dice, y el `WHERE` impide que confirme dos
+(`&&` contra `recibido_con_compras`). (3) **Sin puente** (QuePharma): nunca
+habrá propuesta, y se dice primero. (4) **La fecha**: día de la farmacia,
+calculado en Python; el mismo día del envío cuenta.
+
+**Lo que nunca va a tener propuesta se dice arriba de lo que solo espera**: un
+pedido a QuePharma, y un producto que nunca ha aparecido en una compra de SICAR
+(606 de 3,429, 17.7%) —una lectura nueva del almacén, `productos_con_compras`,
+sobre la misma `fct_compras` que el rol ya lee—. Su única salida es el recibido
+a mano, y **la pantalla dice que todavía no existe** en vez de pintar un botón
+que no hay. **Una noche de retraso se dice normal, no un error**, siempre, en
+el mismo bloque.
+
+**Lo que cambió de rebote.** Un renglón atrasado **con propuesta** ya no ofrece
+devolverlo (*"Probablemente ya llegó… confírmala o recházala antes de pensar en
+devolverlo"*); si se rechaza, el botón vuelve. Un pedido con algo recibido ya no
+ofrece cancelar, en la partición de hoy y en el bloque de listas anteriores —el
+`NOT EXISTS` que el 25 dejó puesto se ejercita por fin—. La lista de hoy también
+entra a la recepción: lo que se pidió a las 9 puede llegar a las 15.
+
+**Tres cosas del 26 que conviene no redescubrir.** (1) **`ck_renglon_recepcion`
+exige firma también para `recibido parcial`**, y `recibido_con_compras` admite
+`NULL` en lo recibido: es la puerta del 27 (marcado a mano, sin compra). Cinco
+pruebas viejas que ponían `recibido` a pelo en el doble tuvieron que firmar.
+(2) **`_LO_YA_PEDIDO` mira solo listas anteriores y la recepción no puede**: hay
+una sentencia hermana, `_EN_TRANSITO`, sin fecha de lista y con el `pro_id` del
+pedido. (3) **El recorrido del navegador cazó cuatro, la séptima vez** (14, 15,
+21, 22, 24, 25, 26), y las cuatro tienen prueba: *"Trae las 1 pieza que se
+pidieron"*; *"siguen en camino"* debajo de un solo renglón; el motivo de no
+confirmar repetido debajo de la frase de la cantidad; y un renglón recibido que
+seguía contando *"por atender"*. **Y dejó ver uno que no es del 26**: con un
+pedido enviado y otro renglón todavía sin proveedor, la partición dice *"Esta
+lista ya se pidió entera · No queda nada por repartir"* —el texto de reserva del
+JavaScript, del ticket 21—. Queda anotado abajo, sin tocar.
+
+**La 0010 va ANTES de desplegar**: `_LEER_RENGLONES`, `_LEER_RENGLON_POR_ID`,
+`_LO_YA_PEDIDO` y `_EN_TRANSITO` nombran las columnas nuevas. No crea tabla y no
+pide ningún permiso nuevo sobre `marts`: **`crear_rol.sql` no se vuelve a
+correr.**
 
 **Lo sugerido NO se guarda y lo decidido SÍ, y ésa es la decisión del ticket.**
 Es la misma pregunta que el 11 resolvió con `cantidad_propuesta` /
@@ -409,7 +482,22 @@ python iniciar.py     # http://127.0.0.1:8585
 python -m continental.verificar   # los datos de producción, no el código (ticket 17)
 python -m continental.lote        # el lote nocturno, a mano (ticket 18)
 python -m continental.lote --tope-minutos 5   # ...con tope corto, para mirarlo
-pytest                # 1191 pruebas, 0 saltadas, 4.92-6.05 s (2026-09-21, ticket 25)
+pytest                # 1285 pruebas, 0 saltadas, 5.33-6.53 s (2026-09-21, ticket 26)
+                      # 1191 en el 25. Las 94 nuevas son 92 de `test_recepcion.py`
+                      # (lo puro: qué encaja y qué no, nunca el folio, el día de
+                      # la farmacia, las cantidades, la compra compartida, los
+                      # seis motivos y las frases; lo que se guarda: confirmar y
+                      # rechazar en el doble, los CHECK en Python, el SQL como
+                      # texto, la 0010 y `verificar_rol.sql`; lo que se ve: las
+                      # dos rutas en una semana de punta a punta, el 409 de la
+                      # propuesta que cambió, las reglas 3, 4 y 5, y la pantalla)
+                      # y 2 que `test_compila.py` gana sola por el módulo nuevo y
+                      # la migración 0010. Nueve pruebas viejas se ajustaron:
+                      # cinco que ponían `recibido` sin firma y ahora firman, tres
+                      # censos de `fetch('/api/` de 13 a 14, y la advertencia del
+                      # 25. NINGUNA TOCA POSTGRES ni duerme.
+                      #
+                      # 1191 pruebas, 0 saltadas, 4.92-6.05 s (2026-09-21, ticket 25)
                       # 1095 en el 24. Las 96 nuevas son 95 de `test_cancelar.py`
                       # (lo puro: días en tránsito, el umbral, el límite del
                       # WHERE contra los días hora por hora, la memoria con lo
@@ -545,7 +633,10 @@ pytest                # 1191 pruebas, 0 saltadas, 4.92-6.05 s (2026-09-21, ticke
 | `docs/decisiones/0011` | **el CSV del pedido se arma en memoria cada vez** y se escribe para el Excel de México: la clave como fórmula de texto (medido contra el tabulador y el apóstrofo, que quedan literales), BOM, coma y sin `sep=`, y la ruta colgada de la lista para no escribir SQL nuevo |
 | `docs/decisiones/0008` | **el puente que no existía**: el pedido se identifica por la clave de Doyle y el `proveedor_id` de SICAR es una correspondencia que puede faltar. Por qué el mapa va en el YAML y guarda el id y no el nombre, y por qué el UNIQUE tuvo que moverse |
 | `sql/` | el DDL de las **cinco** tablas, el rol acotado y `verificar_rol.sql`, que mira la **forma** de la base. **Se corren a mano, en ese orden, con credenciales de dueño** — no confundirlo con `continental.verificar`, que mira los **datos** en cada despliegue (la cabecera de ese módulo tiene la tabla que los separa) |
-| `sql/migraciones/` | **siete** archivos numerados: lo que le falta a una base donde las tablas YA existen: `crear_tablas.sql` usa `CREATE TABLE IF NOT EXISTS` y calla si la tabla ya está con otra forma. También a mano y con credenciales de dueño |
+| `docs/decisiones/0013` | **cancelar suelta el tránsito sin desenviarlo**, y lo que vuelve es el producto, no el renglón. Atrasado es una señal calculada y no se llama "vencido" |
+| `docs/decisiones/0014` | **"probablemente recibido" se calcula cada vez y lo decidido se guarda**: por qué no es un estado, por qué el rechazo guarda qué compra y no una fecha tope, por qué solo se confirma lo que trae al menos lo pedido, qué pasa con una compra que encaja con dos renglones, con el proveedor sin puente, y por qué el día del envío es el de la farmacia y el mismo día cuenta |
+| `src/continental/recepcion.py` | funciones puras: lo que está en tránsito + las compras de SICAR -> propuestas de *probablemente recibido* con su evidencia, y los renglones sin propuesta con su motivo (seis). Empareja por proveedor, producto y día; **nunca por folio**. Ahí viven las frases de la recepción, el aviso de la noche de retraso y la regla de la cantidad (ticket 26, ADR 0014) |
+| `sql/migraciones/` | **diez** archivos numerados: lo que le falta a una base donde las tablas YA existen: `crear_tablas.sql` usa `CREATE TABLE IF NOT EXISTS` y calla si la tabla ya está con otra forma. También a mano y con credenciales de dueño |
 | `config/continental.yml` | puertos de los módulos y los parámetros del pedido |
 | `src/continental/web/app.py` | `/api/salud`, `/api/modulos`, el pedido sugerido y su cierre, la portada |
 | `src/continental/almacenamiento.py` | donde el pedido sugerido se guarda: el `Protocol`, el SQL real y las reglas de la tabla en un solo lugar |
@@ -629,12 +720,12 @@ más barato y se le pidió a otro.**
       -v ON_ERROR_STOP=1 < sql/verificar_rol.sql ; echo "salida: $?"
   ```
 
-  **Y desde el ticket 25 hay CINCO migraciones que NO crean tabla** —la 0005,
-  la 0006, la 0007, la 0008 y la 0009, de los tickets 20, 21, 22, 24 y 25— así
-  que `crear_rol.sql` no hace falta volver a correrlo por ellas: el `GRANT
-  SELECT, INSERT, UPDATE` es sobre la tabla entera y no se usan permisos por
-  columna. Lo que sí conviene después de las cinco es `verificar_rol.sql`,
-  porque sus comprobaciones **23 a 33** son suyas. **Las cinco van ANTES de
+  **Y desde el ticket 26 hay SEIS migraciones que NO crean tabla** —la 0005,
+  la 0006, la 0007, la 0008, la 0009 y la 0010, de los tickets 20, 21, 22, 24,
+  25 y 26— así que `crear_rol.sql` no hace falta volver a correrlo por ellas: el
+  `GRANT SELECT, INSERT, UPDATE` es sobre la tabla entera y no se usan permisos
+  por columna. Lo que sí conviene después de las seis es `verificar_rol.sql`,
+  porque sus comprobaciones **23 a 35** son suyas. **Las seis van ANTES de
   desplegar el código de su ticket**:
   `_LEER_RENGLONES` nombra las columnas nuevas, y con la base vieja la lista del
   día no se puede leer — y `continental.verificar` no lo caza (ver el ticket 22,
@@ -649,7 +740,16 @@ más barato y se le pidió a otro.**
       -v ON_ERROR_STOP=1 < sql/migraciones/0008-el-renglon-que-vuelve-dice-desde-cuando.sql
   docker exec -i farmacia_warehouse psql -U farmacia -d farmacia \
       -v ON_ERROR_STOP=1 < sql/migraciones/0009-cancelar-y-devolver-lo-atrasado.sql
+  docker exec -i farmacia_warehouse psql -U farmacia -d farmacia \
+      -v ON_ERROR_STOP=1 < sql/migraciones/0010-la-recepcion-sugerida.sql
   ```
+
+  Sin la 0010, con el código del ticket 26 la lista tampoco se puede leer
+  —"column recibido_por does not exist": la nombran `_LEER_RENGLONES`,
+  `_LEER_RENGLON_POR_ID`, `_LO_YA_PEDIDO` y `_EN_TRANSITO`—. **Y la recepción
+  ejercita por primera vez el GRANT de `marts.fct_compras`**: si un `dbt build`
+  se lo llevó, el bloque de la recepción sale como hueco con su motivo (la lista
+  sigue) y la comprobación 9 de `verificar_rol.sql` lo dice.
 
   Sin la 0009, con el código del ticket 25 la lista tampoco se puede leer
   —"column cancelado_por does not exist": la nombran `_LEER_RENGLONES`,
@@ -1097,3 +1197,17 @@ más barato y se le pidió a otro.**
    ventanas de días completos, y las dos son otra decisión. **Condición de
    disparo:** si el encargado reporta faltantes de productos que sí se
    vendieron, medir primero cuánto vende la farmacia después de las 18:51.
+
+18. **La partición miente cuando queda un renglón sin proveedor y otro ya se
+   envió.** Lo dejó ver el recorrido del navegador del ticket 26, y **no es de
+   ese ticket**: viene del texto de reserva que `pintarParticion` escribe desde
+   el 21 cuando no hay partición y sí hay pedidos enviados —*"Esta lista ya se
+   pidió entera · No queda nada por repartir: todo lo que había se capturó en
+   los portales y sus renglones están en tránsito"*— sin mirar si queda algo
+   `abierto` sin proveedor (que es justo cuando `particion.hay` es falso). Desde
+   el 26 la pantalla usa la frase de Python (`frase_sin_nada_por_repartir`)
+   siempre que llega, pero Python solo la manda cuando `por_repartir` está
+   vacío, así que el caso mixto sigue cayendo en la reserva. **Condición de
+   disparo:** la siguiente vez que alguien toque `pintarParticion`; el arreglo
+   es que la reserva no afirme "entera" si `particion.cuantos_sin_proveedor`
+   no es cero, con una prueba sobre el HTML.

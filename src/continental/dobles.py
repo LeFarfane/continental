@@ -31,6 +31,7 @@ from continental.almacenamiento import (
     RENGLON_CANCELADO,
     RENGLON_DESCARTADO,
     RENGLON_EN_TRANSITO,
+    RENGLON_RECIBIDO,
     ESTADOS_QUE_ATIENDEN_EL_PRODUCTO,
     ESTADOS_QUE_CIERRAN_EL_TRANSITO,
     ESTADOS_QUE_TERMINAN_EL_TRANSITO,
@@ -42,6 +43,8 @@ from continental.almacenamiento import (
     PedidoSugeridoDuplicado,
     PedidoSugeridoGuardado,
     PrecioDeProveedor,
+    RenglonGuardado,
+    RenglonRecibido,
     Ventana,
     armar_guardado,
     columnas_de_la_corrida,
@@ -54,6 +57,7 @@ from continental.almacenamiento import (
     lo_ya_pedido_desde_columnas,
     precio_desde_columnas,
     renglon_guardado_desde_columnas,
+    renglon_recibido_desde_columnas,
     pedido_desde_columnas,
     revisar_el_pedido,
     revisar_el_precio,
@@ -103,6 +107,11 @@ class AlmacenFalso:
     def compras_desde(self, fecha: dt.date) -> list[LineaDeCompra]:
         self._revisar()
         return [c for c in self.compras_en_memoria if c.fecha >= fecha]
+
+    def productos_con_compras(self, productos) -> frozenset[int]:
+        self._revisar()
+        productos = set(productos)
+        return frozenset(c.producto_id for c in self.compras_en_memoria if c.producto_id in productos)
 
     def ultima_fecha_con_ventas(self) -> dt.date | None:
         self._revisar()
@@ -581,6 +590,7 @@ class AlmacenamientoFalso:
                             "enviado_por": pedido.get("enviado_por") if pedido else None,
                             "enviado_en": pedido.get("enviado_en") if pedido else None,
                             "estado_del_pedido": pedido["estado"] if pedido else None,
+                            "proveedor_id": pedido.get("proveedor_id") if pedido else None,
                         }
                     )
                 )
@@ -726,6 +736,9 @@ class AlmacenamientoFalso:
         descartado_en: dt.datetime | None = None,
         cancelado_por: str | None = None,
         cancelado_en: dt.datetime | None = None,
+        recibido_por: str | None = None,
+        recibido_en: dt.datetime | None = None,
+        recibido_con_compras: Sequence[int] | None = None,
     ) -> PedidoSugeridoGuardado | None:
         """El `UPDATE` pelado de un renglón, revisado contra los CHECK.
 
@@ -736,9 +749,10 @@ class AlmacenamientoFalso:
         camino que lo evita, nadie podría verlo.
 
         Lo usan también las pruebas para poner un renglón en `en tránsito` o
-        `recibido`, que son estados que **todavía ningún código escribe** (son
-        los tickets 24 y 26): sin esto no habría forma de comprobar hoy que
-        descartar no los toca.
+        `recibido` sin pasar por el envío o la recepción. **Desde el ticket 26
+        lo recibido va firmado** (`ck_renglon_recepcion`): `recibido_por` y
+        `recibido_en` entran por argumento, y sin ellos esto rebota igual que
+        Postgres.
         """
         self._revisar()
         encontrado = self._renglon_por_id(renglon_id)
@@ -753,6 +767,11 @@ class AlmacenamientoFalso:
             "descartado_en": descartado_en,
             "cancelado_por": cancelado_por,
             "cancelado_en": cancelado_en,
+            "recibido_por": recibido_por,
+            "recibido_en": recibido_en,
+            "recibido_con_compras": (
+                None if recibido_con_compras is None else list(recibido_con_compras)
+            ),
         }
         revisar_el_renglon(propuesta)
 
@@ -762,6 +781,9 @@ class AlmacenamientoFalso:
             descartado_en=descartado_en,
             cancelado_por=cancelado_por,
             cancelado_en=cancelado_en,
+            recibido_por=propuesta["recibido_por"],
+            recibido_en=propuesta["recibido_en"],
+            recibido_con_compras=propuesta["recibido_con_compras"],
         )
         return armar_guardado(lista, lista["renglones"])
 
@@ -1257,6 +1279,144 @@ class AlmacenamientoFalso:
             RENGLON_CANCELADO,
             cancelado_por=quien,
             cancelado_en=dt.datetime.now(dt.UTC),
+        )
+        return renglon_guardado_desde_columnas(fila)
+
+    # ------------------------------------------ la recepción sugerida (26)
+
+    def _pedido_del_renglon(self, fila: dict) -> dict | None:
+        """La unión `p.pedido_id = r.pedido_id and p.negocio = r.negocio`."""
+        return next(
+            (
+                p
+                for p in self.pedidos
+                if p["pedido_id"] == fila.get("pedido_id")
+                and p["negocio"] == fila["negocio"]
+            ),
+            None,
+        )
+
+    def lo_que_esta_en_transito(self, negocio: str) -> tuple[LoYaPedido, ...]:
+        """`_EN_TRANSITO`, en memoria: todo lo en tránsito, **sin mirar la fecha
+        de la lista**, con el `pro_id` de su pedido. En el mismo orden."""
+        self._revisar()
+        resultado = []
+        for lista in sorted(
+            (l for l in self.listas if l["negocio"] == negocio),
+            key=lambda l: l["fecha_del_pedido"],
+        ):
+            for fila in sorted(lista["renglones"], key=lambda f: f["renglon_id"]):
+                if fila["negocio"] != negocio or fila["estado"] != RENGLON_EN_TRANSITO:
+                    continue
+                pedido = self._pedido_del_renglon(fila)
+                resultado.append(
+                    lo_ya_pedido_desde_columnas(
+                        {
+                            **fila,
+                            "fecha_del_pedido": lista["fecha_del_pedido"],
+                            "ventas_consideradas_hasta": lista["ventas_consideradas_hasta"],
+                            "ventas_consideradas_desde": lista["ventas_consideradas_desde"],
+                            "proveedor": pedido["proveedor"] if pedido else None,
+                            "enviado_por": pedido.get("enviado_por") if pedido else None,
+                            "enviado_en": pedido.get("enviado_en") if pedido else None,
+                            "estado_del_pedido": pedido["estado"] if pedido else None,
+                            "proveedor_id": pedido.get("proveedor_id") if pedido else None,
+                        }
+                    )
+                )
+        return tuple(resultado)
+
+    def lo_recibido(self, negocio: str, productos, pedidos) -> tuple[RenglonRecibido, ...]:
+        """`_LO_RECIBIDO`, en memoria: por producto o por pedido, del negocio."""
+        self._revisar()
+        productos, pedidos = set(productos), set(pedidos)
+        filas = sorted(
+            (
+                fila
+                for lista in self.listas
+                for fila in lista["renglones"]
+                if fila["negocio"] == negocio
+                and fila["estado"] in ESTADOS_QUE_CIERRAN_EL_TRANSITO
+                and (fila["producto_id"] in productos or fila.get("pedido_id") in pedidos)
+            ),
+            key=lambda f: f["renglon_id"],
+        )
+        return tuple(renglon_recibido_desde_columnas(f) for f in filas)
+
+    def confirmar_la_recepcion(
+        self, negocio: str, renglon_id: int, compras, piezas: float, quien: str
+    ) -> RenglonGuardado | None:
+        """`_CONFIRMAR_LA_RECEPCION`, en memoria: las mismas condiciones, en el
+        mismo orden, y la firma revisada por `revisar_el_renglon`."""
+        self._revisar()
+        compras = [int(c) for c in compras]
+        if not compras:
+            return None
+        encontrado = self._renglon_por_id(renglon_id)
+        if encontrado is None:
+            return None
+        fila, _lista = encontrado
+        if fila["negocio"] != negocio or fila["estado"] != RENGLON_EN_TRANSITO:
+            return None
+        pedido = self._pedido_del_renglon(fila)
+        if pedido is None or pedido["estado"] != ENVIADO or pedido.get("proveedor_id") is None:
+            return None
+        pedidas = fila["cantidad_final"] if fila["cantidad_final"] is not None else fila["cantidad_propuesta"]
+        if not pedidas <= piezas:
+            return None
+        if set(fila.get("compras_rechazadas") or ()) & set(compras):
+            return None
+        ya_usadas = {
+            c
+            for lista in self.listas
+            for otra in lista["renglones"]
+            if otra["negocio"] == negocio
+            for c in (otra.get("recibido_con_compras") or ())
+        }
+        if ya_usadas & set(compras):
+            return None
+        # El instante real con zona que en la tabla pone `now()`.
+        self.poner_estado_del_renglon(
+            renglon_id,
+            RENGLON_RECIBIDO,
+            recibido_por=quien,
+            recibido_en=dt.datetime.now(dt.UTC),
+            recibido_con_compras=compras,
+        )
+        return renglon_guardado_desde_columnas(fila)
+
+    def rechazar_la_recepcion(
+        self, negocio: str, renglon_id: int, compras, quien: str
+    ) -> RenglonGuardado | None:
+        """`_RECHAZAR_LA_RECEPCION`, en memoria: el estado NO cambia, las compras
+        se agregan (nunca se pisan) y la firma es la del último rechazo."""
+        self._revisar()
+        compras = [int(c) for c in compras]
+        if not compras:
+            return None
+        encontrado = self._renglon_por_id(renglon_id)
+        if encontrado is None:
+            return None
+        fila, _lista = encontrado
+        if fila["negocio"] != negocio or fila["estado"] != RENGLON_EN_TRANSITO:
+            return None
+        pedido = self._pedido_del_renglon(fila)
+        if pedido is None or pedido["estado"] != ENVIADO:
+            return None
+        anteriores = list(fila.get("compras_rechazadas") or ())
+        if set(anteriores) & set(compras):
+            return None
+        propuesta = {
+            **fila,
+            "compras_rechazadas": anteriores + compras,
+            "recepcion_rechazada_por": quien,
+            "recepcion_rechazada_en": dt.datetime.now(dt.UTC),
+        }
+        revisar_el_renglon(propuesta)
+        fila.update(
+            compras_rechazadas=propuesta["compras_rechazadas"],
+            recepcion_rechazada_por=propuesta["recepcion_rechazada_por"],
+            recepcion_rechazada_en=propuesta["recepcion_rechazada_en"],
         )
         return renglon_guardado_desde_columnas(fila)
 

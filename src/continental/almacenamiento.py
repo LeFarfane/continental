@@ -52,7 +52,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
@@ -104,9 +104,11 @@ RENGLON_DESCARTADO = "descartado"
 #: comentarios y pruebas.
 RENGLON_EN_TRANSITO = "en tránsito"
 
-#: Los dos de la recepción (tickets 26 y 27). Hoy **ningún código los
-#: escribe**; son constantes desde el ticket 24 porque ya hay código que los
-#: LEE: son los que cierran un tránsito. Ver `ESTADOS_QUE_CIERRAN_EL_TRANSITO`.
+#: Los dos de la recepción (tickets 26 y 27). Son constantes desde el ticket 24
+#: porque ese código ya los LEÍA —son los que cierran un tránsito, ver
+#: `ESTADOS_QUE_CIERRAN_EL_TRANSITO`—. **Desde el 26 `recibido` se escribe**,
+#: y solo lo escribe `_CONFIRMAR_LA_RECEPCION`, firmado (ADR 0014); `recibido
+#: parcial` lo escribirá el 27.
 RENGLON_RECIBIDO = "recibido"
 RENGLON_RECIBIDO_PARCIAL = "recibido parcial"
 
@@ -125,8 +127,9 @@ RENGLON_RECIBIDO_PARCIAL = "recibido parcial"
 RENGLON_CANCELADO = "cancelado"
 
 #: Los seis del glosario, con el acento de `en tránsito`. Hoy se escriben
-#: cuatro: `abierto` al nacer, `descartado` desde el ticket 10, `en tránsito`
-#: desde el 21 y `cancelado` desde el 25. El 26 pone los dos de recepción.
+#: cinco: `abierto` al nacer, `descartado` desde el ticket 10, `en tránsito`
+#: desde el 21, `cancelado` desde el 25 y `recibido` desde el 26. Falta
+#: `recibido parcial`, que es el 27.
 #:
 #: `cancelado` va AL FINAL y no junto a los de recepción, por la misma razón
 #: que las columnas nuevas van al final de la tabla: el orden de esta tupla es
@@ -645,6 +648,33 @@ class RenglonGuardado:
     capturado_en: dt.datetime | None = None
     cancelado_por: str | None = None
     cancelado_en: dt.datetime | None = None
+    #: LA RECEPCIÓN (ticket 26, ADR 0014). La firma de quien confirmó que llegó
+    #: —`recibido_por`, `recibido_en`— y **las compras de SICAR que lo
+    #: sostienen**, por su `compra_id`: son la evidencia que esa persona juzgó, y
+    #: son lo que impide que la misma compra confirme dos renglones. `None` en
+    #: todo renglón que no esté recibido (`ck_renglon_recepcion`). El marcado a
+    #: mano del ticket 27 firmará igual y sin compras.
+    recibido_por: str | None = None
+    recibido_en: dt.datetime | None = None
+    recibido_con_compras: tuple[int, ...] | None = None
+    #: LO RECHAZADO (ticket 26, ADR 0014): las compras que una persona dijo que
+    #: NO son este renglón. Se guarda **qué compra** y no una fecha tope, para
+    #: que la misma no se vuelva a proponer mañana y una distinta sí. El renglón
+    #: sigue `en tránsito`: rechazar no es un estado. La firma es la del último
+    #: rechazo (`ck_renglon_rechazo` pareada con la lista).
+    compras_rechazadas: tuple[int, ...] | None = None
+    recepcion_rechazada_por: str | None = None
+    recepcion_rechazada_en: dt.datetime | None = None
+
+    @property
+    def esta_recibido(self) -> bool:
+        """Si ya llegó —completo o parcial— y alguien lo firmó (tickets 26 y 27).
+
+        Son los estados que cierran el tránsito (ADR 0012): de aquí cuelga que
+        la pantalla lo atenúe y le apague los controles, igual que a lo que
+        viene en camino.
+        """
+        return self.estado in ESTADOS_QUE_CIERRAN_EL_TRANSITO
 
     @property
     def esta_capturado(self) -> bool:
@@ -750,8 +780,8 @@ class RenglonGuardado:
         """Si todavía se le puede meter en un pedido.
 
         Solo lo `abierto`, que es exactamente el `WHERE` de
-        `_ASIGNAR_RENGLONES`. Un descartado ya se atendió y uno `en tránsito` ya
-        se pidió; los dos de recepción llegarán con el ticket 26.
+        `_ASIGNAR_RENGLONES`. Un descartado ya se atendió, uno `en tránsito` ya
+        se pidió y uno recibido (ticket 26) ya llegó.
         """
         return self.estado == RENGLON_ABIERTO
 
@@ -878,6 +908,25 @@ class PedidoCancelado:
 
 
 @dataclass(frozen=True, slots=True)
+class RenglonRecibido:
+    """Un renglón que ya llegó, con las compras que lo sostienen (ticket 26).
+
+    Es lo que `lo_recibido` lee y sirve para dos cosas: que una compra que ya
+    confirmó un renglón **no se proponga para otro** (una compra confirma uno
+    solo), y que un pedido con algo recibido **no ofrezca el botón de
+    cancelar** —el `WHERE` de `_CANCELAR_EL_PEDIDO` lo negaría—.
+
+    `compras` es vacía cuando se recibió sin compra de SICAR: el marcado a mano
+    del ticket 27.
+    """
+
+    renglon_id: int
+    pedido_id: int | None
+    producto_id: int
+    compras: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class LoYaPedido:
     """Un renglón que ya se le pidió a un proveedor, con lo que hace falta saber (24).
 
@@ -919,6 +968,12 @@ class LoYaPedido:
     #: El estado de su pedido: distingue "se canceló el pedido entero" de "lo
     #: devolvieron a la lista a él solo", que se dicen distinto en la pantalla.
     estado_del_pedido: str | None = None
+    #: **El `pro_id` de SICAR de su pedido** (ticket 26): la correspondencia que
+    #: se guardó al partir (ADR 0008). Es lo único que conecta lo que se pidió
+    #: con lo que `marts.fct_compras` dice que se compró. `None` es "SICAR no
+    #: conoce a este proveedor" —QuePharma hoy—, y entonces nunca habrá una
+    #: compra que proponer.
+    proveedor_id: int | None = None
 
     def __post_init__(self) -> None:
         # Un cancelado sin el principio de su lista no sabe desde cuándo vuelve.
@@ -1213,6 +1268,15 @@ def columnas_del_renglon(
         # estado.
         "cancelado_por": None,
         "cancelado_en": None,
+        # Y SIN RECIBIR NI RECHAZAR NADA (ticket 26): nace esperándose. Las seis
+        # explícitas por lo mismo que las de arriba: `ck_renglon_recepcion` y
+        # `ck_renglon_rechazo` las relacionan con el estado y entre sí.
+        "recibido_por": None,
+        "recibido_en": None,
+        "recibido_con_compras": None,
+        "compras_rechazadas": None,
+        "recepcion_rechazada_por": None,
+        "recepcion_rechazada_en": None,
         # DESDE QUÉ DÍA SE SUMARON SUS VENTAS, si no es el principio de la
         # lista (ticket 24, ADR 0012). Casi siempre `None`. Es un dato del
         # CÁLCULO —lo decide la memoria de lo ya pedido al armar— y por eso
@@ -1416,6 +1480,51 @@ def revisar_el_renglon(columnas: dict) -> None:
             "Un renglón cancelado vuelve a proponerse entero en la siguiente "
             "lista (ADR 0013): sin la firma no hay a quién preguntarle por qué "
             "se dejó de esperar algo que quizá sí venía."
+        )
+    # Las seis del ticket 26 (ADR 0014), con `.get` por lo mismo que las del 25:
+    # una fila de una base sin la migración 0010 no las trae, y eso es "nadie
+    # lo recibió ni rechazó nada", no un KeyError.
+    if columnas.get("recibido_por") == "":
+        raise ValueError(
+            "Firma vacía. La columna tiene CHECK (recibido_por <> ''): o hay "
+            "correo o es NULL: ck_renglon_recibido_por."
+        )
+    recibido = columnas["estado"] in ESTADOS_QUE_CIERRAN_EL_TRANSITO
+    if recibido != (
+        columnas.get("recibido_por") is not None
+        and columnas.get("recibido_en") is not None
+    ):
+        raise ValueError(
+            "Recibido sin decir quién ni cuándo, o firma de recepción en un "
+            "renglón que no llegó. Lo rechaza ck_renglon_recepcion. 'Recibido' es "
+            "la palabra de una persona que juzgó la evidencia (ADR 0014): sin su "
+            "firma, cuando falte mercancía no hay a quién preguntarle qué vio."
+        )
+    compras = columnas.get("recibido_con_compras")
+    if compras is not None and (not recibido or len(compras) < 1):
+        raise ValueError(
+            "Compras de la recepción en un renglón que no está recibido, o una "
+            "lista vacía. Lo rechaza ck_renglon_compras_de_la_recepcion: o son "
+            "las compras de SICAR que sostienen la recepción, o es NULL (el "
+            "marcado a mano del ticket 27 no tiene compras)."
+        )
+    if columnas.get("recepcion_rechazada_por") == "":
+        raise ValueError(
+            "Firma vacía. La columna tiene CHECK (recepcion_rechazada_por <> ''): "
+            "o hay correo o es NULL: ck_renglon_rechazo_por."
+        )
+    rechazadas = columnas.get("compras_rechazadas")
+    if (
+        (rechazadas is None) != (columnas.get("recepcion_rechazada_por") is None)
+        or (rechazadas is None) != (columnas.get("recepcion_rechazada_en") is None)
+        or (rechazadas is not None and len(rechazadas) < 1)
+    ):
+        raise ValueError(
+            "Compras rechazadas sin decir quién ni cuándo, una firma de rechazo "
+            "sin compras, o una lista vacía. Lo rechaza ck_renglon_rechazo. Un "
+            "rechazo es la palabra de una persona de que esa compra no es este "
+            "pedido: sin firma no hay a quién preguntarle, y sin compra no dice "
+            "nada."
         )
 
 
@@ -2540,6 +2649,69 @@ class AlmacenamientoDelPedido(Protocol):
         """
         ...
 
+    def lo_que_esta_en_transito(self, negocio: str) -> tuple[LoYaPedido, ...]:
+        """Todo lo `en tránsito`, **de cualquier lista, la de hoy incluida** (26).
+
+        **Solo lectura.** Es con lo que se cruzan las compras de SICAR para
+        proponer "probablemente recibido": lo que se envió esta mañana puede
+        llegar esta tarde, así que aquí no hay `antes_de`. Cada fila trae el
+        `pro_id` de su pedido (`LoYaPedido.proveedor_id`), que es la llave del
+        cruce. En el orden de las listas y, dentro, de los renglones.
+        """
+        ...
+
+    def lo_recibido(
+        self, negocio: str, productos: Collection[int], pedidos: Collection[int]
+    ) -> tuple[RenglonRecibido, ...]:
+        """Lo recibido de esos productos o de esos pedidos, con sus compras (26).
+
+        **Solo lectura.** Dice qué compras ya confirmaron algún renglón —no se
+        proponen para otro— y qué pedidos ya tienen algo recibido —no ofrecen
+        cancelar—. Acotado por productos y pedidos, no por fecha: no hay una
+        que no saliera del reloj.
+        """
+        ...
+
+    def confirmar_la_recepcion(
+        self,
+        negocio: str,
+        renglon_id: int,
+        compras: Sequence[int],
+        piezas: float,
+        quien: str,
+    ) -> RenglonGuardado | None:
+        """`en tránsito` → `recibido`, firmado y con sus compras (ticket 26).
+
+        **Lo que se guarda es el juicio de una persona** sobre una evidencia que
+        Continental le enseñó: *esta compra de SICAR es este pedido, y llegó
+        completo*. Firma y nunca permiso (regla 3).
+
+        Todas las condiciones viven en el `WHERE` (`_CONFIRMAR_LA_RECEPCION`):
+        el negocio, el renglón en tránsito, su pedido enviado a un proveedor que
+        SICAR conoce, **`piezas` que alcanzan lo pedido** —el mismo número que
+        la pantalla calculó con la función pura—, ninguna compra que este
+        renglón haya rechazado y **ninguna que ya haya confirmado otro
+        renglón**: una compra confirma uno solo.
+
+        `None` es "no se confirmó", y quien llama lo dice. Devuelve el renglón
+        releído con su firma. Con esto lo retenido del ticket 24 vuelve solo:
+        `recibido` cierra el tránsito (`ESTADOS_QUE_CIERRAN_EL_TRANSITO`).
+        """
+        ...
+
+    def rechazar_la_recepcion(
+        self, negocio: str, renglon_id: int, compras: Sequence[int], quien: str
+    ) -> RenglonGuardado | None:
+        """"Esa compra no es este pedido": el renglón **sigue en tránsito** (26).
+
+        Rechazar no es un estado —la propuesta tampoco lo es—: lo que se guarda
+        es qué compras no son suyas, agregadas a las que ya había, para que la
+        misma no se vuelva a proponer mañana y una distinta sí. Firmado con el
+        último que rechazó. `None` si no está en tránsito, su pedido no está
+        enviado, o alguna de esas compras ya estaba rechazada.
+        """
+        ...
+
     def marcar_capturado(
         self, negocio: str, renglon_id: int, capturado: bool, quien: str
     ) -> PedidoSugeridoGuardado | None:
@@ -2651,7 +2823,9 @@ _LEER_RENGLONES = text(
            cantidad_final, ajustada_por, ajustada_en,
            pedido_id, proveedor_elegido, elegido_por, elegido_en,
            capturado_por, capturado_en, ventas_desde,
-           cancelado_por, cancelado_en
+           cancelado_por, cancelado_en,
+           recibido_por, recibido_en, recibido_con_compras,
+           compras_rechazadas, recepcion_rechazada_por, recepcion_rechazada_en
     from pedidos.renglon
     where negocio = :negocio and pedido_sugerido_id = :pedido_sugerido_id
     order by renglon_id
@@ -2671,7 +2845,9 @@ _LEER_RENGLON_POR_ID = text(
            cantidad_final, ajustada_por, ajustada_en,
            pedido_id, proveedor_elegido, elegido_por, elegido_en,
            capturado_por, capturado_en, ventas_desde,
-           cancelado_por, cancelado_en
+           cancelado_por, cancelado_en,
+           recibido_por, recibido_en, recibido_con_compras,
+           compras_rechazadas, recepcion_rechazada_por, recepcion_rechazada_en
     from pedidos.renglon
     where negocio = :negocio and renglon_id = :renglon_id
     """
@@ -2789,10 +2965,13 @@ _LO_YA_PEDIDO = text(
            r.pedido_id, r.proveedor_elegido, r.elegido_por, r.elegido_en,
            r.capturado_por, r.capturado_en, r.ventas_desde,
            r.cancelado_por, r.cancelado_en,
+           r.recibido_por, r.recibido_en, r.recibido_con_compras,
+           r.compras_rechazadas, r.recepcion_rechazada_por,
+           r.recepcion_rechazada_en,
            s.fecha_del_pedido, s.ventas_consideradas_hasta,
            s.ventas_consideradas_desde,
            p.proveedor, p.enviado_por, p.enviado_en,
-           p.estado as estado_del_pedido
+           p.estado as estado_del_pedido, p.proveedor_id
     from pedidos.renglon as r
     join pedidos.pedido_sugerido as s
       on s.pedido_sugerido_id = r.pedido_sugerido_id
@@ -2819,6 +2998,70 @@ _LO_YA_PEDIDO = text(
                           or r2.estado in ('en tránsito', 'recibido', 'recibido parcial')
                           or r2.estado = 'cancelado'))))
     order by s.fecha_del_pedido, r.renglon_id
+    """
+)
+
+# LO QUE ESTÁ EN TRÁNSITO, DE CUALQUIER LISTA (ticket 26, ADR 0014): con qué se
+# cruzan las compras de SICAR para proponer "probablemente recibido".
+#
+# Hermana de `_LO_YA_PEDIDO` y no la misma: aquélla es la memoria con la que se
+# ARMA una lista y por eso mira solo las anteriores (`< :antes_de`); ésta mira
+# **también la de hoy**, porque lo que se envió esta mañana puede llegar esta
+# tarde. Y solo trae lo `en tránsito`: lo recibido o cancelado ya no espera
+# ninguna propuesta.
+#
+# `p.proveedor_id` es la correspondencia con SICAR que el pedido guardó al
+# partirse (ADR 0008): es la llave del cruce con `marts.fct_compras`. Un pedido
+# sin ella —QuePharma— sale igual, con `NULL`, y la pantalla dice que nunca
+# habrá propuesta.
+#
+# Ninguna fecha sale del reloj: la sentencia no tiene parámetro de fecha.
+_EN_TRANSITO = text(
+    """
+    select r.renglon_id, r.pedido_sugerido_id, r.producto_id, r.clave,
+           r.descripcion, r.piezas_vendidas, r.cantidad_propuesta,
+           r.esta_en_el_catalogo, r.existencia, r.dias_de_cobertura,
+           r.clasificacion, r.estado, r.descartado_por, r.descartado_en,
+           r.cantidad_final, r.ajustada_por, r.ajustada_en,
+           r.pedido_id, r.proveedor_elegido, r.elegido_por, r.elegido_en,
+           r.capturado_por, r.capturado_en, r.ventas_desde,
+           r.cancelado_por, r.cancelado_en,
+           r.recibido_por, r.recibido_en, r.recibido_con_compras,
+           r.compras_rechazadas, r.recepcion_rechazada_por,
+           r.recepcion_rechazada_en,
+           s.fecha_del_pedido, s.ventas_consideradas_hasta,
+           s.ventas_consideradas_desde,
+           p.proveedor, p.enviado_por, p.enviado_en,
+           p.estado as estado_del_pedido, p.proveedor_id
+    from pedidos.renglon as r
+    join pedidos.pedido_sugerido as s
+      on s.pedido_sugerido_id = r.pedido_sugerido_id
+     and s.negocio = r.negocio
+    left join pedidos.pedido as p
+      on p.pedido_id = r.pedido_id
+     and p.negocio = r.negocio
+    where r.negocio = :negocio
+      and r.estado = 'en tránsito'
+    order by s.fecha_del_pedido, r.renglon_id
+    """
+)
+
+# LO RECIBIDO DE ESOS PRODUCTOS O DE ESOS PEDIDOS (ticket 26). Dos preguntas en
+# una lectura: qué compras ya confirmaron algún renglón —y por eso no se
+# proponen para otro: una compra confirma uno solo— y qué pedidos ya tienen algo
+# recibido —y por eso no ofrecen cancelar—.
+#
+# Acotada por los productos y los pedidos que están en camino, y no por una
+# fecha: no hay fecha de la que fiarse que no salga del reloj, y lo recibido de
+# un producto en camino es poco.
+_LO_RECIBIDO = text(
+    """
+    select r.renglon_id, r.pedido_id, r.producto_id, r.recibido_con_compras
+    from pedidos.renglon as r
+    where r.negocio = :negocio
+      and r.estado in ('recibido', 'recibido parcial')
+      and (r.producto_id = any(:productos) or r.pedido_id = any(:pedidos))
+    order by r.renglon_id
     """
 )
 
@@ -3275,9 +3518,9 @@ _RENGLONES_A_TRANSITO = text(
 #     le ha pedido a nadie (se vuelve a partir) y uno ya cancelado no mueve su
 #     firma con el segundo clic. Cero filas y quien llama lo dice.
 #   - **`not exists` sobre lo recibido** — si algo de este pedido llegó, sí se
-#     capturó, y "nunca se capturó" sería falso. Hoy nada escribe `recibido`
-#     (ticket 26); la condición está desde ya para que ese ticket no tenga que
-#     acordarse de venir aquí.
+#     capturó, y "nunca se capturó" sería falso. Desde el ticket 26
+#     `recibido` se escribe (`_CONFIRMAR_LA_RECEPCION`), y esta condición ya
+#     estaba puesta para que ese ticket no tuviera que venir aquí.
 #
 # `enviado_por` y `enviado_en` NO se tocan: alguien SÍ dijo haberlo capturado, y
 # esa palabra es parte de la historia del pedido. `ck_pedido_envio` las exige
@@ -3357,6 +3600,81 @@ _DEVOLVER_EL_ATRASADO = text(
        and p.negocio = r.negocio
        and p.estado = 'enviado'
        and p.enviado_en < :enviado_antes_de
+    returning r.renglon_id, r.pedido_sugerido_id
+    """
+)
+
+# CONFIRMAR LA RECEPCIÓN (ticket 26, ADR 0014). `en tránsito` -> `recibido`,
+# firmado, con las compras de SICAR que una persona juzgó.
+#
+# Es la ÚNICA sentencia que escribe `recibido`, y con eso lo retenido del
+# ticket 24 vuelve solo: `recibido` está en `ESTADOS_QUE_CIERRAN_EL_TRANSITO` y
+# en la cláusula de `_LO_YA_PEDIDO`, y nadie tiene que hacer nada más.
+#
+#   - `r.negocio`, y `p.negocio = r.negocio` en la unión — regla 7.
+#   - `r.estado = 'en tránsito'` — la transición en el `WHERE`. Un segundo clic
+#     no mueve la firma.
+#   - `p.estado = 'enviado'` y `p.proveedor_id is not null` — solo lo que se le
+#     pidió a alguien que SICAR conoce puede tener una compra de SICAR.
+#   - **`coalesce(r.cantidad_final, r.cantidad_propuesta) <= :piezas`** — la
+#     evidencia alcanza lo pedido. `recibido` es "llegó completo" (CONTEXT.md);
+#     con menos, es un parcial, que es el ticket 27. `:piezas` sale de la misma
+#     función pura con que la pantalla decide ofrecer el botón, igual que el
+#     límite del atraso del 25.
+#   - **ninguna de esas compras la rechazó este renglón** (`&&` es "tienen algún
+#     elemento en común") y **ninguna confirmó ya otro renglón**: una compra
+#     confirma uno solo. Es lo que impide asignar la misma compra dos veces
+#     cuando encaja con dos pedidos del mismo producto.
+#
+# El folio no aparece: su semántica no está verificada (ADR 0002).
+_CONFIRMAR_LA_RECEPCION = text(
+    """
+    update pedidos.renglon as r
+       set estado = 'recibido',
+           recibido_por = :quien,
+           recibido_en = now(),
+           recibido_con_compras = cast(:compras as bigint[])
+      from pedidos.pedido as p
+     where r.negocio = :negocio
+       and r.renglon_id = :renglon_id
+       and r.estado = 'en tránsito'
+       and p.pedido_id = r.pedido_id
+       and p.negocio = r.negocio
+       and p.estado = 'enviado'
+       and p.proveedor_id is not null
+       and coalesce(r.cantidad_final, r.cantidad_propuesta) <= :piezas
+       and not (coalesce(r.compras_rechazadas, '{}') && cast(:compras as bigint[]))
+       and not exists (select 1
+                         from pedidos.renglon as r2
+                        where r2.negocio = r.negocio
+                          and r2.recibido_con_compras && cast(:compras as bigint[]))
+    returning r.renglon_id, r.pedido_sugerido_id
+    """
+)
+
+# RECHAZAR LA PROPUESTA (ticket 26). **No cambia el estado**: el renglón sigue
+# `en tránsito`, que es lo que el glosario dice que pasa al rechazar. Lo que se
+# guarda es QUÉ compras no son este pedido, agregadas a las que ya había
+# (`||`, nunca pisa), con la firma del último rechazo.
+#
+#   - `r.estado = 'en tránsito'` — lo recibido no se rechaza.
+#   - `p.estado = 'enviado'` — de un pedido cancelado ya no queda nada en camino.
+#   - la misma compra no se rechaza dos veces: el segundo clic no mueve la firma.
+_RECHAZAR_LA_RECEPCION = text(
+    """
+    update pedidos.renglon as r
+       set compras_rechazadas = coalesce(r.compras_rechazadas, '{}')
+                                || cast(:compras as bigint[]),
+           recepcion_rechazada_por = :quien,
+           recepcion_rechazada_en = now()
+      from pedidos.pedido as p
+     where r.negocio = :negocio
+       and r.renglon_id = :renglon_id
+       and r.estado = 'en tránsito'
+       and p.pedido_id = r.pedido_id
+       and p.negocio = r.negocio
+       and p.estado = 'enviado'
+       and not (coalesce(r.compras_rechazadas, '{}') && cast(:compras as bigint[]))
     returning r.renglon_id, r.pedido_sugerido_id
     """
 )
@@ -4164,6 +4482,92 @@ class AlmacenamientoPostgres:
             )
         return None if fila is None else renglon_guardado_desde_columnas(fila)
 
+    def lo_que_esta_en_transito(self, negocio: str) -> tuple[LoYaPedido, ...]:
+        # `connect` y no `begin`: solo lee.
+        with self._motor().connect() as conexion:
+            filas = (
+                conexion.execute(_EN_TRANSITO, {"negocio": negocio}).mappings().all()
+            )
+        return tuple(lo_ya_pedido_desde_columnas(f) for f in filas)
+
+    def lo_recibido(
+        self, negocio: str, productos: Collection[int], pedidos: Collection[int]
+    ) -> tuple[RenglonRecibido, ...]:
+        if not productos and not pedidos:
+            return ()
+        with self._motor().connect() as conexion:
+            filas = (
+                conexion.execute(
+                    _LO_RECIBIDO,
+                    {
+                        "negocio": negocio,
+                        "productos": sorted(productos),
+                        "pedidos": sorted(pedidos),
+                    },
+                )
+                .mappings()
+                .all()
+            )
+        return tuple(renglon_recibido_desde_columnas(f) for f in filas)
+
+    def confirmar_la_recepcion(
+        self,
+        negocio: str,
+        renglon_id: int,
+        compras: Sequence[int],
+        piezas: float,
+        quien: str,
+    ) -> RenglonGuardado | None:
+        return self._recibir_o_rechazar(
+            _CONFIRMAR_LA_RECEPCION,
+            {
+                "negocio": negocio,
+                "renglon_id": renglon_id,
+                "compras": [int(c) for c in compras],
+                "piezas": piezas,
+                "quien": quien,
+            },
+        )
+
+    def rechazar_la_recepcion(
+        self, negocio: str, renglon_id: int, compras: Sequence[int], quien: str
+    ) -> RenglonGuardado | None:
+        return self._recibir_o_rechazar(
+            _RECHAZAR_LA_RECEPCION,
+            {
+                "negocio": negocio,
+                "renglon_id": renglon_id,
+                "compras": [int(c) for c in compras],
+                "quien": quien,
+            },
+        )
+
+    def _recibir_o_rechazar(self, sentencia, parametros: dict) -> RenglonGuardado | None:
+        """El `UPDATE` y la relectura del renglón, en una transacción (26).
+
+        Sin compras no hay nada que confirmar ni que rechazar, y no se llega a
+        la base: un arreglo vacío pasaría el `&&` de todo y afirmaría algo sin
+        evidencia. Cero filas es `None`.
+        """
+        if not parametros["compras"]:
+            return None
+        with self._motor().begin() as conexion:
+            movido = conexion.execute(sentencia, parametros).mappings().first()
+            if movido is None:
+                return None
+            fila = (
+                conexion.execute(
+                    _LEER_RENGLON_POR_ID,
+                    {
+                        "negocio": parametros["negocio"],
+                        "renglon_id": parametros["renglon_id"],
+                    },
+                )
+                .mappings()
+                .first()
+            )
+        return None if fila is None else renglon_guardado_desde_columnas(fila)
+
     def marcar_capturado(
         self, negocio: str, renglon_id: int, capturado: bool, quien: str
     ) -> PedidoSugeridoGuardado | None:
@@ -4313,7 +4717,36 @@ def renglon_guardado_desde_columnas(fila) -> RenglonGuardado:
         # migración 0009 es "nadie lo canceló", no un KeyError.
         cancelado_por=fila.get("cancelado_por"),
         cancelado_en=fila.get("cancelado_en"),
+        # Las seis del ticket 26, con `.get` por lo mismo: sin la migración
+        # 0010 es "nadie lo recibió ni rechazó nada", no un KeyError. Los
+        # `bigint[]` llegan como lista y se congelan en tupla.
+        recibido_por=fila.get("recibido_por"),
+        recibido_en=fila.get("recibido_en"),
+        recibido_con_compras=_tupla_de_ids(fila.get("recibido_con_compras")),
+        compras_rechazadas=_tupla_de_ids(fila.get("compras_rechazadas")),
+        recepcion_rechazada_por=fila.get("recepcion_rechazada_por"),
+        recepcion_rechazada_en=fila.get("recepcion_rechazada_en"),
     )
+
+
+def renglon_recibido_desde_columnas(fila) -> RenglonRecibido:
+    """Una fila de `_LO_RECIBIDO` → `RenglonRecibido`. La usan Postgres y el doble."""
+    return RenglonRecibido(
+        renglon_id=int(fila["renglon_id"]),
+        pedido_id=None if fila.get("pedido_id") is None else int(fila["pedido_id"]),
+        producto_id=int(fila["producto_id"]),
+        compras=_tupla_de_ids(fila.get("recibido_con_compras")) or (),
+    )
+
+
+def _tupla_de_ids(crudo) -> tuple[int, ...] | None:
+    """Un `bigint[]` leído → tupla de enteros, o `None` si la columna es nula.
+
+    `None` y no una tupla vacía: el CHECK no deja guardar un arreglo vacío, así
+    que "vacío" no es un estado que exista, y confundirlo con nulo borraría la
+    diferencia entre "nadie rechazó nada" y un dato raro que hay que ver.
+    """
+    return None if crudo is None else tuple(int(x) for x in crudo)
 
 
 def lo_ya_pedido_desde_columnas(fila) -> LoYaPedido:
@@ -4335,4 +4768,8 @@ def lo_ya_pedido_desde_columnas(fila) -> LoYaPedido:
         # pedido entero o el renglón solo.
         ventas_desde_la_lista=fila.get("ventas_consideradas_desde"),
         estado_del_pedido=fila.get("estado_del_pedido"),
+        # El del ticket 26: con qué `pro_id` se cruzan las compras de SICAR.
+        proveedor_id=(
+            None if fila.get("proveedor_id") is None else int(fila["proveedor_id"])
+        ),
     )

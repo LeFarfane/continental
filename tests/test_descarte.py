@@ -386,7 +386,13 @@ def test_un_renglon_que_no_esta_abierto_no_se_descarta(almacenamiento, estado):
         NEGOCIO, HOY, Ventana(HOY, HOY), lambda: (_renglon(1, "PARACETAMOL"),)
     )
     renglon_id = lista.renglones[0].renglon_id
-    almacenamiento.poner_estado_del_renglon(renglon_id, estado)
+    # Desde el ticket 26 lo recibido va firmado (`ck_renglon_recepcion`).
+    firma = (
+        {"recibido_por": CORREO, "recibido_en": dt.datetime(2026, 9, 16, tzinfo=dt.UTC)}
+        if estado.startswith("recibido")
+        else {}
+    )
+    almacenamiento.poner_estado_del_renglon(renglon_id, estado, **firma)
 
     assert almacenamiento.descartar(NEGOCIO, renglon_id, CORREO) is None
     assert almacenamiento.leer(NEGOCIO, HOY).renglones[0].estado == estado

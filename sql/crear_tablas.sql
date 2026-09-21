@@ -75,7 +75,7 @@
 -- se corren a mano con credenciales de dueño (ADR 0003) y ninguno de los dos
 -- lo toca el código de arranque.
 --
--- Hoy hay nueve, y se corren en orden:
+-- Hoy hay diez, y se corren en orden:
 --
 --   1. `sql/migraciones/0001-renglon-quien-descarto-y-cuando.sql` (ticket 10),
 --      que agrega `descartado_por` y `descartado_en`.
@@ -103,8 +103,11 @@
 --   9. `sql/migraciones/0009-cancelar-y-devolver-lo-atrasado.sql` (ticket 25,
 --      ADR 0013), que le da a `pedido` el estado `cancelado` y a los dos -
 --      `pedido` y `renglon`- la firma de la cancelación. NO crea tabla.
+--  10. `sql/migraciones/0010-la-recepcion-sugerida.sql` (ticket 26, ADR
+--      0014), que le da a `renglon` la firma de la recepción con sus compras
+--      y lo rechazado. NO crea tabla.
 --
--- Las nueve son idempotentes, así que correrlas sobre una base que ya las
+-- Las diez son idempotentes, así que correrlas sobre una base que ya las
 -- tiene -o sobre una recién creada con este archivo- no rompe nada.
 --
 -- **La 0003 y la 0004 son distintas de las dos primeras y hay que decirlo**:
@@ -574,6 +577,17 @@ CREATE TABLE IF NOT EXISTS pedidos.renglon (
     -- pedido se canceló, o alguien lo devolvió a la lista por atrasado.
     cancelado_por        text,
     cancelado_en         timestamptz,
+    -- LA RECEPCIÓN (ticket 26, ADR 0014, migración 0010). Quién confirmó que
+    -- llegó, cuándo, y con qué compras de SICAR -por su `compra_id`, nunca por
+    -- folio-. Y lo rechazado: qué compras dijo una persona que NO son este
+    -- renglón, con la firma del último rechazo. "Probablemente recibido" NO
+    -- es una columna: se calcula cada vez que se mira.
+    recibido_por            text,
+    recibido_en             timestamptz,
+    recibido_con_compras    bigint[],
+    compras_rechazadas      bigint[],
+    recepcion_rechazada_por text,
+    recepcion_rechazada_en  timestamptz,
 
     CONSTRAINT pk_renglon
         PRIMARY KEY (renglon_id),
@@ -762,6 +776,35 @@ CREATE TABLE IF NOT EXISTS pedidos.renglon (
         CHECK ((estado = 'cancelado')
                = (cancelado_por IS NOT NULL AND cancelado_en IS NOT NULL)),
 
+    -- LA RECEPCIÓN (ticket 26, ADR 0014). Recibido -completo o parcial- si y
+    -- solo si hay firma y hora: es el juicio de una persona sobre una
+    -- evidencia, y sin firma no hay a quién preguntarle cuando falte
+    -- mercancía. Las compras solo en lo recibido y nunca una lista vacía; NULL
+    -- en lo recibido es el marcado a mano del ticket 27.
+    CONSTRAINT ck_renglon_recibido_por
+        CHECK (recibido_por <> ''),
+
+    CONSTRAINT ck_renglon_recepcion
+        CHECK ((estado IN ('recibido', 'recibido parcial'))
+               = (recibido_por IS NOT NULL AND recibido_en IS NOT NULL)),
+
+    CONSTRAINT ck_renglon_compras_de_la_recepcion
+        CHECK (recibido_con_compras IS NULL
+               OR (estado IN ('recibido', 'recibido parcial')
+                   AND cardinality(recibido_con_compras) >= 1)),
+
+    -- LO RECHAZADO: las tres juntas o ninguna, la lista nunca vacía, y SIN
+    -- relación con el estado -un renglón que rechazó una compra y después se
+    -- recibió con otra conserva su rechazo-.
+    CONSTRAINT ck_renglon_rechazo_por
+        CHECK (recepcion_rechazada_por <> ''),
+
+    CONSTRAINT ck_renglon_rechazo
+        CHECK ((compras_rechazadas IS NULL) = (recepcion_rechazada_por IS NULL)
+               AND (compras_rechazadas IS NULL) = (recepcion_rechazada_en IS NULL)
+               AND (compras_rechazadas IS NULL
+                    OR cardinality(compras_rechazadas) >= 1)),
+
     CONSTRAINT fk_renglon_sugerido
         FOREIGN KEY (pedido_sugerido_id, negocio)
         REFERENCES pedidos.pedido_sugerido (pedido_sugerido_id, negocio),
@@ -939,6 +982,28 @@ COMMENT ON COLUMN pedidos.renglon.cancelado_por IS
 
 COMMENT ON COLUMN pedidos.renglon.cancelado_en IS
     'Cuándo, instante con zona. NULL si no está cancelado.';
+
+COMMENT ON COLUMN pedidos.renglon.recibido_por IS
+    'Quién confirmó que llegó: juzgó la evidencia que la pantalla le enseñó '
+    '(ADR 0014). Es una FIRMA, no un permiso. NULL si no está recibido.';
+
+COMMENT ON COLUMN pedidos.renglon.recibido_en IS
+    'Cuándo lo confirmó, instante con zona. NULL si no está recibido.';
+
+COMMENT ON COLUMN pedidos.renglon.recibido_con_compras IS
+    'Los compra_id de marts.fct_compras que sostienen la recepción (nunca el '
+    'folio, de semántica no verificada). Una compra confirma un solo renglón. '
+    'NULL si no está recibido, o si se recibió a mano sin compra (ticket 27).';
+
+COMMENT ON COLUMN pedidos.renglon.compras_rechazadas IS
+    'Los compra_id que una persona dijo que NO son este renglón: ya no se le '
+    'proponen. El renglón sigue en tránsito; rechazar no es un estado.';
+
+COMMENT ON COLUMN pedidos.renglon.recepcion_rechazada_por IS
+    'Quién rechazó la última propuesta. Es una FIRMA, no un permiso.';
+
+COMMENT ON COLUMN pedidos.renglon.recepcion_rechazada_en IS
+    'Cuándo, instante con zona.';
 
 
 -- --------------------------------------------------------------------------

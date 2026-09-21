@@ -474,6 +474,17 @@
   .en-camino .pedidos-en-camino li, .en-camino .vuelven li { flex-wrap: wrap; gap: .3rem .7rem; }
   .en-camino .explica { flex: 1 1 100%; font-size: .82rem; color: var(--tenue); }
   .en-camino .accion { margin-left: auto; }
+  /* LA RECEPCIÓN SUGERIDA (ticket 26). Usa la misma caja que lo que viene en
+     camino —es su otra cara— y va ARRIBA de ella: lo que probablemente ya
+     llegó es lo que hay que atender primero. La evidencia a la vista, entera,
+     y no en un `title`: la persona la tiene que poder juzgar. */
+  .recepcion .evidencia { flex: 1 1 100%; font-size: .82rem; margin: 0; padding-left: 1rem; }
+  .recepcion .evidencia li { display: list-item; }
+  .recepcion .cantidad { flex: 1 1 100%; font-size: .82rem; }
+  .recepcion .compartida { flex: 1 1 100%; font-size: .82rem; color: var(--aviso); }
+  .recepcion .esperan { margin: .9rem 0 0; }
+  .recepcion .esperan li { flex-wrap: wrap; gap: .1rem .7rem; }
+  .en-camino .recepcion-marca { flex: 1 1 100%; font-size: .82rem; color: var(--aviso); font-weight: 600; }
   /* Existencia y cobertura: a la derecha y con cifras de ancho fijo, que es lo
      que deja comparar dos renglones sin leerlos. */
   td.numero, th.numero { text-align: right; width: 6.5rem; }
@@ -601,6 +612,11 @@
          vendieron y no se proponen porque ya se pidieron. Atenuado, no
          escondido. Se pinta una sola vez, al cargar: partir, enviar y tachar
          no lo cambian. -->
+    <!-- LO QUE PROBABLEMENTE YA LLEGÓ (ticket 26). Arriba de lo que viene en
+         camino porque es lo que se atiende: una compra de SICAR encaja con un
+         renglón en tránsito, y una persona la confirma o la rechaza. Nada pasa
+         a recibido solo. Se pinta con la carga, igual que el bloque de abajo. -->
+    <div class="en-camino recepcion" id="recepcion" hidden></div>
     <div class="en-camino" id="en-camino" hidden></div>
     <div class="particion" id="particion" hidden></div>
     <details class="descartados" id="descartados" hidden>
@@ -1164,7 +1180,8 @@ const renglon = (r, acciones) => {
   const tr = document.createElement('tr');
   // YA SE PIDIÓ (ticket 24, casilla 4): atenuado y no escondido. Y lo que se
   // dejó de esperar (ticket 25), igual: ya no se atiende en esta lista.
-  if (r.esta_en_transito || r.esta_cancelado) tr.classList.add('transito');
+  // Y lo que ya llegó (ticket 26), igual: está en la lista, ya no se atiende.
+  if (r.esta_en_transito || r.esta_cancelado || r.esta_recibido) tr.classList.add('transito');
 
   const clave = document.createElement('td');
   clave.className = 'clave';
@@ -1232,6 +1249,23 @@ const renglon = (r, acciones) => {
     }
   }
 
+  // PROBABLEMENTE YA LLEGÓ (ticket 26): hay una compra que encaja, en la
+  // recepción de arriba. Por eso el botón de devolver no se ofrece.
+  if (r.frase_de_la_recepcion) {
+    const marca = document.createElement('span');
+    marca.className = 'marca';
+    marca.textContent = r.frase_de_la_recepcion;
+    producto.append(marca);
+  }
+
+  // YA LLEGÓ (ticket 26): con la firma de quien lo confirmó, hecha en Python.
+  if (r.esta_recibido && r.frase_de_lo_recibido) {
+    const marca = document.createElement('span');
+    marca.className = 'marca tenue';
+    marca.textContent = r.frase_de_lo_recibido;
+    producto.append(marca);
+  }
+
   // SE DEJÓ DE ESPERAR (ticket 25): su pedido se canceló o se devolvió por
   // atrasado. NO vuelve a esta lista —ya se armó sin él—: vuelve en la
   // siguiente, y la frase de Python lo dice.
@@ -1288,7 +1322,8 @@ const renglon = (r, acciones) => {
   // para la lista cerrada.
   //
   // La garantía sigue siendo del `WHERE`, no de esto.
-  const editable = acciones.editable && !r.esta_en_transito && !r.esta_cancelado;
+  const editable = acciones.editable && !r.esta_en_transito && !r.esta_cancelado
+    && !r.esta_recibido;
 
   const cantidad = celdaDeCantidad(r, editable, acciones.ajustar);
 
@@ -1316,7 +1351,9 @@ const renglon = (r, acciones) => {
        ? 'Ya se le pidió a un proveedor: descartarlo diría que nadie lo pidió.'
        : (r.esta_cancelado
           ? 'Se dejó de esperar: vuelve a proponerse en la siguiente lista.'
-          : 'La lista ya se cerró: lo que se iba a pedir ya se pidió.'));
+          : (r.esta_recibido
+             ? 'Ya llegó: se pidió y se recibió.'
+             : 'La lista ya se cerró: lo que se iba a pedir ya se pidió.')));
   // El nombre del producto va en el nombre accesible: con veinte botones
   // iguales, "Descartar" a secas no dice cuál se está tocando.
   quitar.setAttribute('aria-label', 'Descartar ' + r.descripcion);
@@ -1701,6 +1738,7 @@ async function cargarPedido() {
   // clic. Esto copia datos, no compone ni una palabra.
   const conservarLoDeLaCarga = (nuevo, anterior) => {
     if (!nuevo.en_camino) nuevo.en_camino = anterior.en_camino;
+    if (!nuevo.recepcion) nuevo.recepcion = anterior.recepcion;
     const avisos = new Map((anterior.renglones || [])
       .filter(r => r.ya_viene_en_camino)
       .map(r => [r.renglon_id, r.ya_viene_en_camino]));
@@ -1724,6 +1762,7 @@ async function cargarPedido() {
   //
   // Y lo que viene en camino (ticket 24) también va antes: un día sin nada que
   // reponer puede tener, igual, tres renglones de ayer que no han llegado.
+  pintarRecepcion(datos.recepcion);
   pintarEnCamino(datos.en_camino);
   pintarCabecera(datos);
   pintarCierre(datos, (boton, detalle) =>
@@ -2404,6 +2443,14 @@ const pintarEnCamino = (en_camino) => {
       atraso.textContent = v.frase_del_atraso;
       li.append(atraso);
     }
+    // CON PROPUESTA DE RECEPCIÓN (ticket 26): en lugar del botón de devolver,
+    // la frase que manda a confirmar o rechazar primero. Viene de Python.
+    if (v.frase_de_la_recepcion) {
+      const recepcion = document.createElement('span');
+      recepcion.className = 'recepcion-marca';
+      recepcion.textContent = v.frase_de_la_recepcion;
+      li.append(recepcion);
+    }
     if (v.se_puede_devolver) {
       const boton = botonDeAccion('Devolver a la lista',
         (b) => devolverAtrasado(v.renglon_id, b));
@@ -2426,10 +2473,17 @@ const pintarEnCamino = (en_camino) => {
     que.textContent = p.frase;
     const explica = document.createElement('span');
     explica.className = 'explica';
-    explica.textContent = p.frase_para_cancelar;
-    const boton = botonDeAccion('Cancelar: no está en el portal de ' + p.nombre,
-      (b) => cancelarPedido(p.pedido_id, b));
-    li.append(que, boton, explica);
+    // Un pedido con algo ya recibido (ticket 26) sí se capturó: no se ofrece
+    // cancelarlo, y se dice por qué en vez de pintar un botón que da 409.
+    if (p.se_puede_cancelar === false) {
+      explica.textContent = 'No se puede cancelar: ' + p.motivo_para_no_cancelar + '.';
+      li.append(que, explica);
+    } else {
+      explica.textContent = p.frase_para_cancelar;
+      const boton = botonDeAccion('Cancelar: no está en el portal de ' + p.nombre,
+        (b) => cancelarPedido(p.pedido_id, b));
+      li.append(que, boton, explica);
+    }
     pedidos.append(li);
   });
 
@@ -2467,6 +2521,140 @@ const pintarEnCamino = (en_camino) => {
     ...(pedidos.children.length ? [pedidos] : []),
     ...(vuelven.children.length ? [vuelven] : []));
   caja.hidden = false;
+};
+
+// LA RECEPCIÓN SUGERIDA (ticket 26, ADR 0014). Lo que probablemente ya
+// llegó, con su evidencia —proveedor, fecha, piezas, folio— para que una
+// persona la juzgue, y dos botones: confirmar (pasa a recibido, firmado) y
+// rechazar (sigue en camino; esa compra ya no se le propone). NADA pasa a
+// recibido solo.
+//
+// Todas las frases llegan hechas de `recepcion.py`, con pruebas: aquí se
+// acomodan. Lo que se manda al servidor es QUÉ COMPRAS SE VIERON: el servidor
+// recalcula la propuesta y se niega si ya no es la misma.
+//
+// Un servidor viejo que no mande el bloque no pinta nada.
+const pintarRecepcion = (recepcion) => {
+  const caja = document.getElementById('recepcion');
+  if (!recepcion) { caja.hidden = true; caja.replaceChildren(); return; }
+
+  const resumen = document.createElement('p');
+  resumen.className = 'resumen' + (recepcion.ok === false ? ' mal' : '');
+  resumen.textContent = recepcion.frase
+    + (recepcion.ok === false && recepcion.detalle ? ' (' + recepcion.detalle + ')' : '');
+
+  // El aviso del retraso de una noche (casilla 6) va SIEMPRE.
+  const retraso = document.createElement('p');
+  retraso.className = 'umbral';
+  retraso.textContent = recepcion.aviso_del_retraso || '';
+
+  const advertencia = document.createElement('p');
+  advertencia.className = 'advertencia';
+  advertencia.textContent = recepcion.advertencia || '';
+
+  const lista = document.createElement('ul');
+  (recepcion.propuestas || []).forEach(p => {
+    const li = document.createElement('li');
+    const que = document.createElement('span');
+    que.className = 'que';
+    que.textContent = (p.clave ? p.clave + ' · ' : '') + p.descripcion;
+    const cuanto = document.createElement('span');
+    cuanto.className = 'cuanto';
+    cuanto.textContent = plural(p.cantidad, 'pieza', 'piezas');
+    const encabezado = document.createElement('span');
+    encabezado.className = 'cuando';
+    encabezado.textContent = p.frase;
+    const cuando = document.createElement('span');
+    cuando.className = 'vendido-desde';
+    cuando.textContent = p.frase_del_transito || '';
+    // LA EVIDENCIA, compra por compra: es lo que la persona juzga.
+    const evidencia = document.createElement('ul');
+    evidencia.className = 'evidencia';
+    (p.evidencia || []).forEach(e => {
+      const item = document.createElement('li');
+      item.textContent = e.frase;
+      evidencia.append(item);
+    });
+    const cantidad = document.createElement('span');
+    cantidad.className = 'cantidad';
+    cantidad.textContent = p.frase_de_la_cantidad;
+    li.append(que, cuanto, encabezado, cuando, evidencia, cantidad);
+    if (p.compartida) {
+      const compartida = document.createElement('span');
+      compartida.className = 'compartida';
+      compartida.textContent = p.compartida;
+      li.append(compartida);
+    }
+    // Sin botón de confirmar cuando la evidencia no alcanza lo pedido: la
+    // frase de la cantidad, que viene de Python, ya dice por qué (y el
+    // recorrido del navegador cazó que el motivo repetido debajo la duplicaba).
+    if (p.se_puede_confirmar) {
+      const confirmar = botonDeAccion('Confirmar que llegó',
+        (b) => recibirORechazar('confirmar', p.renglon_id, p.compras, b));
+      confirmar.setAttribute('aria-label', 'Confirmar que llegó ' + p.descripcion);
+      li.append(confirmar);
+    }
+    const rechazar = botonDeAccion('Rechazar: no es este pedido',
+      (b) => recibirORechazar('rechazar', p.renglon_id, p.compras, b));
+    rechazar.setAttribute('aria-label', 'Rechazar la compra de ' + p.descripcion);
+    li.append(rechazar);
+    lista.append(li);
+  });
+
+  // LO QUE NO TIENE PROPUESTA, agrupado por motivo, en el orden de Python: lo
+  // que no la va a tener va primero y lo dice —no se deja esperando callado—.
+  const esperan = document.createElement('ul');
+  esperan.className = 'esperan';
+  (recepcion.esperan || []).forEach(g => {
+    const li = document.createElement('li');
+    const explica = document.createElement('span');
+    explica.className = 'explica';
+    explica.textContent = g.frase;
+    const cuales = document.createElement('span');
+    cuales.className = 'que';
+    cuales.textContent = (g.renglones || [])
+      .map(r => (r.clave ? r.clave + ' · ' : '') + r.descripcion)
+      .join('; ');
+    li.append(cuales, explica);
+    esperan.append(li);
+  });
+
+  caja.replaceChildren(
+    resumen,
+    ...(retraso.textContent ? [retraso] : []),
+    ...(lista.children.length && advertencia.textContent ? [advertencia] : []),
+    ...(lista.children.length ? [lista] : []),
+    ...(esperan.children.length ? [esperan] : []));
+  caja.hidden = false;
+};
+
+// Confirmar o rechazar: la misma ida y vuelta, y después SE VUELVE A CARGAR la
+// pantalla entera —cambian la recepción, lo que viene en camino y quizá el
+// renglón de hoy—, en vez de deducir aquí qué cambió.
+const recibirORechazar = async (accion, renglonId, compras, boton) => {
+  boton.disabled = true;
+  nota('pedido-accion', '');
+  let respuesta;
+  try {
+    respuesta = await (await fetch('/api/renglon/' + renglonId + '/recepcion/' + accion, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ compras }),
+    })).json();
+  } catch (e) {
+    boton.disabled = false;
+    nota('pedido-accion',
+      'Continental no contestó. El renglón sigue como estaba; inténtalo otra vez.', 'mal');
+    return;
+  }
+  if (!respuesta.ok) {
+    boton.disabled = false;
+    // Genérico a propósito (regla 5): el detalle está en la bitácora.
+    nota('pedido-accion', respuesta.detalle || 'No se pudo guardar.', 'aviso');
+    return;
+  }
+  await cargarPedido();
+  nota('pedido-accion', respuesta.frase, 'todo');
 };
 
 // CANCELAR UN PEDIDO Y DEVOLVER UN ATRASADO (ticket 25, ADR 0013).
@@ -2533,8 +2721,11 @@ const pintarRenglones = (visibles, total, otra, descartados, acciones) => {
   // Y LOS CANCELADOS (ticket 25), por lo mismo: siguen en la tabla y ya no se
   // atienden aquí — vuelven en la siguiente lista.
   const cancelados = visibles.filter(r => r.esta_cancelado).length;
+  // Y LO QUE YA LLEGÓ (ticket 26): se pidió y se recibió. Lo cazó el recorrido
+  // del navegador: un renglón recibido seguía contando "por atender".
+  const recibidos = visibles.filter(r => r.esta_recibido).length;
   document.getElementById('pedido-resumen').textContent =
-    plural(visibles.length - enTransito - cancelados,
+    plural(visibles.length - enTransito - cancelados - recibidos,
       'renglón por atender', 'renglones por atender') +
     ', uno por producto vendido. Se propone reponer lo que salió, pieza por ' +
     'pieza. Arriba lo que se va a acabar primero. ' +
@@ -2566,8 +2757,13 @@ const pintarRenglones = (visibles, total, otra, descartados, acciones) => {
       : '') +
     (cancelados
       ? plural(cancelados,
-          'renglón más se dejó de esperar: sigue aquí, marcado, y vuelve en la siguiente lista.',
-          'renglones más se dejaron de esperar: siguen aquí, marcados, y vuelven en la siguiente lista.')
+          'renglón más se dejó de esperar: sigue aquí, marcado, y vuelve en la siguiente lista. ',
+          'renglones más se dejaron de esperar: siguen aquí, marcados, y vuelven en la siguiente lista. ')
+      : '') +
+    (recibidos
+      ? plural(recibidos,
+          'renglón más ya se pidió y llegó: sigue aquí, marcado como recibido.',
+          'renglones más ya se pidieron y llegaron: siguen aquí, marcados como recibidos.')
       : '');
   document.getElementById('pedido-renglones').replaceChildren(
     ...visibles.map(r => renglon(r, acciones)));
@@ -3058,8 +3254,12 @@ const pintarParticion = (particion, pedidos, editable, alPartir, alEnviar, alTac
       + '. Cada pedido se puede volver a armar mientras siga en borrador: '
       + 'cambia el proveedor de un renglón y vuelve a partir.'
     // Con algo cancelado, la frase es de Python (ticket 25): la vieja decía
-    // "todo lo que había se capturó en los portales", y no es verdad.
-    : (cancelados && particion.sin_nada_por_repartir
+    // "todo lo que había se capturó en los portales", y no es verdad. Y desde
+    // el 26 también con algo recibido: la vieja decía "están en tránsito" sobre
+    // renglones que ya llegaron (lo cazó el recorrido del navegador).
+    // La de Python se usa SIEMPRE que llega: dice cuántos van en camino,
+    // cuántos se cancelaron y cuántos llegaron, y la de abajo queda de reserva.
+    : (particion.sin_nada_por_repartir
        ? particion.sin_nada_por_repartir
        : (enviados
           ? 'No queda nada por repartir: todo lo que había se capturó en los '

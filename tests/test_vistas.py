@@ -293,7 +293,10 @@ def test_la_pantalla_trae_el_interruptor_con_los_dos_nombres(cliente):
     # Las dos van a Continental, y al terminar **vuelven a cargar la pantalla
     # con la misma función** —`cargarPedido`—, así que la lectura de la lista
     # sigue escrita una sola vez.
-    assert portada.count("fetch('/api/") == 13
+    #
+    # La del ticket 26: confirmar o rechazar una recepción, UNA sola llamada
+    # para las dos acciones, que al terminar también vuelve a `cargarPedido`.
+    assert portada.count("fetch('/api/") == 14
     assert portada.count("fetch('/api/pedido-sugerido')") == 1
 
 

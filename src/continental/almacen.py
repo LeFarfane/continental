@@ -24,7 +24,7 @@ consumidor.
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Protocol, runtime_checkable
@@ -200,9 +200,10 @@ class LineaDeCompra:
 class LecturaDelAlmacen(Protocol):
     """El borde de lectura. Solo `SELECT`, y solo datos de salida.
 
-    Cuatro lecturas y ninguna más: las tres que el módulo de Pedido necesita,
-    más el ancla temporal. Si alguna vez hace falta una quinta, entra aquí y no
-    por una conexión prestada.
+    Cinco lecturas y ninguna más: las tres que el módulo de Pedido necesitaba,
+    el ancla temporal, y desde el ticket 26 la quinta —qué productos han
+    aparecido alguna vez en una compra—. Si hace falta una sexta, entra aquí y
+    no por una conexión prestada.
     """
 
     def ventas(self, desde: dt.date, hasta: dt.date) -> list[LineaDeVenta]:
@@ -219,6 +220,17 @@ class LecturaDelAlmacen(Protocol):
 
     def compras_desde(self, fecha: dt.date) -> list[LineaDeCompra]:
         """Compras con fecha igual o posterior a `fecha`."""
+        ...
+
+    def productos_con_compras(self, productos: Collection[int]) -> frozenset[int]:
+        """De esos productos, cuáles han aparecido **alguna vez** en una compra.
+
+        La quinta lectura, del ticket 26: para decir que un renglón en camino
+        **nunca** va a tener "probablemente recibido" hay que saber que su
+        producto nunca ha dejado rastro en `fct_compras` —606 de 3,429
+        artículos, 17.7%—. Sobre la misma tabla que `compras_desde`, así que el
+        rol no necesita ningún permiso nuevo.
+        """
         ...
 
     def ultima_fecha_con_ventas(self) -> dt.date | None:
@@ -299,6 +311,17 @@ _COMPRAS = text(
     join marts.dim_fecha f on f.fecha_id = c.fecha_id
     where f.fecha >= :desde
     order by f.fecha, c.compra_id
+    """
+)
+
+# Sin `dim_fecha`: la pregunta es "alguna vez", y no hace falta ninguna fecha.
+# Acotada a los productos que se preguntan: son los que vienen en camino, unos
+# cuantos, no el catálogo entero.
+_PRODUCTOS_CON_COMPRAS = text(
+    """
+    select distinct c.producto_id
+    from marts.fct_compras c
+    where c.producto_id = any(:productos)
     """
 )
 
@@ -388,6 +411,14 @@ class AlmacenPostgres:
             )
             for f in self._filas(_COMPRAS, desde=fecha)
         ]
+
+    def productos_con_compras(self, productos: Collection[int]) -> frozenset[int]:
+        if not productos:
+            return frozenset()
+        return frozenset(
+            int(f.producto_id)
+            for f in self._filas(_PRODUCTOS_CON_COMPRAS, productos=sorted(productos))
+        )
 
     def ultima_fecha_con_ventas(self) -> dt.date | None:
         filas = self._filas(_ULTIMA_VENTA)
