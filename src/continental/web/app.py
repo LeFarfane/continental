@@ -18,7 +18,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -53,6 +53,12 @@ from continental.consultas import (
     tope_del_completado_segundos,
 )
 from continental.doyle import ClienteDeDoyle
+from continental.exportar import (
+    TIPO_DEL_ARCHIVO,
+    csv_del_pedido,
+    disposicion_de_descarga,
+    nombre_del_archivo,
+)
 from continental.faltantes import (
     NUNCA_SE_CONSULTO,
     elegir_los_faltantes,
@@ -1017,6 +1023,109 @@ def enviar_el_pedido(
         almacenamiento.precios_de_la_lista(negocio, lista_id),
         _ultima_corrida(almacenamiento, negocio, lista_id),
         almacenamiento.pedidos_de_la_lista(negocio, lista_id),
+    )
+
+
+@app.get("/api/pedido-sugerido/{pedido_sugerido_id}/pedido/{pedido_id}/csv")
+def exportar_el_pedido(
+    pedido_sugerido_id: int,
+    pedido_id: int,
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+):
+    """Un pedido como CSV, para Excel, el correo o una carpeta (ticket 23).
+
+    **Se arma en memoria cada vez que se pide y no se guarda en ninguna
+    parte**: ni en disco, ni en la base, ni en git. Es la cuarta casilla, y es
+    también lo que impide que envejezca —un archivo guardado ayer seguiría
+    diciendo "borrador" de un pedido que hoy ya se envió—.
+
+    Cuelga de la lista y no solo del pedido, a propósito: con el id de la lista
+    alcanzan tres lecturas que **ya existían** —la lista, sus pedidos y sus
+    precios— y no hace falta una sentencia nueva que desde la torre no se puede
+    probar contra Postgres. Un pedido que no es de esa lista es un 404.
+
+    Las líneas son las de la pantalla de captura (`lo_que_hay_que_capturar`):
+    el pedido GUARDADO, con el precio de **ese** proveedor. Todo el porqué del
+    formato —la clave como fórmula de texto, el BOM, la coma— está en
+    `continental/exportar.py`, medido contra el Excel de la torre.
+
+    Se exporta en `borrador` y en `enviado`, y el archivo dice cuál es en su
+    nombre y en su primer renglón: el del borrador sirve para capturar o
+    revisar, y el del enviado es el respaldo de lo que se pidió.
+
+    **Lo que no se sirve es un archivo a medias.** Si los precios no se pueden
+    leer, cada línea diría "no se le ha consultado el precio", que sería
+    mentira: es un 503 con el tipo de la falla, y el detalle a la bitácora
+    (regla 5). Un pedido que se quedó sin renglones es un 409: un archivo con
+    solo el encabezado se leería "no se pidió nada", y lo que pasó es que sus
+    renglones están en otro pedido.
+    """
+    negocio = cargar().negocio
+
+    try:
+        lista = almacenamiento.leer_por_id(negocio, pedido_sugerido_id)
+        pedidos = (
+            ()
+            if lista is None
+            else almacenamiento.pedidos_de_la_lista(negocio, pedido_sugerido_id)
+        )
+        pedido = next((p for p in pedidos if p.pedido_id == pedido_id), None)
+        precios = (
+            {}
+            if pedido is None
+            else almacenamiento.precios_de_la_lista(negocio, pedido_sugerido_id)
+        )
+    except Exception as exc:  # noqa: BLE001 — el almacenamiento caído es un hueco
+        # Regla 5 de `CLAUDE.md`: el detalle a la bitácora del servidor, nunca
+        # al navegador. Un `str(exc)` de SQLAlchemy lleva la cadena de conexión
+        # con contraseña.
+        log.exception(
+            "No se pudo exportar el pedido %s de la lista %s", pedido_id, pedido_sugerido_id
+        )
+        return JSONResponse(
+            status_code=503,
+            content={
+                "ok": False,
+                "detalle": f"no se pudo armar el archivo del pedido ({type(exc).__name__})",
+            },
+        )
+
+    if lista is None or pedido is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "ok": False,
+                "detalle": "Ese pedido no está en esa lista. Vuelve a cargar la página.",
+            },
+        )
+
+    captura = lo_que_hay_que_capturar(pedido, lista.renglones, precios)
+    if not captura.hay:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "detalle": (
+                    "Ese pedido no tiene renglones que exportar: o se quedó vacío "
+                    "al volver a partir, o todos los suyos se descartaron."
+                ),
+            },
+        )
+
+    nombre = nombre_del_archivo(pedido, lista.fecha_del_pedido)
+    log.info(
+        "Se exportó el pedido %s (%s, %s) de la lista %s como %s: %d renglón(es).",
+        pedido.pedido_id,
+        pedido.nombre,
+        pedido.estado,
+        pedido_sugerido_id,
+        nombre,
+        captura.cuantos,
+    )
+    return Response(
+        content=csv_del_pedido(pedido, captura, lista.fecha_del_pedido),
+        media_type=TIPO_DEL_ARCHIVO,
+        headers={"Content-Disposition": disposicion_de_descarga(nombre)},
     )
 
 
@@ -2203,6 +2312,15 @@ def _pedido_como_json(
         # captura. `null` cuando quien llama no la calculó.
         "captura": (
             None if captura is None else captura_como_json(captura, motivo is None)
+        ),
+        # EL ARCHIVO (ticket 23), con la URL hecha aquí y no en el JavaScript.
+        # `null` cuando no hay nada que exportar —sin captura calculada, o sin
+        # renglones—: la pantalla no pinta un enlace que contestaría 409.
+        "csv": (
+            None
+            if captura is None or not captura.hay
+            else f"/api/pedido-sugerido/{pedido.pedido_sugerido_id}"
+            f"/pedido/{pedido.pedido_id}/csv"
         ),
     }
 

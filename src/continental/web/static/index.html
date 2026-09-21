@@ -265,6 +265,12 @@
      hecho cerrado, no un aviso que pida hacer algo. */
   .particion .pedido .envio.hecho { color: var(--ok); }
   .particion .pedido .acciones { grid-column: 1 / -1; margin-top: .35rem; }
+  /* El enlace del CSV (ticket 23) con la tinta de la pantalla y no con el azul
+     del navegador, que en el tema oscuro casi no se lee. Subrayado: es un
+     enlace, y el color solo no lo dice. */
+  .particion .pedido .exportar { grid-column: 1 / -1; justify-self: start; font-size: .78rem;
+    margin-top: .25rem; color: var(--tinta); text-decoration: underline; text-underline-offset: 2px; }
+  .particion .pedido .exportar:hover { color: var(--ok); }
   .particion .fila { margin-top: .6rem; }
   /* LA PANTALLA DE CAPTURA (ticket 22). El portal del proveedor en una ventana
      y esto en otra: se recorre de arriba abajo tachando conforme se teclea
@@ -2558,6 +2564,26 @@ const copiarClave = async (clave, boton) => {
 // la mitad de 40 renglones, lo primero que se ve es por dónde se iba.
 const CAPTURAS_ABIERTAS = new Map();
 
+// EL ARCHIVO DEL PEDIDO (ticket 23). La URL viene HECHA del servidor
+// (`pedido.csv`): aquí no se arma nada, y `null` quiere decir que no hay qué
+// exportar —un pedido vacío contestaría 409—. Un enlace y no un `fetch`: la
+// descarga la hace el navegador con el `Content-Disposition` del servidor. En
+// otra pestaña, para que un error se lea ahí sin tirar la pantalla de trabajo;
+// y sin el atributo de descarga, que haría guardar el JSON de un error con
+// nombre de CSV.
+const enlaceCsv = (pedido) => {
+  if (!pedido.csv) return null;
+  const enlace = document.createElement('a');
+  enlace.className = 'exportar';
+  enlace.href = pedido.csv;
+  enlace.target = '_blank';
+  enlace.rel = 'noopener';
+  enlace.textContent = 'Bajar este pedido en CSV (para Excel)';
+  enlace.title = 'Se arma en este momento con lo que el pedido tiene ahora, y no '
+    + 'se guarda en ninguna parte: cada vez que lo bajes sale al día.';
+  return enlace;
+};
+
 // LA PANTALLA DE CAPTURA DE UN PEDIDO (ticket 22). Todo lo que dice viene
 // HECHO del servidor: la frase del avance —con cuántos faltan—, la invitación a
 // enviar y cada conteo. Aquí no se filtra ni se suma nada, por lo mismo que el
@@ -2787,6 +2813,11 @@ const pintarParticion = (particion, pedidos, editable, alPartir, alEnviar, alTac
         fila.append(pintarCaptura(guardado, alTachar, true));
       }
 
+      // EL CSV (ticket 23), en borrador y en enviado: el primero sirve para
+      // capturar o revisar, y el segundo es el respaldo de lo que se pidió.
+      const archivo = enlaceCsv(guardado);
+      if (archivo) fila.append(archivo);
+
       // EL BOTÓN, CON EL TOTAL DENTRO. La primera casilla del ticket pide que
       // el total en pesos se vea ANTES de enviar, y el sitio donde de verdad
       // se ve es la etiqueta del botón que se va a apretar. Cuando no se puede
@@ -2871,6 +2902,12 @@ const pintarParticion = (particion, pedidos, editable, alPartir, alEnviar, alTac
     if (!g.fue_enviado && g.captura && g.captura.cuantos) {
       fila.append(pintarCaptura(g, alTachar, false));
     }
+
+    // EL CSV también aquí, y sobre todo aquí: los enviados caen en este
+    // recorrido, y son justo el pedido que más interesa respaldar. Pintarlo
+    // solo arriba repetiría el error del ticket 21.
+    const archivo = enlaceCsv(g);
+    if (archivo) fila.append(archivo);
 
     // Un pedido que se quedó SIN renglones también cae aquí, y sigue sin
     // poderse enviar: el motivo viene hecho de `particion.motivo_para_no_enviar`

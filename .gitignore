@@ -12,8 +12,13 @@ data/continental.db-shm
 # Bitácoras de las corridas desatendidas (el lote nocturno de precios).
 logs/
 
-# Exportaciones generadas: los CSV de un pedido se regeneran cuando se pidan.
+# Exportaciones: el CSV de un pedido (ticket 23) se arma en memoria cada vez
+# que se pide y el servidor no lo escribe en ninguna parte. Estos patrones son
+# el cinturón para el archivo que una PERSONA baje y guarde dentro del repo:
+# lleva datos de compra de la farmacia y no va en git. `data/export/` se queda
+# por si algún día algo escribe ahí; hoy nada lo hace.
 data/export/
+pedido-*.csv
 
 # Python
 __pycache__/

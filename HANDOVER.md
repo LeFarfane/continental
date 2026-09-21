@@ -248,6 +248,26 @@ del navegador volvió a cazar una —cuarta vez: 14, 15, 21, 22—: con todo
 tachado, el resumen seguía mandando a "buscar por nombre" el renglón sin EAN que
 ya se había capturado.
 
+**Y desde el ticket 23 cada pedido se baja en CSV para Excel**, en borrador y
+en enviado, con un enlace bajo su captura. **Se arma en memoria cada vez que se
+pide y no se escribe en ninguna parte** (ADR 0011): no hay copia que respaldar
+ni que envejezca, y `.gitignore` gana `pedido-*.csv` para el archivo que una
+persona guarde dentro del repo. El nombre lleva la fecha **de la lista** —no la
+del reloj—, la clave de Doyle y el estado (`pedido-2026-09-18-nadro-enviado.csv`),
+y las líneas son las de la captura del 22: el pedido guardado, con el precio
+**de ese proveedor**. Sin precio es `sin precio` y el total `sin saber`, nunca
+`0.00`; si el total guardado al armar ya no coincide con la suma de ahora, el
+archivo escribe los dos.
+
+**Lo que conviene no redescubrir del 23, y está medido con el Excel real de la
+torre (es-MX)**: la clave va como fórmula de texto, `="7501234567890"`, porque
+cruda sale `7.5012E+12` y con ceros a la izquierda pasa a **valer** otro número;
+**el apóstrofo y el tabulador al frente NO sirven en un CSV** —Excel los deja
+literales en la celda—. Una descripción que empieza con `-` o `=` también va
+protegida: `=1+1` Excel **la evalúa**. UTF-8 con BOM, coma, punto decimal y
+**sin `sep=,`**, que hace que Excel ignore el BOM. Y la defensa de Marlowe
+(rechazar al leer) no aplica: allá el CSV es de entrada, éste es de salida.
+
 **Lo sugerido NO se guarda y lo decidido SÍ, y ésa es la decisión del ticket.**
 Es la misma pregunta que el 11 resolvió con `cantidad_propuesta` /
 `cantidad_final`, y **aquí la respuesta es distinta a propósito**: la sugerencia
@@ -288,7 +308,19 @@ python iniciar.py     # http://127.0.0.1:8585
 python -m continental.verificar   # los datos de producción, no el código (ticket 17)
 python -m continental.lote        # el lote nocturno, a mano (ticket 18)
 python -m continental.lote --tope-minutos 5   # ...con tope corto, para mirarlo
-pytest                # 953 pruebas, 0 saltadas, 4.05-5.26 s (2026-09-21, ticket 22)
+pytest                # 1011 pruebas, 0 saltadas, 4.17-5.48 s (2026-09-21, ticket 23)
+                      # 953 en el 22. Las 58 nuevas son 57 de `test_exportar.py`
+                      # (lo puro: las filas, los bytes, el nombre y el
+                      # Content-Disposition; lo que se ve: la ruta, el 404, el
+                      # 409 y el 503; lo que NO se guarda: ni un archivo en el
+                      # árbol, y el patrón de `.gitignore`) y 1 que
+                      # `test_compila.py` gana sola por el módulo nuevo.
+                      # Medido en dos corridas: sin `test_exportar.py`, 954 en
+                      # 3.91-5.06 s ese mismo rato; las 57 solas, 0.58-0.62 s.
+                      # NINGUNA TOCA POSTGRES, ninguna duerme, y la única que
+                      # escribe un archivo lo hace en `tmp_path`.
+                      #
+                      # 953 pruebas, 0 saltadas, 4.05-5.26 s (2026-09-21, ticket 22)
                       # 886 en el 21. Las 67 nuevas son 66 de `test_captura.py`
                       # (lo puro: qué entra en la captura, cuántos faltan y las
                       # dos frases de la quinta casilla; lo que se guarda: la
@@ -378,6 +410,7 @@ pytest                # 953 pruebas, 0 saltadas, 4.05-5.26 s (2026-09-21, ticket
 | `docs/decisiones/0007` | la corrida del lote en **una fila por noche**, y por qué la pantalla deduce de ahí "el lote no llegó a este renglón" en vez de escribir cuatro huecos por renglón. Reabre la opción β del 0006 por su condición de disparo |
 | `docs/decisiones/0009` | **"enviar" no es enviar**: `enviado` es la firma de que una persona ya capturó el pedido en el portal, no un envío de Continental. Por qué firma y no acuse, por qué no se puede enviar un pedido vacío y sí uno sin total, por qué enviar NO exige la lista abierta, y por qué no hay "desenviar" |
 | `docs/decisiones/0010` | **el avance de la captura vive en la tabla del renglón**, no en el navegador: dos columnas firmadas y no `localStorage`, ni una tabla nueva, ni un estado `capturado`. Por qué se puede destachar y enviar no se deshace, y por qué tachar todo lleva a enviar sin ser requisito |
+| `docs/decisiones/0011` | **el CSV del pedido se arma en memoria cada vez** y se escribe para el Excel de México: la clave como fórmula de texto (medido contra el tabulador y el apóstrofo, que quedan literales), BOM, coma y sin `sep=`, y la ruta colgada de la lista para no escribir SQL nuevo |
 | `docs/decisiones/0008` | **el puente que no existía**: el pedido se identifica por la clave de Doyle y el `proveedor_id` de SICAR es una correspondencia que puede faltar. Por qué el mapa va en el YAML y guarda el id y no el nombre, y por qué el UNIQUE tuvo que moverse |
 | `sql/` | el DDL de las **cinco** tablas, el rol acotado y `verificar_rol.sql`, que mira la **forma** de la base. **Se corren a mano, en ese orden, con credenciales de dueño** — no confundirlo con `continental.verificar`, que mira los **datos** en cada despliegue (la cabecera de ese módulo tiene la tabla que los separa) |
 | `sql/migraciones/` | **siete** archivos numerados: lo que le falta a una base donde las tablas YA existen: `crear_tablas.sql` usa `CREATE TABLE IF NOT EXISTS` y calla si la tabla ya está con otra forma. También a mano y con credenciales de dueño |
@@ -391,6 +424,7 @@ pytest                # 953 pruebas, 0 saltadas, 4.05-5.26 s (2026-09-21, ticket
 | `src/continental/comparacion.py` | funciones puras: las cuatro lecturas congeladas + las piezas -> quién gana, con qué certeza, cuánto se ahorra contra NADRO y, para la lista entera, cuántos renglones quedaron sin comparar (`contar_la_lista`). No toca la red, la base ni el reloj |
 | `src/continental/proveedores.py` | funciones puras: el puente entre la clave de Doyle y el `proveedor_id` de SICAR (ADR 0008). Lee el mapa del YAML, se niega con un aviso a una entrada mal escrita —y deja a ese proveedor "sin puente", que es un estado que el módulo sabe decir— y **nunca devuelve un cero**: `None` es "SICAR no lo conoce" |
 | `src/continental/particion.py` | funciones puras: los renglones + sus comparaciones + el puente -> a quién se le pide cada uno, en cuántos pedidos se parte la lista y cuánto suma cada uno. Ahí vive la decisión del ticket 20 —la sugerencia se recalcula, la decisión se guarda—, la regla de que un total con una línea sin precio es `None` y no una suma parcial, desde el 21 **las frases que dicen qué significa "enviar"** y cuándo no se puede (`frase_del_envio`, `motivo_para_no_enviar`), y desde el 22 **la captura**: qué renglones se teclean en el portal de cada pedido —los del pedido guardado, no los de la vista previa—, cuántos faltan, y la frase que lleva a enviar sin obligar (`lo_que_hay_que_capturar`, `frase_del_avance`, `invitacion_a_enviar`) |
+| `src/continental/exportar.py` | funciones puras: el pedido guardado + su captura -> los bytes del CSV (`csv_del_pedido`), su nombre (`nombre_del_archivo`) y su `Content-Disposition`. No escribe un archivo: la ruta sirve los bytes. Ahí vive por qué la clave va como `="..."`, medido contra el Excel de la torre (ticket 23) |
 | `src/continental/faltantes.py` | funciones puras: la corrida del lote + las comparaciones -> **por qué** le falta el precio a cada renglón, y **cuáles** va a consultar el botón de completar. Ahí vive la decisión cara del ticket 19: qué cuenta como "faltante", que son ~36 s de navegador por renglón de más si se estira |
 | `src/continental/latido.py` | el latido a Uptime Kuma, con monitor propio. `mandar_el_latido` **no levanta nunca** y el borde HTTP entra por argumento, así que ninguna prueba manda uno de verdad. El token vive en `KUMA_PUSH_URL_CONTINENTAL` del `.env`, jamás en el YAML |
 
