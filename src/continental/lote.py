@@ -1304,6 +1304,16 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(message)s",
     )
 
+    # ANTES DE CONSTRUIR NADA: ¿la base tiene la forma que este código espera?
+    # El `git pull` de un despliegue detenido ya dejó este código en disco, y
+    # el timer de las 22:00 lo correría contra la base sin migrar (ADR 0017).
+    # Si no cuadra: el journal dice qué migración correr, Kuma late `down`, y
+    # se sale con 1 sin armar lista.
+    from continental.forma import antes_del_lote
+
+    if antes_del_lote() != 0:
+        return 1
+
     from continental.almacen import AlmacenPostgres, motor
     from continental.almacenamiento import AlmacenamientoPostgres
     from continental.config import cargar

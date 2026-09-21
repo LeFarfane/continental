@@ -642,18 +642,20 @@ def test_los_pasos_van_en_el_orden_del_ticket():
     dentro del archivo y no que los seis pasos existan sueltos, porque un
     script con los seis pasos en desorden pasaría una prueba de existencia.
 
-    **Y se cuentan sobre el "N/6", no sobre "N/5".** El ticket 17 agregó un
-    paso al final, y un rótulo que sigue diciendo "5" mientras hay seis pasos
-    miente en la única parte del despliegue que alguien lee de reojo.
+    **Y se cuentan sobre el "N/7".** El ticket 17 agregó un paso al final y el
+    ADR 0017 uno antes del reinicio (la forma de la base); un rótulo que sigue
+    diciendo "6" mientras hay siete pasos miente en la única parte del
+    despliegue que alguien lee de reojo.
     """
     texto = _desplegar()
 
-    assert "/5" not in texto, (
-        "Quedó un rótulo 'N/5' después de que el ticket 17 agregara el paso 6. "
-        "Los rótulos de los pasos se ajustan TODOS o ninguno."
-    )
-    posiciones = [texto.index(f"{n}/6") for n in range(1, 7)]
-    assert posiciones == sorted(posiciones), "Los seis pasos no están en orden."
+    for viejo in ("/5", "/6"):
+        assert viejo not in texto, (
+            f"Quedó un rótulo 'N{viejo}' después de que el ADR 0017 agregara el "
+            "paso de la forma. Los rótulos de los pasos se ajustan TODOS o ninguno."
+        )
+    posiciones = [texto.index(f"{n}/7") for n in range(1, 8)]
+    assert posiciones == sorted(posiciones), "Los siete pasos no están en orden."
 
     reinicio = texto.index("systemctl restart")
     for antes in ("ast.parse", "-m pytest"):
@@ -723,7 +725,10 @@ def test_el_verificador_de_datos_va_al_final_y_despues_de_la_salud():
         "El script no encadena continental.verificar. Un verificador que hay "
         "que acordarse de correr no se corre."
     )
-    assert texto.index("curl") < texto.index("-m continental.verificar"), (
+    # La corrida de los DATOS es la que va sin `--forma`: la de la forma va
+    # antes del reinicio, a propósito (ADR 0017), y no es ésta.
+    de_los_datos = texto.index('-m continental.verificar; then')
+    assert texto.index("curl") < de_los_datos, (
         "El verificador de datos corre ANTES de comprobar que el servicio "
         "quedó vivo. El orden del ticket 17 es al final de todo."
     )
@@ -742,13 +747,46 @@ def test_una_falla_de_datos_sale_con_codigo_distinto_de_cero_y_lo_explica():
     está bien. El servicio ya contestó en el paso 5: lo que falla son los datos.
     """
     texto = _desplegar()
-    desde = texto.index("6/6")
+    desde = texto.index("7/7")
 
     assert "exit 1" in texto[desde:], "Una falla de datos no aborta el script."
     assert "DATOS" in texto[desde:], (
         "El script no distingue 'el código quedó mal desplegado' de 'los datos "
         "están rotos'. Son dos cosas y se arreglan de maneras distintas."
     )
+
+
+def test_la_forma_de_la_base_se_revisa_antes_del_reinicio_y_lo_detiene():
+    """ADR 0017, alternativa D: la FORMA —¿este código puede correr contra esta
+    base?— sí tiene que impedir el reinicio, al revés que los datos.
+
+    Va después de las pruebas y antes de `systemctl restart`, sale con
+    `exit 1` si no cuadra, y dice la trampa: el `git pull` ya dejó el código
+    nuevo en disco, así que el mensaje manda a migrar antes de las 22:00 (el
+    lote, además, se niega solo: `forma.antes_del_lote`).
+    """
+    texto = _desplegar()
+
+    forma = texto.index('"$PYTHON" -m continental.verificar --forma')
+    assert texto.index("-m pytest") < forma < texto.index("systemctl restart"), (
+        "La forma se revisa después de las pruebas y ANTES del reinicio: si "
+        "corre después, el código nuevo ya está sirviendo contra la base vieja."
+    )
+    assert texto.index("4/7") < forma < texto.index("5/7")
+    bloque = texto[forma : texto.index("5/7")]
+    assert "exit 1" in bloque, "Una forma que no cuadra no detiene el despliegue."
+    assert "NO se reinicia" in bloque
+    assert "22:00" in bloque, "No dice que el lote de la noche ya ve el código nuevo."
+
+
+def test_los_invariantes_de_los_datos_siguen_sin_bloquear_el_reinicio():
+    """Lo que el ADR 0017 NO movió: los datos siguen al final, después de la
+    salud. Un dato roto no tiene por qué impedir que un código bueno llegue."""
+    texto = _desplegar()
+
+    de_los_datos = texto.index('"$PYTHON" -m continental.verificar; then')
+    assert texto.index("systemctl restart") < de_los_datos
+    assert texto.count("-m continental.verificar") == 2
 
 
 def test_el_script_limpia_el_estado_failed_antes_de_reiniciar():

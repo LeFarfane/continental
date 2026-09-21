@@ -17,18 +17,26 @@
 # detiene en el primer paso que falla y lo dice ANTES de reiniciar un servicio
 # que estaba funcionando.
 #
-# El orden importa, y es el del ticket 16 más el paso 6 del ticket 17:
+# El orden importa, y es el del ticket 16, más el último paso del ticket 17,
+# más el paso 4 del ADR 0017:
 #   1. pull        — trae el código
 #   2. compila     — TODOS los módulos, incluido iniciar.py; si uno no
 #                    compila, ni se intenta lo demás
 #   3. pruebas     — el suite completo, con el venv real de atlas
-#   4. reinicia    — solo si 2 y 3 pasaron; si el servicio estaba en `failed`
-#                    por el límite de reinicios, primero se limpia
-#   5. vive        — que contesta por HTTP, por la misma interfaz y el mismo
+#   4. forma       — que la base tenga cada columna que este código nombra,
+#                    leída como el rol (`continental.verificar --forma`, ADR
+#                    0017). Va ANTES del reinicio y lo DETIENE si no cuadra:
+#                    es la pregunta "¿este código puede correr contra esta
+#                    base?", y con la respuesta equivocada la lista del día
+#                    rebota con `column ... does not exist`. Nombra la
+#                    migración exacta que falta, con su comando.
+#   5. reinicia    — solo si 2, 3 y 4 pasaron; si el servicio estaba en
+#                    `failed` por el límite de reinicios, primero se limpia
+#   6. vive        — que contesta por HTTP, por la misma interfaz y el mismo
 #                    puerto a los que apunta el túnel
-#   6. verifica    — los invariantes sobre los DATOS de producción
+#   7. verifica    — los invariantes sobre los DATOS de producción
 #                    (`continental.verificar`, ticket 17). Va AL FINAL y no
-#                    antes: los pasos 1 a 5 dicen si el código quedó bien
+#                    antes: los pasos 1 a 6 dicen si el código quedó bien
 #                    desplegado, y éste dice si lo que hay en la base está
 #                    sano. Son preguntas distintas y la segunda no tiene por
 #                    qué impedir que un código bueno llegue a atlas — pero sí
@@ -82,7 +90,7 @@ cd "$RAIZ"
 export PYTHONPATH="${PYTHONPATH:-$PWD/src}"
 
 # La MISMA interfaz que declara la unidad de systemd. Si se recreó la red
-# `borde` y el gateway cambió, este `curl` del paso 5 falla y lo dice, que es
+# `borde` y el gateway cambió, este `curl` del paso 6 falla y lo dice, que es
 # justo lo que se quiere: el detalle y cómo arreglarlo están en
 # docs/decisiones/0005-continental-escucha-en-el-gateway-de-borde.md.
 export CONTINENTAL_HOST="${CONTINENTAL_HOST:-172.19.0.1}"
@@ -94,7 +102,7 @@ trap 'rm -f "$SALIDA_PRUEBAS"' EXIT
 
 paso() { printf '\n==> %s\n' "$*"; }
 
-paso "1/6  git pull"
+paso "1/7  git pull"
 # DOS PREGUNTAS DISTINTAS, DOS MENSAJES DISTINTOS. Antes había uno solo, y el
 # 2026-09-20 contestó "no tienes remoto" a un "no estás en un repositorio". El
 # remoto existía desde el día anterior, así que el mensaje mandó a arreglar algo
@@ -143,7 +151,7 @@ if [[ -n "$adelantadas" ]]; then
     echo "       No detiene nada. Pero si esperabas esos cambios, NO están aquí."
 fi
 
-paso "2/6  compilan todos los módulos"
+paso "2/7  compilan todos los módulos"
 "$PYTHON" - <<'PY'
 import ast, pathlib
 
@@ -160,7 +168,7 @@ for m in mods:
 print(f"    {len(mods)} módulos compilan")
 PY
 
-paso "3/6  pruebas (el suite completo, con el venv de atlas)"
+paso "3/7  pruebas (el suite completo, con el venv de atlas)"
 if ! "$PYTHON" -m pytest -q > "$SALIDA_PRUEBAS" 2>&1; then
     echo "    !! el suite falló. NO se reinicia nada; el servicio sigue como estaba."
     tail -25 "$SALIDA_PRUEBAS"
@@ -168,14 +176,39 @@ if ! "$PYTHON" -m pytest -q > "$SALIDA_PRUEBAS" 2>&1; then
 fi
 tail -1 "$SALIDA_PRUEBAS"
 
-paso "4/6  reinicio de $SERVICIO"
+paso "4/7  la base tiene la forma que este código espera"
+# LA FORMA, NO LOS DATOS, Y POR ESO VA AQUÍ Y NO AL FINAL (ADR 0017).
+#
+# Los invariantes del paso 7 no deben impedir que un código bueno llegue. Esto
+# es otra pregunta: si falta una columna que el código nombra, el código NO es
+# bueno para esta base, y reiniciar cambiaría un servicio que funciona por uno
+# que rebota. Las migraciones solo agregan, así que el código anterior sigue
+# sirviendo con la base migrada: el orden correcto es migrar y después
+# desplegar, y este paso lo hace cumplir.
+#
+# La trampa que no se puede tapar desde aquí: el pull del paso 1 YA dejó el
+# código nuevo en disco. El servicio web sigue con el viejo en memoria, pero
+# el lote de las 22:00 arranca de disco. Por eso el lote revisa la forma por
+# su cuenta y se niega a correr (`forma.antes_del_lote`), y el mensaje lo dice
+# para que nadie lo descubra por el monitor.
+if ! "$PYTHON" -m continental.verificar --forma; then
+    echo ""
+    echo "    !! NO se reinicia nada; el servicio sigue con el código anterior."
+    echo "       El código nuevo YA está en disco (paso 1): el lote de las 22:00"
+    echo "       lo ve, y se va a negar a correr (latido rojo) hasta que la base"
+    echo "       cuadre. Corre arriba las migraciones que se nombran, con"
+    echo "       credenciales de dueño, y vuelve a correr este script."
+    exit 1
+fi
+
+paso "5/7  reinicio de $SERVICIO"
 if [[ "$(systemctl is-active "$SERVICIO" || true)" == "failed" ]]; then
     echo "    estaba en 'failed' (límite de reinicios): se limpia primero"
     sudo systemctl reset-failed "$SERVICIO"
 fi
 sudo systemctl restart "$SERVICIO"
 
-paso "5/6  que quedó vivo, por HTTP"
+paso "6/7  que quedó vivo, por HTTP"
 SALUD="http://$CONTINENTAL_HOST:$PUERTO/api/salud"
 for i in $(seq 1 15); do
     sleep 1
@@ -193,15 +226,15 @@ for i in $(seq 1 15); do
     fi
 done
 
-paso "6/6  invariantes sobre los datos de producción"
+paso "7/7  invariantes sobre los datos de producción"
 # `if !` en vez de dejar que `set -e` lo mate, para poder explicar QUÉ falló.
-# Un paso 6 rojo no quiere decir que el despliegue haya salido mal: el código
-# ya está puesto y el servicio ya contestó en el paso 5. Lo que está mal son
+# Un paso 7 rojo no quiere decir que el despliegue haya salido mal: el código
+# ya está puesto y el servicio ya contestó en el paso 6. Lo que está mal son
 # los datos, y quien lo lea tiene que saber la diferencia antes de intentar
 # deshacer un despliegue que no hace falta deshacer.
 if ! "$PYTHON" -m continental.verificar; then
     echo ""
-    echo "    !! el CÓDIGO quedó desplegado y el servicio está arriba (paso 5)."
+    echo "    !! el CÓDIGO quedó desplegado y el servicio está arriba (paso 6)."
     echo "       Lo que falla son los DATOS. Arriba está cada falla con el"
     echo "       comando que la repara; esto señala y no repara a propósito."
     exit 1

@@ -986,19 +986,24 @@ def test_el_total_viaja_como_cadena_y_nunca_como_numero_de_json(
 # ==========================================================================
 
 
-def test_el_invariante_del_envio_sigue_pendiente_por_una_sola_columna():
+def test_el_invariante_del_envio_nombra_solo_la_columna_que_falta():
     """El hilo abierto 4 de `HANDOVER.md`, a medio cerrar y dicho así.
 
     `estado` ya existe desde este ticket; `enviado_por` llega con el 21. La
     tupla `COLUMNAS_QUE_EXIGE_EL_ENVIO` **no cambió**, que es exactamente lo
     que se quería: el ticket 20 usó el nombre que ya estaba escrito y el
-    pendiente pasó de nombrar dos columnas a nombrar una sin que nadie tocara
+    mensaje pasó de nombrar dos columnas a nombrar una sin que nadie tocara
     `verificar.py`.
+
+    **Era `PENDIENTE` y desde el ADR 0017 es `FALLA`**: el código ya nombra
+    `enviado_por`, así que faltar es una migración sin correr, no un ticket
+    por llegar. Lo que esta prueba cuida —que se nombre sólo lo que falta—
+    sigue igual.
     """
     assert v.COLUMNAS_QUE_EXIGE_EL_ENVIO == ("estado", "enviado_por")
 
     informe = v.revisar_pedidos_enviados([], {"pedido_id", "negocio", "estado"})
-    assert informe.resultados[0].estado == v.PENDIENTE
+    assert informe.resultados[0].estado == v.FALLA
     assert "enviado_por" in informe.resultados[0].resumen
     assert "estado" not in informe.resultados[0].resumen.replace("pedidos.pedido", "")
 

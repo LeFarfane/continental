@@ -1,6 +1,6 @@
 # Propuesta — que el despliegue sepa si la base tiene la forma que el código espera
 
-**Fecha:** 2026-09-21  ·  **Estado:** propuesta, sin decidir  ·  **Rama:** `pedido-sugerido`
+**Fecha:** 2026-09-21  ·  **Estado:** aceptada (C + D, E sólo en el lote, y G) — ver ADR 0017  ·  **Rama:** `pedido-sugerido`
 
 Esto no es un ADR todavía. Es el material para escribirlo: el hueco, siete
 maneras de cerrarlo con lo que cada una detecta y lo que no, y una

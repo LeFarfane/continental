@@ -205,7 +205,9 @@ class Informe:
         columna de un ticket que todavía no llega, no un dato roto."""
         return 1 if self.fallas else 0
 
-    def como_texto(self) -> str:
+    def como_texto(
+        self, titulo: str = "Continental · invariantes sobre los datos de producción"
+    ) -> str:
         """La salida entera, tal como la lee una persona en la terminal.
 
         Primero la tabla de una línea por comprobación —para ver de un vistazo
@@ -214,7 +216,7 @@ class Informe:
         detenerse en la primera falla obliga a desplegar cinco veces para
         enterarse de cinco cosas.
         """
-        lineas = ["Continental · invariantes sobre los datos de producción", ""]
+        lineas = [titulo, ""]
 
         if not self.resultados:
             lineas.append("  ninguna comprobación se pudo correr.")
@@ -573,13 +575,12 @@ def revisar_pedidos_enviados(
     los dos es la prueba de que quedó bien planteado: los dos tickets usaron los
     nombres que aquí ya estaban escritos, y el invariante se encendió solo.
 
-    **El mecanismo se queda, y no sobra**: una base a la que no se le haya
-    corrido la migración de ese día sigue sin esas columnas, y un
-    `SELECT ... WHERE enviado_por IS NULL` contra ella dejaría el despliegue
-    rojo en atlas con "column does not exist" por algo que ese servidor todavía
-    no tiene. La recolección trae las columnas **que la tabla tiene de verdad**
-    y esta función decide: si faltan, `PENDIENTE` —se ve en la salida y no tumba
-    el despliegue—; si están, revisa.
+    **El mecanismo se queda, y cambió de veredicto con el ADR 0017.** La
+    recolección trae las columnas **que la tabla tiene de verdad** y esta
+    función decide. Si faltan, antes era `PENDIENTE`; ahora es `FALLA`, porque
+    el código ya las nombra y faltar es una migración sin correr. El comando
+    con el archivo exacto lo da la comprobación de forma (`--forma`, paso 4 de
+    `desplegar.sh`), así que las dos dicen lo mismo y ninguna calla.
 
     **Qué revisa, exactamente:** que ningún pedido que diga `enviado` esté sin
     firma. `enviado` significa *"yo ya lo capturé en el portal del proveedor"*
@@ -598,22 +599,25 @@ def revisar_pedidos_enviados(
     faltantes = [c for c in COLUMNAS_QUE_EXIGE_EL_ENVIO if c not in columnas]
 
     if faltantes:
-        return _pendiente(
+        # DESDE EL ADR 0017 ESTO FALLA, Y ANTES ERA UN PENDIENTE. Mientras las
+        # columnas "llegaban con otro ticket" su ausencia no era nada roto;
+        # desde el ticket 21 el código ya las nombra, así que faltar es una
+        # migración sin correr. El comando exacto lo da la comprobación de
+        # forma, que dice lo mismo con el archivo: las dos fallan juntas.
+        return _falla(
             nombre,
-            f"pendiente: pedidos.pedido no tiene {_enumerar(faltantes)}",
+            f"pedidos.pedido no tiene {_enumerar(faltantes)}",
             "\n".join(
                 [
-                    f"`pedidos.pedido` todavía no tiene {_enumerar(faltantes)}, así que",
-                    "hoy un pedido no se puede marcar como enviado y no hay nada que",
-                    "revisar. `estado` ya llegó con el ticket 20 (un pedido nace en",
-                    "'borrador'); lo que falta llega con el 21 (borrador -> enviado,",
-                    "con quién lo envió y cuándo).",
-                    "No se inventan aquí: el rol `continental` no puede crear ni alterar",
-                    "columnas (ADR 0003), y un SELECT sobre una columna que no existe",
-                    "dejaría el despliegue rojo por algo que nadie prometió.",
-                    "El invariante se enciende solo el día que las columnas existan.",
+                    f"`pedidos.pedido` no tiene {_enumerar(faltantes)}, y el código",
+                    "desplegado ya las nombra: falta correr una migración, y hasta",
+                    "entonces la lista del día rebota con 'column ... does not exist'.",
+                    "La comprobación de forma nombra el archivo exacto de la migración.",
+                    "No se crean aquí: el rol `continental` no hace DDL (ADR 0003).",
                 ]
             ),
+            "# qué migración falta, con su comando (ADR 0017):\n"
+            "cd ~/proyectos/Continental && .venv/bin/python -m continental.verificar --forma",
         )
 
     enviados = [p for p in pedidos if (p.estado or "") == "enviado"]
@@ -1027,6 +1031,12 @@ def correr() -> Informe:
             ),
         )
 
+    # La forma (ADR 0017) también en la corrida completa, no solo en `--forma`:
+    # así el paso final de desplegar.sh y una corrida a mano dicen lo mismo.
+    from continental import forma
+
+    informe = informe + forma.revisar_con(el_motor)
+
     try:
         sugeridos, renglones, pedidos, columnas = _filas_de_los_invariantes(el_motor)
     except Exception as exc:  # noqa: BLE001
@@ -1053,13 +1063,28 @@ def main(argv: list[str] | None = None) -> int:
     corrida. `desplegar.sh` lo encadena como último paso y se detiene con su
     código, así que un despliegue con datos rotos no pasa de largo.
     """
-    argparse.ArgumentParser(
+    parseador = argparse.ArgumentParser(
         prog="python -m continental.verificar",
         description=(
             "Invariantes sobre los datos reales de Continental. Señala y no "
             "repara: cada falla sale con el comando con el que se arregla."
         ),
-    ).parse_args(argv)
+    )
+    parseador.add_argument(
+        "--forma",
+        action="store_true",
+        help=(
+            "Solo la forma de la base: que cada columna que el código nombra "
+            "exista, leída como el rol. Es el paso de desplegar.sh que va ANTES "
+            "del reinicio (ADR 0017)."
+        ),
+    )
+    if parseador.parse_args(argv).forma:
+        from continental import forma
+
+        informe = forma.correr()
+        print(informe.como_texto(forma.TITULO))
+        return informe.codigo_de_salida
 
     informe = correr()
     print(informe.como_texto())
