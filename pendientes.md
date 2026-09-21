@@ -21,14 +21,14 @@ pegables. Si los dos no coinciden, manda Notion.
 
 ---
 
-## Dónde vamos — 13 de 17 casillas
+## Dónde vamos — 14 de 17 casillas
 
 | | Pendiente | Estado |
 |---|---|---|
 | 1 | El remoto y el clon en atlas | ✅ 2026-09-19 |
 | 2 | Los `grants` de farmacia-data | ✅ 2026-09-19 |
 | 7 | El DDL, el rol y el verificador | ✅ 2026-09-20 |
-| 8 | Las unidades de systemd | 🟡 **la web corre; el lote ya se puede — el 6 cerró** |
+| 8 | Las unidades de systemd | ✅ 2026-09-21 — el lote armado para las 22:00 |
 | 9 | El túnel y Access | ✅ 2026-09-20 — falta mirar B.3 |
 | 5 | `clase_abc` en `dim_producto` | ✅ 2026-09-20 — el ADR 0018, implementado |
 | **12** | **Uptime Kuma 1.23 → 2.x** | ⏭️ **el siguiente — el CPU sí lo aguanta (medido)** |
@@ -100,9 +100,17 @@ permanente. Aquí solo el saldo:
   2021. Se resolvió pasando la llave de la torre a llave de cuenta, así que el
   problema está cerrado **para todos los repos**, no solo para este.
 
-  Lo que queda de eso: **Marlowe y Doyle siguen con sus remotos en HTTPS** y van
-  a chocar igual el día que les toque empujar. Ya tienen la llave que los
-  arregla; es un `git remote set-url` a `git@github.com:...` y nada más.
+  Lo que queda de eso: **Marlowe sigue con su remoto en HTTPS** y va a chocar
+  igual el día que le toque empujar. Ya tiene la llave que lo arregla; es un
+  `git remote set-url` a `git@github.com:...` y nada más. **Doyle ya se movió**
+  el 2026-09-21 (`git@github.com:LeFarfane/Doyle.git`).
+
+  Y una corrección que salió al clonar Doyle en atlas: **allá el remoto no se
+  escribe `git@github.com:`**, sino con un alias por repo —`git@github-doyle:`—
+  definido en `~/.ssh/config` con su propia deploy key e `IdentitiesOnly yes`.
+  Sin eso, `ssh` ofrece la llave de otro repo, GitHub la acepta, y el clon
+  falla con *"repository not found"*, que no menciona llaves por ningún lado.
+  Continental y Marlowe ya estaban así en atlas; lo que faltaba era escribirlo.
 
 Lo que esto desbloquea son los pendientes 7 a 11: todos empiezan con "en
 `~/proyectos/Continental`", que hasta hoy no existía.
@@ -387,9 +395,9 @@ desaparecido justo aquí. El del `config` no. Es la falla que mordió el
 > en esa corrida fueron **19 y 164**. Si vas a citar esas cifras, mídelas —yo
 > las cité de ahí y salieron mal.
 
-### 8. Las unidades de systemd · *la web ya entró; el lote espera a Doyle*
+### 8. Las unidades de systemd — ✅ **hecho el 2026-09-21**
 
-- [ ] `continental-web.service` y `continental-lote.{service,timer}` instalados
+- [x] `continental-web.service` y `continental-lote.{service,timer}` instalados
 
 **`continental-web.service` está instalado y corriendo desde el 2026-09-20
 00:56.** `systemd-analyze verify` calló, `NRestarts=0`, escucha en
@@ -400,32 +408,51 @@ que no hay banner ni log de accesos, pero los avisos y los errores sí viajan.
 La confirmación de que está viva son `systemctl status`, `ss` y `/api/salud`,
 no el journal.
 
-**El lote NO se instaló, a propósito.** `continental-lote.timer` dispara
-lun–vie a las 22:00 y lo primero que hace es pedirle precios a Doyle, que **no
-está en atlas** (el 8383 no escucha; es el pendiente 6). La corrida no tronaría
-—marca cada renglón como *no se pudo* y lo dice, que es lo correcto—, pero
-`estado_del_latido` solo manda `ABAJO` cuando la corrida **se interrumpió**:
-una noche entera sin que Doyle conteste sale como `ARRIBA`. Hoy no se nota
-porque `KUMA_PUSH_URL_CONTINENTAL` no existe todavía y solo escribe un aviso.
-El día que exista —pendiente 10—, lo primero que ese monitor diría es *"todo
-bien"* sobre un lote que no pudo preguntarle a nadie, y eso es exactamente lo
-que enseña a ignorar un monitor.
+**El lote entró el 2026-09-21 a la 01:30**, cuando se cumplieron las dos
+condiciones que lo tenían detenido. `systemd-analyze verify` calló sobre las
+dos unidades, y el timer quedó armado:
 
-> **El orden entre este pendiente, el 6 y el 10 no es libre.** El lote se
-> instala cuando Doyle esté en atlas. Si por lo que sea entra antes, que entre
-> **después** del monitor de Kuma y no antes, para que la primera noche rara se
-> vea en el historial en vez de pasar en verde.
+```
+NEXT                        LEFT  UNIT                   ACTIVATES
+Mon 2026-09-21 22:00:00 CST  20h  continental-lote.timer continental-lote.service
+```
 
-Lo que falta de esta casilla, cuando toque:
+**Las dos condiciones, y las dos se cumplieron por caminos distintos:**
+
+> **Doyle está en atlas** (pendiente 6, cerrado esa misma noche):
+> `/api/sesiones` contesta `200` desde la propia máquina.
+>
+> **Y el defecto del latido ya estaba arreglado**, lo que este archivo no
+> decía. Decía que `estado_del_latido` solo manda `ABAJO` cuando la corrida se
+> interrumpió, así que una noche entera sin que Doyle conteste saldría
+> `ARRIBA`. **Dejó de ser cierto el 2026-09-20**: ahora hay una segunda regla,
+> `if resumen.intentados and not resumen.consultados: return ABAJO` — se
+> intentó preguntar y no se pudo ni una vez. Es la regla más estrecha que caza
+> ese caso, y está razonada en el docstring de la función junto con la que se
+> descartó por ancha (`con_precio == 0 → down`, que pintaría rojo la noche en
+> que Doyle contesta y los cuatro portales fallan, que es *sin dato* y se
+> arregla abriendo sesiones).
+
+**No se corrió a mano, a propósito.** El lote solo tiene `--tope-minutos`, no
+hay ensayo en seco, y una corrida manual **crea un segundo pedido sugerido
+abierto** que no es el de la noche y **manda un latido a Kuma** por una corrida
+que no es la nocturna. Con Doyle todavía sin sesiones, además no probaría lo
+único que falta por probar. La primera corrida de verdad es la de las 22:00.
+
+**Qué mirar después de esa primera corrida:**
 
 ```bash
-sudo cp scripts/systemd/continental-lote.service /etc/systemd/system/
-sudo cp scripts/systemd/continental-lote.timer /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemd-analyze verify continental-lote.service
-sudo systemctl enable --now continental-lote.timer
-systemctl list-timers continental-lote.timer
+journalctl -u continental-lote -n 200 --no-pager
 ```
+
+```bash
+systemctl show continental-lote.service -p Result -p ExecMainStatus
+```
+
+La bitácora sí llega viva al journal durante la corrida —`logging` escribe a
+stderr, que Python deja line-buffered aunque no haya terminal—, así que no hace
+falta `PYTHONUNBUFFERED` aquí. En `doyle.service` sí hizo falta, y por lo
+contrario: ahí lo que se perdía eran `print()` a stdout.
 
 **`systemd-analyze verify` ANTES del `enable --now`, no después.** Marlowe tuvo
 `StartLimitIntervalSec` en la sección equivocada y systemd lo ignoraba **en
