@@ -426,8 +426,12 @@ def test_los_pedidos_nacen_en_borrador(cliente, almacen, almacenamiento):
     """La tercera casilla, en su forma más directa.
 
     `borrador` es vocabulario nuevo: `CONTEXT.md` no tenía estados para el
-    pedido, así que entró al glosario con este ticket. El CHECK del DDL conoce
-    ése y ninguno más — el de "enviado" es del ticket 21.
+    pedido, así que entró al glosario con este ticket. **Nacer en borrador
+    siguió siendo cierto después del ticket 21**, que le agregó `enviado` como
+    segundo estado: lo que cambió es a dónde se puede ir desde aquí, no dónde se
+    empieza. Por eso la afirmación es sobre el primer valor de la tupla y no
+    sobre su longitud — una prueba que se pusiera roja cada vez que el glosario
+    crece obliga a tocarla sin haber aprendido nada.
     """
     _poblar(almacen, 1)
     lista = _lista_con_precios(
@@ -438,7 +442,7 @@ def test_los_pedidos_nacen_en_borrador(cliente, almacen, almacenamiento):
 
     assert pedidos["pedidos"][0]["estado"] == BORRADOR
     assert pedidos["pedidos"][0]["es_borrador"] is True
-    assert ESTADOS_DEL_PEDIDO == (BORRADOR,)
+    assert ESTADOS_DEL_PEDIDO[0] == BORRADOR
 
 
 def test_partir_dos_veces_no_duplica_nada(cliente, almacen, almacenamiento):
@@ -814,20 +818,31 @@ def test_un_renglon_solo_cuelga_de_un_pedido_de_su_propia_lista():
 
 
 def test_el_estado_del_pedido_del_ddl_es_el_que_escribe_el_codigo():
-    """El CHECK y `ESTADOS_DEL_PEDIDO` dicen lo mismo, o uno de los dos miente.
+    """El CHECK de `crear_tablas.sql` y `ESTADOS_DEL_PEDIDO` dicen lo mismo.
 
-    Hoy es uno solo, y eso es una decisión: el de "enviado" lo estrena el
-    ticket 21 y cómo se llame es su decisión, porque `CONTEXT.md` no lo tiene
-    todavía.
+    **La migración de este ticket NO entra en la comparación, y eso no es un
+    descuido: una migración es un hecho del pasado.** La 0005 dejó el CHECK en
+    `('borrador')` porque ése era el vocabulario del 2026-09-19, y el ticket 21
+    pagó la suya —la 0006— para ampliarlo. Reescribir la 0005 para que dijera lo
+    de hoy haría que una base que ya la corrió y otra que la corra mañana
+    quedaran distintas sin que nada avise, que es exactamente la falla que el
+    ADR 0003 describe.
+
+    Lo que sí se exige de la 0005 es que **siga diciendo lo que dijo**: abajo.
+    Quien vigila que `crear_tablas.sql` y la última migración coincidan es
+    `test_envio.test_el_check_del_estado_se_amplio_en_los_dos_archivos`.
     """
     esperado = "CHECK (estado IN (" + ", ".join(
         f"'{e}'" for e in ESTADOS_DEL_PEDIDO
     ) + "))"
-    for ruta in (CREAR_TABLAS, MIGRACION):
-        assert esperado in _sentencias(ruta), (
-            f"{ruta.name} no dice {esperado}. `ck_pedido_estado` y "
-            "`almacenamiento.ESTADOS_DEL_PEDIDO` tienen que decir lo mismo."
-        )
+    assert esperado in _sentencias(CREAR_TABLAS), (
+        f"{CREAR_TABLAS.name} no dice {esperado}. `ck_pedido_estado` y "
+        "`almacenamiento.ESTADOS_DEL_PEDIDO` tienen que decir lo mismo."
+    )
+    assert "CHECK (estado IN ('borrador'))" in _sentencias(MIGRACION), (
+        "La migración 0005 dejó de decir lo que dijo el día que se corrió. Una "
+        "migración es un hecho del pasado: lo que amplía el CHECK es la 0006."
+    )
 
 
 def test_borrador_esta_en_el_glosario():

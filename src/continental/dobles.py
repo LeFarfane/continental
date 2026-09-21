@@ -25,10 +25,13 @@ from continental.almacenamiento import (
     ABIERTO,
     BORRADOR,
     CERRADO,
+    ENVIADO,
     RENGLON_ABIERTO,
     RENGLON_DESCARTADO,
+    RENGLON_EN_TRANSITO,
     VENCIDO,
     CorridaDelLote,
+    PedidoEnviado,
     PedidoSugeridoDuplicado,
     PedidoSugeridoGuardado,
     PrecioDeProveedor,
@@ -984,6 +987,80 @@ class AlmacenamientoFalso:
                 fila["total_sin_iva"] = None
 
         return self.pedidos_de_la_lista(negocio, pedido_sugerido_id)
+
+    # ----------------------------------------------- enviar el pedido (21)
+
+    def enviar_el_pedido(self, negocio: str, pedido_id: int, quien: str):
+        """Los dos `UPDATE` del envío, en memoria y con las mismas condiciones.
+
+        Tres cosas se copian del lado real y las tres tienen una prueba:
+
+        - **Las tres condiciones del `WHERE`**, en el mismo orden: el negocio,
+          el pedido todavía en `borrador`, y que tenga al menos un renglón
+          dentro. Devuelve `None` donde el `UPDATE` real devolvería cero filas.
+        - **La firma se revisa antes de escribirse.** Pasa por
+          `revisar_el_pedido`, que es el mismo validador que llama la
+          implementación real al armar: sin eso, el doble aceptaría en la torre
+          un `enviado` sin firma que en atlas rebotaría contra
+          `ck_pedido_envio`.
+        - **Los renglones se mueven en la misma operación**, y solo los que
+          siguen `abierto`: un descartado sigue descartado.
+        - **El total no puede salir viejo**: si algún renglón de dentro se
+          corrigió después de `armado_en`, cero filas. Es el `NOT EXISTS` del
+          `WHERE` real y el hilo abierto 13 de `HANDOVER.md`.
+
+        **No exige que la lista esté `abierta`**, al revés que descartar,
+        ajustar, elegir y partir. Es la decisión del ADR 0009 y está razonada en
+        `AlmacenamientoDelPedido.enviar_el_pedido`; en corto: enviar es decir
+        que sí se pidió, y bloquearlo dejaría renglones `abierto` atrapados
+        dentro de una lista cerrada.
+        """
+        self._revisar()
+        fila = None
+        for candidato in self.pedidos:
+            if candidato["pedido_id"] == pedido_id:
+                fila = candidato
+                break
+        if fila is None or fila["negocio"] != negocio or fila["estado"] != BORRADOR:
+            return None
+
+        lista = self._por_id(fila["pedido_sugerido_id"])
+        dentro = [
+            r
+            for r in (lista["renglones"] if lista else [])
+            if r.get("pedido_id") == pedido_id and r["negocio"] == negocio
+        ]
+        # El `EXISTS` de `_ENVIAR_EL_PEDIDO`: un pedido vacío no se envía.
+        if not dentro:
+            return None
+        # Y su `NOT EXISTS`: el total no se envía viejo. `total_sin_iva` solo se
+        # reescribe al partir, así que una cantidad corregida después de armar
+        # el pedido lo deja enseñando lo que costaba hace un rato.
+        if any(
+            r.get("ajustada_en") is not None and r["ajustada_en"] > fila["armado_en"]
+            for r in dentro
+        ):
+            return None
+
+        # El instante real con zona que en la tabla pone `now()`.
+        cuando = dt.datetime.now(dt.UTC)
+        propuesta = {**fila, "estado": ENVIADO, "enviado_por": quien, "enviado_en": cuando}
+        revisar_el_pedido(propuesta)
+        fila.update(estado=ENVIADO, enviado_por=quien, enviado_en=cuando)
+
+        # `_RENGLONES_A_TRANSITO`: solo los que siguen `abierto`. Pasa por
+        # `poner_estado_del_renglon` para que los CHECK del renglón se revisen
+        # igual que los del pedido.
+        movidos = []
+        for renglon in dentro:
+            if renglon["estado"] != RENGLON_ABIERTO:
+                continue
+            self.poner_estado_del_renglon(renglon["renglon_id"], RENGLON_EN_TRANSITO)
+            movidos.append(renglon["renglon_id"])
+
+        return PedidoEnviado(
+            pedido=pedido_desde_columnas(fila), renglones=tuple(movidos)
+        )
 
     def devolver_a_abierto(
         self, negocio: str, renglon_id: int

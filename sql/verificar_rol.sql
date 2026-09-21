@@ -529,6 +529,57 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
           AND con.conname = 'ck_pedido_estado')),
  NULL),
 
+-- LOS DOS ESTADOS DEL PEDIDO, Y QUE LA FIRMA DEL ENVÍO ESTÉ PAREADA (ticket 21,
+-- ADR 0009). Se leen del catálogo y no del archivo: los dos se pueden ver
+-- impecables en `crear_tablas.sql` y estar mal en la base -- si la migración 0006
+-- no se corrió, el CHECK sigue diciendo solo `borrador` y el primer clic en
+-- "Enviar" rebota en atlas contra una violación de restricción que el encargado
+-- va a ver como "algo falló" (regla 5 de CLAUDE.md).
+--
+-- Se compara el texto normalizado de `pg_get_constraintdef` porque lo que
+-- importa es qué VALORES acepta, no cómo los escribió quien lo creó.
+(27,
+ 'El pedido puede estar en borrador Y en enviado',
+ 'los dos',
+ (SELECT CASE
+           WHEN def IS NULL THEN 'NO EXISTE ck_pedido_estado'
+           WHEN def LIKE '%''borrador''%' AND def LIKE '%''enviado''%'
+                THEN 'los dos'
+           ELSE 'solo: ' || def
+         END
+    FROM (SELECT pg_get_constraintdef(con.oid) AS def
+            FROM pg_constraint con
+           WHERE con.conrelid = to_regclass('pedidos.pedido')
+             AND con.conname = 'ck_pedido_estado') AS c),
+ NULL),
+
+-- LA FIRMA DEL ENVÍO, PAREADA EN LOS DOS SENTIDOS. `enviado` quiere decir "yo
+-- ya lo capturé en el portal del proveedor" (ADR 0009): es la declaración de una
+-- persona sobre algo que Continental NO VIO, así que sin su firma no queda
+-- ningún hecho guardado -- solo un "se envió" en voz pasiva y nadie a quien
+-- preguntarle qué se capturó cuando la factura no cuadre. Y al revés: una firma
+-- colgada de un borrador diría que alguien envió lo que nadie envió.
+--
+-- Es el mismo par que `ck_renglon_descarte`, `ck_renglon_ajuste` y
+-- `ck_renglon_eleccion`, y se comprueba igual que ellos: que la restricción
+-- exista y que las dos columnas estén.
+(28,
+ 'El envío va firmado: quién y cuándo, pareados con el estado',
+ 'la restricción y las dos columnas',
+ (SELECT CASE
+           WHEN NOT EXISTS (SELECT 1 FROM pg_constraint con
+                             WHERE con.conrelid = to_regclass('pedidos.pedido')
+                               AND con.conname = 'ck_pedido_envio')
+                THEN 'NO EXISTE ck_pedido_envio'
+           WHEN (SELECT count(*) FROM pg_attribute a
+                  WHERE a.attrelid = to_regclass('pedidos.pedido')
+                    AND NOT a.attisdropped
+                    AND a.attname IN ('enviado_por', 'enviado_en')) <> 2
+                THEN 'falta enviado_por o enviado_en'
+           ELSE 'la restricción y las dos columnas'
+         END),
+ NULL),
+
 -- AVISO y no MAL: una tabla temporal vive en la sesión, no puede leer nada que
 -- el rol no pueda leer ya, y desaparece al desconectarse. El permiso llega por
 -- el TEMPORARY que PUBLIC tiene sobre la base por omisión, y quitarlo sería

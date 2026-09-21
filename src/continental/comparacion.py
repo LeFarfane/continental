@@ -822,8 +822,13 @@ def contar_la_lista(comparaciones: Iterable[Comparacion]) -> ConteoDeLaLista:
     ponerles anaquel?") y no cambia porque alguien descarte un renglón hoy.
     Ésta es sobre la compra que se está por decidir.
 
-    Quién es "de trabajo" lo decide `PedidoSugeridoGuardado.de_trabajo`, que ya
-    es la regla probada: aquí solo se cuenta lo que llega.
+    Quién entra lo decide `PedidoSugeridoGuardado.por_repartir`, que ya es la
+    regla probada: aquí solo se cuenta lo que llega. **Desde el ticket 21 eso
+    deja fuera dos cosas y no una**: el descartado de arriba y el renglón
+    `en tránsito`, cuyo pedido ya se capturó en el portal. El argumento es el
+    mismo llevado un paso más lejos — conseguirle precio a mercancía que ya
+    viene en camino no cambia ninguna decisión, porque ya no queda ninguna por
+    tomar.
     """
     conteo = {
         SIN_CONSULTAR_EL_RENGLON: 0,

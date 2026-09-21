@@ -1,15 +1,27 @@
-"""Elegir proveedor por renglón y partir la lista en pedidos. Funciones puras.
+"""Elegir proveedor por renglón, partir la lista en pedidos, y enviarlos.
 
-El paso donde la comparación se vuelve una decisión (ticket 20). No abre una
-conexión, no llama a Doyle, no mira el reloj y no lee un archivo: recibe los
-renglones guardados, sus comparaciones ya hechas (`comparacion.comparar`), sus
-precios congelados y el puente hacia SICAR (`proveedores.puente_configurado`),
-y contesta tres cosas:
+El paso donde la comparación se vuelve una decisión (ticket 20) y donde esa
+decisión se declara hecha (ticket 21). Funciones puras: no abre una conexión, no
+llama a Doyle, no mira el reloj y no lee un archivo. Recibe los renglones
+guardados, sus comparaciones ya hechas (`comparacion.comparar`), sus precios
+congelados y el puente hacia SICAR (`proveedores.puente_configurado`), y
+contesta cuatro cosas:
 
 1. **a quién se le pide cada renglón** —lo que una persona decidió, y si nadie
    decidió, lo que el sistema sugiere—;
 2. **en cuántos pedidos se parte la lista**, uno por proveedor;
-3. **cuánto cuesta cada pedido**, o por qué no se puede saber.
+3. **cuánto cuesta cada pedido**, o por qué no se puede saber;
+4. **qué significa enviarlo**, y cuándo no se puede (ticket 21).
+
+## "Enviar" no es enviar
+
+La cuarta es la que más fácil se lee mal, y por eso está aquí arriba:
+**Continental no le manda el pedido a ningún proveedor**. No entra a los
+portales y no va a entrar (regla 1 de `CLAUDE.md`; el ADR 0002 lo dejó fuera de
+alcance). Lo que se guarda al enviar es la **declaración** de una persona —*yo
+ya lo capturé en el portal*—, firmada con el correo que verificó Access. El ADR
+0009 lo razona entero. Las frases que lo dicen viven aquí, hechas, porque una
+afirmación compuesta en el JavaScript es una afirmación sin pruebas.
 
 ## La sugerencia NO se guarda, y la decisión SÍ
 
@@ -75,7 +87,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
 
-from continental.almacenamiento import PrecioDeProveedor, RenglonGuardado
+from continental.almacenamiento import (
+    PedidoGuardado,
+    PrecioDeProveedor,
+    RenglonGuardado,
+)
 from continental.comparacion import (
     ORDEN_DE_LA_FILA,
     Ahorro,
@@ -117,6 +133,60 @@ SIN_PRECIO_DE_ESE_PROVEEDOR = "precio desconocido"
 #: anterior con todas sus letras: uno se arregla mirando el motivo y el otro
 #: apretando el botón.
 SIN_CONSULTARLE = "no se le ha consultado el precio a ese proveedor"
+
+
+# ------------------------------------------------- qué significa enviar (21)
+#
+# La palabra "enviar" tiene un significado obvio que aquí **es falso**, y ésa es
+# la quinta casilla del ticket 21. Continental no entra a los portales de los
+# proveedores y no va a entrar: lo prohíbe la regla 1 de `CLAUDE.md` y el ADR
+# 0002 lo dejó fuera de alcance con su razón. Lo que se guarda al apretar el
+# botón es la **declaración** de una persona: *yo ya lo capturé en el portal*.
+#
+# Las frases viven aquí —en Python, probadas— y no en el JavaScript, y eso es
+# la lección del ticket 15 aplicada al sitio donde más caro sale: una afirmación
+# compuesta en el único archivo que ninguna prueba de Python mira es una
+# afirmación sin pruebas, y ésta es la que impide que el encargado crea que
+# Continental le mandó el pedido a NADRO.
+
+#: Qué declara quien aprieta el botón. Va entre comillas en la pantalla porque
+#: es literalmente lo que esa persona está diciendo.
+ENVIAR_ES_UNA_DECLARACION = "yo ya lo capturé en el portal del proveedor"
+
+#: Y el desmentido, en la misma frase y no en una nota al pie.
+CONTINENTAL_NO_PIDE_EN_PORTALES = (
+    "Continental no entra a los portales y no le manda el pedido a nadie"
+)
+
+#: El segundo clic de un botón que ya viajó, o dos pestañas abiertas en el
+#: mostrador. No es un error de nadie y por eso se dice con palabras.
+YA_ESTA_ENVIADO = "ese pedido ya está enviado: no se vuelve a enviar"
+
+#: El pedido que se quedó sin renglones al volver a partir (ticket 20). Sigue
+#: existiendo —el rol no tiene `DELETE`— con su total en `NULL`. Enviarlo diría
+#: "capturé esto en el portal" sobre nada, y sus renglones ya se fueron a otro
+#: pedido, así que ni siquiera hay qué pasar a `en tránsito`.
+SIN_RENGLONES_QUE_ENVIAR = (
+    "ese pedido se quedó sin renglones: no hay nada que capturar"
+)
+
+#: El total envejeció: alguien corrigió la cantidad de un renglón **después** de
+#: armar el pedido, y `pedido.total_sin_iva` solo se reescribe al partir (hilo
+#: abierto 13 de `HANDOVER.md`, que le dejó este caso a este ticket).
+#:
+#: Se NIEGA el envío en vez de recalcular en silencio, y las dos cosas se
+#: consideraron. Recalcular cambiaría el número **después** de que el encargado
+#: leyó el del botón: enviaría un total que nadie vio, que es peor que enseñar
+#: uno viejo. Negarse manda a apretar "Volver a partir", que es un botón que ya
+#: existe, cuesta un clic y deja el total y la hora de armado coherentes.
+#:
+#: Un total viejo importa porque es la cifra contra la que alguien va a comparar
+#: la factura del proveedor: si no cuadra, nadie sabe si falta mercancía o si el
+#: número estaba rancio.
+TOTAL_ENVEJECIDO = (
+    "alguien corrigió una cantidad después de armar este pedido, así que su "
+    "total es de antes: vuelve a partir y se pone al día"
+)
 
 
 # ------------------------------------------------------------------- los datos
@@ -453,10 +523,16 @@ def partir(
     """La lista de trabajo → un pedido por proveedor, más lo que se queda fuera.
 
     **Quién entra**: los renglones que se le pasen, y quien llama ya filtró.
-    Lo que la ruta le pasa es `PedidoSugeridoGuardado.de_trabajo` —los
-    descartados ya se atendieron, alguien los miró y decidió no pedirlos— y los
-    `en tránsito` no vuelven a repartirse porque el `UPDATE` que asigna el
-    pedido lleva `estado = 'abierto'` en su `WHERE`.
+    Lo que la ruta le pasa es `PedidoSugeridoGuardado.por_repartir` —los
+    `abierto`—, y eso deja fuera dos cosas por razones distintas: un descartado
+    ya se atendió —alguien lo miró y decidió no pedirlo— y uno `en tránsito` ya
+    se pidió, porque su pedido se envió (ticket 21).
+
+    Que los `en tránsito` no entren **no es solo higiene**: el `UPDATE` que
+    asigna el pedido lleva `estado = 'abierto'` en su `WHERE`, así que si
+    entraran, esta vista previa prometería mover renglones que la base no va a
+    mover — y el mismo dinero saldría contado dos veces, en el pedido que ya se
+    envió y en el que se está por armar.
 
     **El orden de los pedidos es el de `ORDEN_DE_LA_FILA`** —la referencia
     primero— y dentro de cada uno, el de la lista. Un orden que dependiera de
@@ -509,6 +585,83 @@ def _orden(por_proveedor: Mapping[str, object]) -> tuple[str, ...]:
     conocidos = tuple(c for c in ORDEN_DE_LA_FILA if c in por_proveedor)
     extras = tuple(sorted(set(por_proveedor) - set(ORDEN_DE_LA_FILA)))
     return conocidos + extras
+
+
+# ------------------------------------------------------------- enviar (21)
+
+
+def frase_del_envio(pedido: PedidoGuardado) -> str:
+    """Qué dice la pantalla sobre el envío de **este** pedido.
+
+    Dos frases y no una bandera, porque las dos tienen que desmentir lo mismo:
+
+    - **borrador** — qué va a declarar quien apriete el botón, y que Continental
+      no le va a mandar nada a nadie. Va donde está el botón, no en una nota al
+      pie: quien no lea la nota es exactamente quien necesitaba leerla.
+    - **enviado** — **quién** lo capturó, en voz activa y con su correo. El
+      hecho ocurrió en otra pantalla, con otras credenciales, y Continental no
+      lo vio; escribir "se envió" en voz pasiva sería afirmar algo que este
+      programa no sabe. Y se vuelve a desmentir, porque un pedido que dice
+      "enviado" es justo donde alguien leería que se lo mandamos al proveedor.
+
+    El nombre del proveedor entra en las dos: *"ya lo capturé en el portal"* sin
+    decir en cuál es media frase, y el encargado tiene cuatro portales abiertos.
+
+    **La hora no se escribe aquí**: viaja aparte, en ISO con zona, y la pantalla
+    la pinta con `instanteEnPalabras`. Formatear una fecha no es componer una
+    afirmación — lo que no puede vivir allá es la frase, no el reloj.
+    """
+    if pedido.fue_enviado:
+        return (
+            f"{pedido.enviado_por} ya lo capturó en el portal de {pedido.nombre}. "
+            f"Continental no se lo mandó a nadie: solo guarda quién lo dice y "
+            f"cuándo lo dijo."
+        )
+    return (
+        f"Enviar quiere decir «{ENVIAR_ES_UNA_DECLARACION}», el de "
+        f"{pedido.nombre}. {CONTINENTAL_NO_PIDE_EN_PORTALES}: lo captura una "
+        f"persona con la cuenta del dueño, y aquí se firma con su correo."
+    )
+
+
+def motivo_para_no_enviar(
+    pedido: PedidoGuardado,
+    renglones_dentro: int,
+    total_envejecido: bool = False,
+) -> str | None:
+    """Por qué no se puede enviar este pedido, o `None` si sí se puede.
+
+    Es la **misma decisión** que el `WHERE` de `almacenamiento._ENVIAR_EL_PEDIDO`
+    y no la garantía: la garantía vive en la sentencia, porque comprobar en
+    Python y escribir después tiene una carrera en medio. Lo que esto hace es
+    poder **decirlo antes** —un botón apagado con su motivo al lado, en vez de
+    un 409 que llega cuando ya se apretó—, y decirlo con las mismas dos
+    condiciones para que las dos respuestas no se separen.
+
+    **Que el total sea `None` no está en la lista, y es deliberado.** Un pedido
+    con una línea sin precio se envía igual: la quinta casilla del ticket 20 dice
+    que ese renglón se pide igual, y el precio de verdad lo ve el encargado en el
+    portal mientras lo captura. Negarlo aquí volvería el precio de Doyle un
+    requisito para operar la farmacia, que es lo contrario de la regla 4 —"sin
+    dato" nunca es un cero, y tampoco es un bloqueo—. Lo que la pantalla sí hace
+    es escribir "total sin saber" en vez de una cifra.
+
+    **Que el total esté VIEJO sí lo está, y no es lo mismo.** `None` es "no se
+    puede saber" y es honesto; una cifra con dos decimales calculada antes de
+    que alguien corrigiera una cantidad es una mentira con formato de dato, y
+    además la que alguien va a comparar contra la factura. Es el hilo abierto 13
+    de `HANDOVER.md`, que le dejó este caso a este ticket. `total_envejecido` lo
+    decide quien llama comparando `armado_en` con el `ajustada_en` de los
+    renglones de dentro; la garantía vive en el `WHERE` de
+    `almacenamiento._ENVIAR_EL_PEDIDO`, que lleva la misma condición.
+    """
+    if pedido.fue_enviado:
+        return YA_ESTA_ENVIADO
+    if renglones_dentro <= 0:
+        return SIN_RENGLONES_QUE_ENVIAR
+    if total_envejecido:
+        return TOTAL_ENVEJECIDO
+    return None
 
 
 # ---------------------------------------------------------------- al navegador

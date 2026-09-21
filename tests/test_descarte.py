@@ -906,10 +906,19 @@ def test_la_pantalla_no_ofrece_descartar_si_la_lista_no_esta_abierta(cliente):
     Las dos direcciones, porque deshacer tambien es modificar. Dejar encendido
     el de devolver seria lo peor de los dos mundos: prometeria rescatar un
     renglon que alguien quito por error, y el servidor lo rechazaria.
+
+    **Desde el ticket 21 lo que decide son DOS cosas y no una**, y por eso esto
+    ya no busca `acciones.editable` pegado al boton: el estado de la LISTA
+    —"mientras este abierta"— y el del RENGLON —uno `en transito` ya se le pidio
+    a un proveedor—. Los dos entran en `editable`, que se calcula una vez por
+    renglon y lo usan los tres controles: la cantidad, el proveedor y este.
     """
     pagina = cliente.get("/").text
 
-    assert "quitar.disabled = !acciones.editable" in pagina, (
+    assert "const editable = acciones.editable && !r.esta_en_transito" in pagina, (
+        "El renglon no mira las dos cosas: el estado de la lista y el suyo."
+    )
+    assert "quitar.disabled = !editable" in pagina, (
         "El boton de descartar no mira el estado de la lista."
     )
     assert "devolver.disabled = !editable" in pagina, (

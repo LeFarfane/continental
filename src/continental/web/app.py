@@ -66,6 +66,8 @@ from continental.faltantes import (
 from continental.particion import (
     eleccion_como_json,
     elegir,
+    frase_del_envio,
+    motivo_para_no_enviar,
     particion_como_json,
     partir,
 )
@@ -818,10 +820,10 @@ def partir_en_pedidos(
         precios = almacenamiento.precios_de_la_lista(negocio, pedido_sugerido_id)
         comparaciones = {
             r.renglon_id: comparar(precios.get(r.renglon_id, ()), r.cantidad_a_pedir)
-            for r in guardado.de_trabajo
+            for r in guardado.por_repartir
         }
         particion = partir(
-            guardado.de_trabajo, comparaciones, precios, puente_configurado()
+            guardado.por_repartir, comparaciones, precios, puente_configurado()
         )
         pedidos = almacenamiento.guardar_la_particion(
             negocio, pedido_sugerido_id, particion.pedidos
@@ -882,6 +884,123 @@ def partir_en_pedidos(
         almacenamiento.precios_de_la_lista(negocio, pedido_sugerido_id),
         _ultima_corrida(almacenamiento, negocio, pedido_sugerido_id),
         pedidos,
+    )
+
+
+@app.post("/api/pedido/{pedido_id}/enviar")
+def enviar_el_pedido(
+    pedido_id: int,
+    request: Request,
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+):
+    """Marcar un pedido como **enviado**: `borrador` -> `enviado` (ticket 21).
+
+    **Continental no le manda nada a nadie al apretar esto, y esa es la mitad
+    del ticket.** No entra a los portales de los proveedores y no va a entrar:
+    lo prohíbe la regla 1 de `CLAUDE.md` y el ADR 0002 lo dejó fuera de alcance
+    con su razón —cuatro portales con carritos distintos, sesiones que se caen
+    solas, y un pedido capturado mal por un robot llega en cajas—. Lo que esta
+    ruta guarda es la **declaración** de una persona: *yo ya lo capturé en el
+    portal del proveedor*, con su correo y la hora. El ADR 0009 lo razona
+    entero, con las tres alternativas descartadas.
+
+    Por eso lleva firma y no acuse (regla 3): el hecho ocurrió en otra pantalla,
+    con otras credenciales, y lo único verdadero que se puede escribir es quién
+    lo dice y cuándo lo dijo.
+
+    **No hay cuerpo que validar.** No se manda el total ni el estado: los dos ya
+    están guardados, y aceptarlos por el cuerpo dejaría que el navegador dijera
+    cuánto cuesta un pedido. Lo que el encargado ve antes de apretar es el total
+    que esta misma ruta devolvió en la carga anterior.
+
+    **Devuelve la lista entera**, como `partir`, porque enviar mueve muchas
+    cosas a la vez: el estado del pedido, el de todos sus renglones, la vista
+    previa de la partición, el conteo de huecos y la cola del botón de
+    completar. Devolver solo el pedido obligaría a la pantalla a deducir el
+    resto, que es justo lo que no debe hacer.
+
+    Un 409 cuando no había nada que enviar, y son **tres** casos que no se
+    distinguen desde fuera —igual que en el descarte—: el pedido no existe en
+    este negocio, ya estaba `enviado`, o se quedó sin renglones al volver a
+    partir. La condición vive en el `WHERE`, no en un `if`: dos pestañas
+    abiertas en el mostrador bastan para que comprobar aquí y escribir después
+    se pisen.
+
+    Es `def` y no `async def` a propósito: el borde es síncrono y así FastAPI lo
+    corre en su pool de hilos.
+    """
+    negocio = cargar().negocio
+    firma = quien(request)
+
+    try:
+        enviado = almacenamiento.enviar_el_pedido(negocio, pedido_id, firma)
+    except Exception as exc:  # noqa: BLE001 — el almacenamiento caído es un hueco
+        # Regla 5 de `CLAUDE.md`: el detalle a la bitácora del servidor, nunca
+        # al navegador. Un `str(exc)` de SQLAlchemy lleva la cadena de conexión
+        # con contraseña.
+        log.exception("No se pudo enviar el pedido %s", pedido_id)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "detalle": f"no se pudo enviar el pedido ({type(exc).__name__})",
+            },
+        )
+
+    if enviado is None:
+        log.info(
+            "%s quiso enviar el pedido %s de %s y no se pudo: o ya estaba "
+            "enviado, o se quedó sin renglones, o no es de este negocio.",
+            firma,
+            pedido_id,
+            negocio,
+        )
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "detalle": (
+                    "Ese pedido ya no se puede enviar: o ya estaba enviado, o se "
+                    "quedó sin renglones. Vuelve a cargar la página para ver "
+                    "cómo quedó."
+                ),
+            },
+        )
+
+    log.info(
+        "%s marcó como enviado el pedido %s (%s) de la lista %s de %s, con "
+        "total %s. %d renglón(es) pasaron a «en tránsito». NO se le mandó nada "
+        "al proveedor: Continental no entra a los portales (ADR 0009).",
+        firma,
+        pedido_id,
+        enviado.pedido.nombre,
+        enviado.pedido.pedido_sugerido_id,
+        negocio,
+        "sin saber" if enviado.pedido.total_sin_iva is None else enviado.pedido.total_sin_iva,
+        enviado.cuantos_renglones,
+    )
+
+    # La lista entera se vuelve a leer para devolverla con los renglones ya en
+    # `en tránsito`. Cuesta una consulta y evita que la pantalla tenga que
+    # deducir qué renglones se movieron — que es justo el tipo de cuenta que el
+    # navegador no debe llevar.
+    lista_id = enviado.pedido.pedido_sugerido_id
+    relectura = almacenamiento.leer_por_id(negocio, lista_id)
+    if relectura is None:
+        # No debería pasar —la fila que acabamos de escribir cuelga de esa
+        # lista— pero si pasa se dice en vez de reventar con un `None`.
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "detalle": "el pedido se envió, pero no se pudo releer la lista",
+            },
+        )
+    return _como_json(
+        relectura,
+        almacenamiento.precios_de_la_lista(negocio, lista_id),
+        _ultima_corrida(almacenamiento, negocio, lista_id),
+        almacenamiento.pedidos_de_la_lista(negocio, lista_id),
     )
 
 
@@ -1128,12 +1247,12 @@ def completar_lo_que_falta(
         )
 
     faltantes = elegir_los_faltantes(
-        guardado.de_trabajo,
+        guardado.por_repartir,
         {
             r.renglon_id: comparar(
                 por_renglon.get(r.renglon_id, ()), r.cantidad_a_pedir
             )
-            for r in guardado.de_trabajo
+            for r in guardado.por_repartir
         },
     )
 
@@ -1625,7 +1744,7 @@ def _mover_el_renglon(
             else conteo_como_json(
                 contar_la_lista(
                     comparar(por_renglon.get(r.renglon_id, ()), r.cantidad_a_pedir)
-                    for r in guardado.de_trabajo
+                    for r in guardado.por_repartir
                 )
             )
         ),
@@ -1643,12 +1762,12 @@ def _mover_el_renglon(
             if por_renglon is None
             else faltantes_como_json(
                 elegir_los_faltantes(
-                    guardado.de_trabajo,
+                    guardado.por_repartir,
                     {
                         r.renglon_id: comparar(
                             por_renglon.get(r.renglon_id, ()), r.cantidad_a_pedir
                         )
-                        for r in guardado.de_trabajo
+                        for r in guardado.por_repartir
                     },
                 )
             )
@@ -1668,12 +1787,12 @@ def _mover_el_renglon(
             if por_renglon is None
             else particion_como_json(
                 partir(
-                    guardado.de_trabajo,
+                    guardado.por_repartir,
                     {
                         r.renglon_id: comparar(
                             por_renglon.get(r.renglon_id, ()), r.cantidad_a_pedir
                         )
-                        for r in guardado.de_trabajo
+                        for r in guardado.por_repartir
                     },
                     por_renglon,
                     puente_configurado(),
@@ -1778,6 +1897,12 @@ def _como_json(
         # paso, el numerador de la condición de revisión del ADR 0002.
         "descartados": guardado.descartados,
         "de_trabajo": len(guardado.de_trabajo),
+        # CUÁNTOS YA SE PIDIERON (ticket 21). Se cuenta en Python, donde hay
+        # pruebas, y sale del ESTADO del renglón y no de los pedidos: la
+        # pregunta es cuánta de esta lista ya está en camino, y el glosario la
+        # puso ahí. Un renglón `en tránsito` sigue viéndose en la tabla —no
+        # desaparece— pero ya no cuenta como trabajo pendiente.
+        "en_transito": guardado.en_transito,
         "sin_catalogo": guardado.sin_catalogo,
         # De la lista completa, no de la vista: la pregunta que responde es si
         # vale la pena ir a ponerles anaquel en SICAR. El porqué está en
@@ -1789,10 +1914,12 @@ def _como_json(
         # se ven igual tengan cuatro precios o ninguno, y la única manera de
         # saberlo es abrirlos uno por uno.
         #
-        # Sobre los **de trabajo** y no sobre la lista entera: un descartado ya
-        # se atendió. El porqué entero está en `comparacion.contar_la_lista`.
+        # Sobre los que quedan **por repartir** y no sobre la lista entera: un
+        # descartado ya se atendió y uno `en tránsito` ya se pidió (ticket 21).
+        # El porqué entero está en `comparacion.contar_la_lista` y en
+        # `PedidoSugeridoGuardado.por_repartir`.
         "conteo_de_precios": conteo_como_json(
-            contar_la_lista(comparaciones[r.renglon_id] for r in guardado.de_trabajo)
+            contar_la_lista(comparaciones[r.renglon_id] for r in guardado.por_repartir)
         ),
         # CÓMO LE FUE AL LOTE DE ANOCHE SOBRE ESTA LISTA (ticket 19, ADR 0007).
         # Se escribe **también cuando fue bien**, por lo mismo que el conteo de
@@ -1809,11 +1936,12 @@ def _como_json(
         # JavaScript llevara a mano se separa de la verdad en cuanto hay dos
         # pestañas abiertas en el mostrador.
         #
-        # Sobre los **de trabajo**: un renglón descartado ya se atendió, y
-        # gastar cuatro visitas a portales en mercancía que nadie va a comprar
-        # es justo lo que no se quiere. Mismo criterio que el conteo de huecos.
+        # Sobre los que quedan **por repartir**: un renglón descartado ya se
+        # atendió y uno `en tránsito` ya se pidió, y gastar cuatro visitas a
+        # portales ajenos en mercancía que nadie va a comprar —o que ya viene
+        # en camino— es justo lo que no se quiere. Mismo criterio que el conteo.
         "faltantes": faltantes_como_json(
-            elegir_los_faltantes(guardado.de_trabajo, comparaciones)
+            elegir_los_faltantes(guardado.por_repartir, comparaciones)
         ),
         # A QUIÉN LE CADUCÓ LA SESIÓN, para el botón que la abre. Sale de las
         # lecturas congeladas y NO de `GET /api/sesiones` de Doyle: el
@@ -1823,7 +1951,7 @@ def _como_json(
         "sesiones_caducadas": [
             {"proveedor": clave, "nombre": nombre_del_proveedor(clave)}
             for clave in proveedores_con_sesion_caducada(
-                [comparaciones[r.renglon_id] for r in guardado.de_trabajo]
+                [comparaciones[r.renglon_id] for r in guardado.por_repartir]
             )
         ],
         # EN QUÉ SE PARTIRÍA LA LISTA SI SE PARTIERA AHORA (ticket 20), y en
@@ -1841,31 +1969,77 @@ def _como_json(
         # producto.
         "particion": particion_como_json(
             partir(
-                guardado.de_trabajo,
+                guardado.por_repartir,
                 comparaciones,
                 precios or {},
                 puente_configurado(),
             )
         ),
-        "pedidos": None if pedidos is None else [_pedido_como_json(p) for p in pedidos],
+        "pedidos": (
+            None
+            if pedidos is None
+            else [_pedido_como_json(p, *_lo_que_hay_dentro(guardado, p)) for p in pedidos]
+        ),
         "puente": puente_como_json(puente_configurado()),
         "vistas": _vistas(),
     }
 
 
-def _pedido_como_json(pedido: PedidoGuardado) -> dict:
+def _lo_que_hay_dentro(
+    guardado: PedidoSugeridoGuardado, pedido: PedidoGuardado
+) -> tuple[int, bool]:
+    """Cuántos renglones cuelgan de ese pedido, y si su total ya envejeció.
+
+    Sale de los renglones que ya viajaban en la respuesta y no de una consulta
+    más: `renglon.pedido_id` es UNA columna —un renglón pertenece a un solo
+    pedido— así que recorrerla aquí es recorrer una lista que ya está en
+    memoria.
+
+    Las dos cosas son lo que `particion.motivo_para_no_enviar` necesita para
+    apagar el botón **antes** de que alguien lo apriete, con su motivo al lado.
+    **Ninguna de las dos es la garantía**: ésa vive en el `EXISTS` y el
+    `NOT EXISTS` de `_ENVIAR_EL_PEDIDO`, porque comprobar aquí y escribir
+    después tiene una carrera en medio.
+
+    "Envejeció" es `ajustada_en > armado_en` en algún renglón de dentro:
+    `pedido.total_sin_iva` solo se reescribe al partir, así que una cantidad
+    corregida después lo deja enseñando lo que costaba hace un rato (hilo
+    abierto 13 de `HANDOVER.md`).
+    """
+    dentro = [r for r in guardado.renglones if r.pedido_id == pedido.pedido_id]
+    envejecido = any(
+        r.ajustada_en is not None and r.ajustada_en > pedido.armado_en
+        for r in dentro
+    )
+    return len(dentro), envejecido
+
+
+def _pedido_como_json(
+    pedido: PedidoGuardado,
+    renglones_dentro: int = 0,
+    total_envejecido: bool = False,
+) -> dict:
     """Un pedido ya guardado, como la pantalla lo lee.
 
     `total_sin_iva` viaja como **cadena** o como `null`, nunca como número de
     JSON ni como cero: el JSON de JavaScript solo tiene `double` y meterlo ahí
     sería tirar el `numeric(12,2)` justo al salir. `null` quiere decir "no se
     puede saber" —alguna línea va sin precio, o el pedido se quedó sin
-    renglones— y la pantalla escribe eso, no un `$0.00`.
+    renglones— y la pantalla escribe eso, no un `$0.00`. **Es el total que el
+    encargado ve ANTES de enviar**, que es la primera casilla del ticket 21.
 
     `tiene_puente` va resuelto para que el JavaScript no pregunte por un
     `!== null`: es la misma razón de siempre, y aquí además decide qué frase se
     escribe cuando SICAR no conoce al proveedor.
+
+    **Las tres del envío viajan RESUELTAS desde Python** (ticket 21):
+    `frase_del_envio` dice qué significa enviar —o quién lo capturó—,
+    `se_puede_enviar` y `motivo_para_no_enviar` deciden si el botón va apagado y
+    por qué. La frase no se compone en el JavaScript, y eso es la lección del
+    ticket 15 aplicada al sitio donde más caro sale: es la frase que impide que
+    el encargado crea que Continental le mandó el pedido a NADRO.
     """
+    motivo = motivo_para_no_enviar(pedido, renglones_dentro, total_envejecido)
     return {
         "pedido_id": pedido.pedido_id,
         "proveedor": pedido.proveedor,
@@ -1874,11 +2048,28 @@ def _pedido_como_json(pedido: PedidoGuardado) -> dict:
         "tiene_puente": pedido.tiene_puente,
         "estado": pedido.estado,
         "es_borrador": pedido.es_borrador,
+        "fue_enviado": pedido.fue_enviado,
         "armado_en": pedido.armado_en.isoformat(),
         "total_sin_iva": (
             None if pedido.total_sin_iva is None else str(pedido.total_sin_iva)
         ),
         "hay_total": pedido.total_sin_iva is not None,
+        "renglones": renglones_dentro,
+        # LA FIRMA DEL ENVÍO. En ISO **con zona**, por la misma razón que
+        # `armado_en`: sin ella el navegador la leería como hora local y el
+        # contenedor corre en UTC, que son seis horas de diferencia.
+        "enviado_por": pedido.enviado_por,
+        "enviado_en": (
+            pedido.enviado_en.isoformat() if pedido.enviado_en else None
+        ),
+        # Y LO QUE LA PANTALLA ESCRIBE, ya decidido aquí. `se_puede_enviar` es
+        # la misma decisión que el `WHERE` de `_ENVIAR_EL_PEDIDO` y NO la
+        # garantía —comprobar aquí y escribir después tiene una carrera en
+        # medio—: sirve para apagar el botón con su motivo al lado en vez de
+        # dejar que alguien lo apriete y reciba un 409.
+        "frase_del_envio": frase_del_envio(pedido),
+        "se_puede_enviar": motivo is None,
+        "motivo_para_no_enviar": motivo,
     }
 
 
@@ -1957,6 +2148,13 @@ def _renglon_como_json(
         "esta_agotado": renglon.propuesto.esta_agotado,
         "renglon_id": renglon.renglon_id,
         "estado": renglon.estado,
+        # YA SE LE PIDIÓ A UN PROVEEDOR (ticket 21). Va resuelto y no deducido
+        # del estado en el JavaScript, por la misma razón que `esta_agotado`:
+        # la regla que decide si un renglón sigue pendiente vive en
+        # `RenglonGuardado.esta_en_transito`, probada, y de ella cuelgan tres
+        # cosas de la pantalla —la marca, los controles apagados y el conteo de
+        # "por atender"—.
+        "esta_en_transito": renglon.esta_en_transito,
         "descartado_por": renglon.descartado_por,
         "descartado_en": (
             renglon.descartado_en.isoformat() if renglon.descartado_en else None

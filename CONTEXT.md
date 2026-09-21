@@ -77,10 +77,21 @@ proveedor.
 - `borrador` — se está armando. Todavía **no se le pidió a nadie**, así que se
   puede cambiar: mover un renglón a otro proveedor, corregir una cantidad,
   volver a repartir.
+- `enviado` — **una persona ya lo capturó en el portal del proveedor**. Deja de
+  poder cambiarse y sus renglones pasan a `en tránsito`.
+
+> **`enviado` no quiere decir que Continental le mandó algo a nadie.**
+> Continental no hace pedidos en los portales y no va a hacerlos (ADR 0002): lo
+> captura una persona con las credenciales del dueño, y aquí lo que se guarda
+> es **su palabra de que ya lo hizo**, con su correo y la hora. Por eso lleva
+> firma —`quién` y `cuándo`— y no acuse: no hay nada de qué acusar recibo.
+>
+> Un pedido `enviado` **no vuelve a `borrador`** desde la pantalla. Lo que ya
+> se capturó en el portal no se descaptura con un clic.
 
 > Un renglón que entra en un pedido en `borrador` **sigue `abierto`**, no pasa
 > a `en tránsito`. `en tránsito` quiere decir "ya se le pidió a un proveedor", y
-> un borrador no se le ha pedido a nadie.
+> un borrador no se le ha pedido a nadie. Lo que lo mueve es **enviar**.
 
 **Probablemente recibido** — apareció una compra que encaja con un renglón en
 tránsito, pero los datos no alcanzan para afirmar que sea la misma mercancía.

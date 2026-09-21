@@ -313,11 +313,13 @@ class FilaRenglon:
 class FilaPedido:
     """`estado` y `enviado_por` son `None` mientras las columnas no existan.
 
-    **Desde el ticket 20, `estado` sí existe** —`pedidos.pedido` nace en
-    `borrador`— y llega con su valor. `enviado_por` sigue sin existir: la
-    estrena el ticket 21. La recolección rellena con `None` lo que la tabla no
-    tenga, y quien decide qué hacer con eso es la mitad pura, mirando la lista
-    de columnas de verdad (ver `revisar_pedidos_enviados`).
+    **Desde el ticket 21 existen las dos**: `estado` llegó con el 20 —un pedido
+    nace en `borrador`— y `enviado_por` con el 21, que es el que estrena
+    `enviado`. Los `None` se quedan porque siguen siendo ciertos sobre una base
+    a la que no se le haya corrido la migración de ese día: la recolección
+    rellena con `None` lo que la tabla no tenga, y quien decide qué hacer con
+    eso es la mitad pura, mirando la lista de columnas de verdad (ver
+    `revisar_pedidos_enviados`).
     """
 
     pedido_id: int
@@ -547,13 +549,12 @@ def revisar_transito_con_pedido(renglones: Sequence[FilaRenglon]) -> Informe:
 #: "¿quién lo envió?", y cada columna que se nombre de más es una apuesta sobre
 #: un ticket que todavía no se escribió.
 #:
-#: **El ticket 20 cumplió la mitad de la condición de disparo del hilo abierto
-#: 4 de `HANDOVER.md`, y esta tupla NO cambia**: le puso a `pedidos.pedido` la
-#: columna `estado` con el nombre que aquí ya estaba escrito, así que el
-#: invariante sigue `PENDIENTE` por `enviado_por` y por nada más. Que no haya
-#: que tocar este archivo es exactamente lo que se quería: el pendiente se
-#: imprime en cada despliegue diciendo **una** cosa que falta en vez de dos, y
-#: se enciende solo el día que el ticket 21 escriba la otra.
+#: **Esta tupla nunca cambió, y ahí está el punto.** Se escribió en el ticket
+#: 17, cuando ninguna de las dos columnas existía. El ticket 20 puso `estado` y
+#: el 21 puso `enviado_por`, los dos con el nombre que aquí ya estaba escrito,
+#: así que el invariante pasó de PENDIENTE a revisar de verdad **sin que nadie
+#: tocara este archivo**. Era exactamente lo que se quería: el pendiente se
+#: imprimió en cada despliegue mientras faltó algo, y se apagó solo.
 COLUMNAS_QUE_EXIGE_EL_ENVIO = ("estado", "enviado_por")
 
 
@@ -562,34 +563,36 @@ def revisar_pedidos_enviados(
 ) -> Informe:
     """Invariante 3: ningún pedido enviado sin quién lo envió.
 
-    **Hoy este invariante sigue sin poder revisarse, pero le falta la mitad de
-    lo que le faltaba.** El ticket 20 le puso a `pedidos.pedido` la columna
-    `estado` —un pedido nace en `borrador`—, así que lo único que queda por
-    llegar es `enviado_por`, con el ticket 21 (`borrador` -> `enviado`, firmado
-    con el correo que verificó Access).
+    **Desde el ticket 21 este invariante revisa de verdad.** Estuvo escrito y
+    `PENDIENTE` desde el ticket 17, esperando dos columnas que no existían: el
+    20 puso `estado` —un pedido nace en `borrador`— y el 21 puso `enviado_por`
+    junto con el estado `enviado` (`borrador` -> `enviado`, firmado con el
+    correo que verificó Access).
 
-    Que `COLUMNAS_QUE_EXIGE_EL_ENVIO` no haya tenido que cambiar es la prueba
-    de que esto quedó bien planteado: el ticket 20 usó el nombre que aquí ya
-    estaba escrito, y el pendiente pasó de nombrar dos columnas a nombrar una
-    **sin que nadie tocara este archivo**.
+    Que `COLUMNAS_QUE_EXIGE_EL_ENVIO` no haya tenido que cambiar en ninguno de
+    los dos es la prueba de que quedó bien planteado: los dos tickets usaron los
+    nombres que aquí ya estaban escritos, y el invariante se encendió solo.
 
-    Escribir hoy el `SELECT ... WHERE estado = 'enviado'` contra una columna
-    `enviado_por` que no existe dejaría el despliegue rojo en atlas con "column
-    does not exist", por algo que nadie prometió. Y quitar el invariante sería
-    perderlo: quien escriba el ticket 21 no tiene por qué acordarse de volver
-    aquí.
+    **El mecanismo se queda, y no sobra**: una base a la que no se le haya
+    corrido la migración de ese día sigue sin esas columnas, y un
+    `SELECT ... WHERE enviado_por IS NULL` contra ella dejaría el despliegue
+    rojo en atlas con "column does not exist" por algo que ese servidor todavía
+    no tiene. La recolección trae las columnas **que la tabla tiene de verdad**
+    y esta función decide: si faltan, `PENDIENTE` —se ve en la salida y no tumba
+    el despliegue—; si están, revisa.
 
-    Así que la recolección trae las columnas **que la tabla tiene de verdad** y
-    esta función decide: si faltan, resultado `PENDIENTE`, que se ve en la
-    salida y no tumba el despliegue; si están, el invariante empieza a revisar
-    solo. Si el ticket 21 le pone otro nombre, lo que cambia es
-    `COLUMNAS_QUE_EXIGE_EL_ENVIO` y nada más.
+    **Qué revisa, exactamente:** que ningún pedido que diga `enviado` esté sin
+    firma. `enviado` significa *"yo ya lo capturé en el portal del proveedor"*
+    (ADR 0009): es la declaración de una persona sobre algo que Continental no
+    vio, así que sin la firma no queda ningún hecho guardado y no hay a quién
+    preguntarle qué se capturó. `ck_pedido_envio` lo impide en la tabla; esto lo
+    revisa sobre las filas de verdad, porque un CHECK se puede quitar con un
+    `ALTER` y nadie se entera — que es exactamente lo que este módulo existe
+    para cazar.
 
-    Ojo con una tentación que el ticket 20 deja servida: **`estado = 'borrador'`
-    no es "no enviado" en un sentido que este invariante pueda usar**. Lo que se
-    revisa es lo que dice `enviado`, y mientras ese valor no exista en el CHECK
-    no hay nada que contar — contar cero borradores como cero fallas sería dar
-    por bueno un invariante que nadie está sosteniendo.
+    Ojo con una tentación: **`estado = 'borrador'` no es "no enviado" en un
+    sentido que este invariante pueda usar**. Lo que se revisa es lo que dice
+    `enviado`; contar borradores aquí sería contestar otra pregunta.
     """
     nombre = "ningún pedido enviado sin quién lo envió"
     faltantes = [c for c in COLUMNAS_QUE_EXIGE_EL_ENVIO if c not in columnas]

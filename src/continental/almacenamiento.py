@@ -94,12 +94,22 @@ ESTADOS_DE_LA_LISTA: tuple[str, ...] = (ABIERTO, CERRADO, VENCIDO)
 RENGLON_ABIERTO = "abierto"
 RENGLON_DESCARTADO = "descartado"
 
-#: Los cinco del glosario, con el acento de `en tránsito`. Hoy se escriben dos:
-#: `abierto` al nacer y `descartado` desde el ticket 10. El 24 pone
-#: `en tránsito` y el 26 los dos de recepción.
+#: "Ya se le pidió a un proveedor y todavía no llega" (`CONTEXT.md`). **No se
+#: vuelve a proponer mientras esté así**, que es lo que impide pedir dos veces
+#: la misma mercancía.
+#:
+#: Lo escribe el ticket 21 al **enviar** el pedido, y no el 20 al armarlo: un
+#: pedido en `borrador` todavía no se le pidió a nadie. Es constante desde aquí
+#: porque ya hay código que la escribe; hasta el ticket 20 solo la nombraban
+#: comentarios y pruebas.
+RENGLON_EN_TRANSITO = "en tránsito"
+
+#: Los cinco del glosario, con el acento de `en tránsito`. Hoy se escriben tres:
+#: `abierto` al nacer, `descartado` desde el ticket 10 y `en tránsito` desde el
+#: 21. El 26 pone los dos de recepción.
 ESTADOS_DEL_RENGLON: tuple[str, ...] = (
     "abierto",
-    "en tránsito",
+    RENGLON_EN_TRANSITO,
     "recibido",
     "recibido parcial",
     "descartado",
@@ -107,30 +117,48 @@ ESTADOS_DEL_RENGLON: tuple[str, ...] = (
 
 CLASIFICACIONES = (MEDICAMENTO, ABARROTE, SIN_CLASIFICAR)
 
-# ------------------------------------------------ el estado de un pedido (20)
+# --------------------------------------------- el estado de un pedido (20, 21)
 #
-# `CONTEXT.md` define los estados del pedido sugerido y los del renglón, y NO
+# `CONTEXT.md` definía los estados del pedido sugerido y los del renglón, y NO
 # los del pedido: hasta el ticket 20 un pedido no tenía estado porque no había
-# nada que hacerle. `borrador` es vocabulario nuevo y por eso entró también al
-# glosario, que manda sobre el nombre de cualquier cosa.
+# nada que hacerle. `borrador` y `enviado` son vocabulario nuevo y por eso
+# entraron también al glosario, que manda sobre el nombre de cualquier cosa.
 
 #: Nace así y se puede modificar mientras siga así (tercera casilla del ticket
 #: 20). Un borrador todavía **no se le ha pedido a nadie**: por eso repartir un
 #: renglón no lo pone `en tránsito` —el glosario dice que eso es "ya se le pidió
-#: a un proveedor"— y quien lo pondrá es el ticket 21, al enviar.
+#: a un proveedor"— y quien lo pone es el ticket 21, al enviar.
 BORRADOR = "borrador"
 
-#: Uno solo, y eso es deliberado. El ticket 21 va a estrenar el estado de
-#: "enviado" —y quizá uno de cancelado—, y **cómo se llamen es su decisión, no
-#: la de éste**: el glosario no los tiene todavía. Escribirlos aquí hoy sería
-#: fijar el vocabulario de un ticket que nadie ha escrito, y este repositorio ya
-#: pagó por lo contrario una vez (el motivo `no empareja` del ticket 12 se
-#: adelantó un día porque su significado **ya estaba decidido** en el ADR 0002;
-#: éstos no lo están).
+#: **Una persona ya lo capturó en el portal del proveedor** (ticket 21).
 #:
-#: Lo que cuesta, dicho: el ticket 21 paga una migración para ampliar
-#: `ck_pedido_estado`. Es el precio conocido de no inventar nombres ajenos.
-ESTADOS_DEL_PEDIDO: tuple[str, ...] = (BORRADOR,)
+#: La palabra miente si se lee sola y por eso el glosario y la pantalla la
+#: desmienten en el mismo sitio donde aparece: *Continental no le manda nada a
+#: ningún proveedor* y no va a hacerlo (regla 1 de `CLAUDE.md`, y el ADR 0002 lo
+#: dejó fuera de alcance). Lo que se guarda es la **declaración** de quien lo
+#: capturó, firmada con el correo que verificó Access. Ver el ADR 0009.
+#:
+#: Dos cosas cuelgan de este valor y las dos son garantías de la tabla, no
+#: costumbres del código: un pedido `enviado` ya no se modifica —el `WHERE` de
+#: `_ABRIR_EL_PEDIDO`, `_ASIGNAR_RENGLONES` y `_SOLTAR_RENGLONES` lo protege— y
+#: sus renglones pasan a `en tránsito`, que es lo que impide volver a
+#: proponerlos mañana.
+ENVIADO = "enviado"
+
+#: Los dos, y ningún sinónimo. El DDL los repite en `ck_pedido_estado` y
+#: `test_sql_del_pedido.py` compara esta tupla contra el archivo `.sql`.
+#:
+#: El ticket 20 se quedó con uno solo a propósito —el glosario no tenía el otro
+#: todavía, y este repositorio ya pagó por adelantar un nombre ajeno— y dejó
+#: anotado lo que costaría: *el ticket 21 paga una migración para ampliar
+#: `ck_pedido_estado`*. Es la 0006, y se corre a mano con credenciales de dueño
+#: — el código de arranque no aplica DDL nunca (ADR 0003), y hay una prueba que
+#: se pone roja si este archivo llega siquiera a nombrar esa carpeta.
+#:
+#: **No hay un estado de cancelado**, y tampoco es un olvido: nadie lo ha
+#: pedido, y un valor en un CHECK que ningún código escribe es vocabulario
+#: muerto invitando a que alguien lo use con otro significado.
+ESTADOS_DEL_PEDIDO: tuple[str, ...] = (BORRADOR, ENVIADO)
 
 # ------------------------------------------- cómo acaba una corrida del lote
 #
@@ -553,6 +581,28 @@ class RenglonGuardado:
         """Si ya quedó dentro de un pedido."""
         return self.pedido_id is not None
 
+    @property
+    def esta_en_transito(self) -> bool:
+        """Si ya se le pidió a un proveedor y todavía no llega (`CONTEXT.md`).
+
+        Lo escribe el envío del pedido (ticket 21) y es lo que lo saca de todo
+        lo que queda por hacer: no se vuelve a repartir, no se vuelve a
+        consultar su precio y no cuenta como hueco. Vive aquí —en Python,
+        probado— por la misma razón que `esta_descartado`: una regla que decide
+        si un renglón sigue pendiente no puede estar escrita dos veces.
+        """
+        return self.estado == RENGLON_EN_TRANSITO
+
+    @property
+    def se_puede_repartir(self) -> bool:
+        """Si todavía se le puede meter en un pedido.
+
+        Solo lo `abierto`, que es exactamente el `WHERE` de
+        `_ASIGNAR_RENGLONES`. Un descartado ya se atendió y uno `en tránsito` ya
+        se pidió; los dos de recepción llegarán con el ticket 26.
+        """
+        return self.estado == RENGLON_ABIERTO
+
 
 @dataclass(frozen=True, slots=True)
 class PedidoGuardado:
@@ -567,6 +617,18 @@ class PedidoGuardado:
     `total_sin_iva` es `None` cuando **no se puede saber** —alguna línea va sin
     precio, o el pedido se quedó sin renglones—, y jamás la suma de lo que sí se
     sabe. Ver `particion.PedidoPorArmar.total_sin_iva`.
+
+    `enviado_por` y `enviado_en` son la **firma del envío** (ticket 21), y
+    valen `None` en todo pedido que no esté `enviado` — lo exige
+    `ck_pedido_envio`, el mismo par que `ck_renglon_descarte` y
+    `ck_renglon_eleccion`.
+
+    Firma y no acuse, y la diferencia importa (ADR 0009): el hecho que se
+    guarda —*"ya lo capturé en el portal de NADRO"*— ocurrió en otra pantalla,
+    con otras credenciales, y Continental no lo vio. Lo único verdadero que se
+    puede escribir es **quién lo dice y cuándo lo dijo**. Es una firma y nunca
+    un permiso (regla 3 de `CLAUDE.md`): sirve para saber a quién preguntarle
+    qué se capturó cuando la factura no cuadre.
     """
 
     pedido_id: int
@@ -577,6 +639,8 @@ class PedidoGuardado:
     estado: str
     armado_en: dt.datetime
     total_sin_iva: Decimal | None = None
+    enviado_por: str | None = None
+    enviado_en: dt.datetime | None = None
 
     @property
     def tiene_puente(self) -> bool:
@@ -589,9 +653,44 @@ class PedidoGuardado:
         return self.estado == BORRADOR
 
     @property
+    def fue_enviado(self) -> bool:
+        """Si alguien ya declaró haberlo capturado en el portal (ticket 21).
+
+        Separado de `not es_borrador` a propósito, aunque hoy sean lo mismo: el
+        día que haya un tercer estado —cancelado, por ejemplo— "no es borrador"
+        dejaría de querer decir "se capturó", y la pantalla escribiría la frase
+        del envío sobre un pedido que nadie envió.
+        """
+        return self.estado == ENVIADO
+
+    @property
     def nombre(self) -> str:
         """Cómo se escribe el proveedor, según el glosario."""
         return nombre_del_proveedor(self.proveedor)
+
+
+@dataclass(frozen=True, slots=True)
+class PedidoEnviado:
+    """Lo que dejó el envío de un pedido: la fila nueva y qué se movió (21).
+
+    Son **dos hechos y no uno**, y por eso no basta con devolver el pedido: el
+    `UPDATE` del pedido y el de sus renglones son dos sentencias dentro de la
+    misma transacción, y quien llama tiene que poder decir en la bitácora
+    cuántos renglones pasaron a `en tránsito`. Un envío que marcara el pedido y
+    no moviera un solo renglón es justo la falla silenciosa que hay que poder
+    ver: la lista seguiría proponiendo mañana lo que ya se pidió hoy.
+
+    `renglones` son los ids, en el orden en que el `RETURNING` los entrega. Se
+    guardan los ids y no el conteo porque el conteo se saca de ellos y al revés
+    no: si algún día hace falta decir *cuáles*, ya están.
+    """
+
+    pedido: PedidoGuardado
+    renglones: tuple[int, ...] = ()
+
+    @property
+    def cuantos_renglones(self) -> int:
+        return len(self.renglones)
 
 
 @dataclass(frozen=True, slots=True)
@@ -667,6 +766,38 @@ class PedidoSugeridoGuardado:
         puede vivir en el único archivo que ninguna prueba mira.
         """
         return tuple(r for r in self.renglones if not r.esta_descartado)
+
+    @property
+    def en_transito(self) -> int:
+        """Cuántos renglones de esta lista ya se le pidieron a un proveedor.
+
+        Es el efecto visible de enviar un pedido (ticket 21) y se cuenta sobre
+        lo guardado, no sobre los pedidos: la pregunta es cuánta de esta lista
+        ya está pedida, y la contesta el estado del renglón —que es donde el
+        glosario la puso—.
+        """
+        return sum(1 for r in self.renglones if r.esta_en_transito)
+
+    @property
+    def por_repartir(self) -> tuple[RenglonGuardado, ...]:
+        """Los renglones que todavía se pueden meter en un pedido.
+
+        Es `de_trabajo` **menos lo que ya se pidió**, y son dos propiedades y no
+        una porque contestan dos preguntas distintas: `de_trabajo` es "qué no
+        está descartado" —lo que se pinta en la tabla— y esto es "qué queda por
+        hacer".
+
+        Nace con el ticket 21 porque antes de él **ningún código escribía
+        `en tránsito`**: `de_trabajo` nunca había visto uno, así que las cuatro
+        cuentas que cuelgan de aquí —la partición, el conteo de huecos, la cola
+        del botón de completar y el aviso de sesiones caducadas— daban lo mismo
+        con las dos. A partir de aquí no: un renglón ya pedido que siguiera
+        contando mandaría a consultar cuatro portales ajenos por mercancía que
+        ya está en camino, y haría que la vista previa de la partición
+        prometiera mover un renglón que el `WHERE` de `_ASIGNAR_RENGLONES` no
+        puede mover.
+        """
+        return tuple(r for r in self.renglones if r.se_puede_repartir)
 
     @property
     def tiene_renglones_sin_atender(self) -> bool:
@@ -962,6 +1093,11 @@ def columnas_del_pedido(
     estado de QuePharma hoy (`proveedores.py`). Nunca un cero: un cero es un id
     que no existe y que aun así cabe en un `bigint`, y a partir de ahí todo
     `join` contra `dim_proveedor` sale vacío sin error.
+
+    **La firma del envío no está aquí y no es un olvido** (ticket 21): un
+    pedido nace sin ella porque nace en `borrador`, y `ck_pedido_envio` exige
+    justo eso. Quien la escribe es `enviar_el_pedido`, en su `UPDATE`, que es el
+    único momento en que hay algo que firmar.
     """
     return {
         "negocio": negocio,
@@ -989,9 +1125,35 @@ def revisar_el_pedido(columnas: dict) -> None:
         )
     if columnas["estado"] not in ESTADOS_DEL_PEDIDO:
         raise ValueError(
-            f"Estado {columnas['estado']!r} fuera de ck_pedido_estado, que hoy "
-            f"solo conoce {ESTADOS_DEL_PEDIDO}. El de 'enviado' lo estrena el "
-            f"ticket 21, con su migración."
+            f"Estado {columnas['estado']!r} fuera de ck_pedido_estado, que "
+            f"conoce {ESTADOS_DEL_PEDIDO} y ninguno más. Un sinónimo que se "
+            f"cuele parte el pedido en dos vocabularios y las consultas "
+            f"empiezan a mentir por omisión."
+        )
+    # Las dos del ticket 21. Se leen con `.get` y no con `[...]` por la misma
+    # razón que las tres del 20: una fila leída de una base a la que todavía no
+    # se le corrió la migración 0006 no las trae, y lo que tiene que pasar
+    # entonces es "nadie lo ha enviado" y no un `KeyError` que tumbe la pantalla
+    # entera por una columna que falta.
+    if columnas.get("enviado_por") == "":
+        raise ValueError(
+            "Firma vacía. La columna tiene CHECK (enviado_por <> ''): o hay "
+            "correo o es NULL, igual que en el descarte, el ajuste y la "
+            "elección. Sin encabezado de Access, `web.app.quien()` devuelve "
+            "'sin-identificar', que sí es un dato: ck_pedido_enviado_por."
+        )
+    if (columnas["estado"] == ENVIADO) != (
+        columnas.get("enviado_por") is not None
+        and columnas.get("enviado_en") is not None
+    ):
+        raise ValueError(
+            "Enviado sin decir quién ni cuándo, o firma de envío en un pedido "
+            "que no está enviado. Lo rechaza ck_pedido_envio. 'Enviado' "
+            "significa 'yo ya lo capturé en el portal del proveedor' (ADR "
+            "0009): es la declaración de una persona sobre algo que Continental "
+            "no vio, así que sin su firma no queda ningún hecho guardado — solo "
+            "un 'se envió' en voz pasiva y nadie a quien preguntarle qué se "
+            "capturó."
         )
     if columnas["proveedor_id"] is not None and columnas["proveedor_id"] <= 0:
         raise ValueError(
@@ -1012,6 +1174,10 @@ def pedido_desde_columnas(fila) -> PedidoGuardado:
     `numeric(12,2)` acaba de sacarlo. Es lo contrario de lo que hace
     `renglon_desde_columnas` con las piezas, y la diferencia es que esto es
     dinero.
+
+    Las dos del envío se leen con `.get` —una `RowMapping` de SQLAlchemy lo
+    soporta igual que un diccionario— para que una base sin la migración 0006
+    se vea como "nadie lo ha enviado" en vez de tumbar la pantalla entera.
     """
     return PedidoGuardado(
         pedido_id=int(fila["pedido_id"]),
@@ -1028,6 +1194,8 @@ def pedido_desde_columnas(fila) -> PedidoGuardado:
             if fila["total_sin_iva"] is None
             else Decimal(str(fila["total_sin_iva"]))
         ),
+        enviado_por=fila.get("enviado_por"),
+        enviado_en=fila.get("enviado_en"),
     )
 
 
@@ -1858,12 +2026,69 @@ class AlmacenamientoDelPedido(Protocol):
         cuesta "no se sabe".
 
         **Lo que ya no es borrador no se toca**: el `WHERE` del `DO UPDATE` y el
-        `EXISTS` de `_SOLTAR_RENGLONES` lo protegen. Hoy no hay otro estado; el
-        día que el ticket 21 lo estrene, volver a partir dejará intacto lo
-        enviado en vez de pisarlo.
+        `EXISTS` de `_SOLTAR_RENGLONES` lo protegen. Desde el ticket 21 eso ya
+        no es una garantía sobre un estado hipotético: volver a partir deja
+        intacto lo `enviado` en vez de pisarlo, y hay una prueba que lo envía de
+        verdad para comprobarlo.
 
         Todo en **una transacción**: una partición a medias dejaría renglones
         repartidos entre pedidos cuyos totales no cuentan.
+        """
+        ...
+
+    def enviar_el_pedido(
+        self, negocio: str, pedido_id: int, quien: str
+    ) -> PedidoEnviado | None:
+        """`borrador` → `enviado`, firmado, y sus renglones a `en tránsito` (21).
+
+        **Lo que se guarda es la declaración de una persona**, no un hecho que
+        Continental haya observado: *"yo ya lo capturé en el portal del
+        proveedor"*. Continental no entra a los portales y no va a entrar (regla
+        1 de `CLAUDE.md`; el ADR 0002 lo dejó fuera de alcance y el ADR 0009 lo
+        razona entero). Por eso lleva **firma** —`quien`, el correo que verificó
+        Access— y no acuse: no hay nadie de quien recibir uno.
+
+        `quien` es una firma y **nunca un permiso** (regla 3): sirve para saber
+        a quién preguntarle qué se capturó cuando la factura no cuadre.
+
+        Son **dos sentencias en una transacción**, y ninguna de las dos sobra:
+        el pedido cambia de estado y sus renglones pasan a `en tránsito`. Medio
+        envío —el pedido marcado y los renglones en `abierto`— sería exactamente
+        el modo de falla que este ticket viene a evitar: la lista de mañana
+        volvería a proponer lo que ya se pidió hoy.
+
+        `None` es "no había nada que enviar", y quien llame lo dice en vez de
+        fingir. Son **tres** condiciones y las tres viven en el `WHERE`:
+
+        - el pedido es de este negocio (regla 7);
+        - **sigue en `borrador`** — uno `enviado` ya se capturó, y volver a
+          firmarlo movería la hora de un hecho que ya pasó;
+        - **tiene al menos un renglón dentro**. Un pedido que se quedó vacío al
+          volver a partir sigue existiendo —el rol no tiene `DELETE`— con su
+          total en `NULL`; marcarlo `enviado` diría "capturé esto en el portal"
+          sobre nada, y ni siquiera habría qué pasar a `en tránsito`;
+        - **y su total no envejeció**: ningún renglón de dentro se corrigió
+          después de `armado_en`. `total_sin_iva` solo se reescribe al partir,
+          así que una corrección posterior lo deja enseñando lo que costaba
+          hace un rato — y ésa es la cifra contra la que alguien va a comparar
+          la factura del proveedor. Se niega en vez de recalcular aquí, porque
+          recalcular cambiaría el número **después** de que el encargado leyó el
+          del botón. Es el hilo abierto 13 de `HANDOVER.md`.
+
+        **Lo que NO se exige, y es una decisión (ADR 0009): que la lista siga
+        `abierta`.** Todas las demás operaciones sí lo exigen, porque una lista
+        `cerrada` quiere decir "ya se pidió lo que se iba a pedir" y cambiarla
+        después separaría el renglón de lo que de verdad se pidió. Enviar es lo
+        contrario: es decir que sí se pidió. Si lo exigiera, quien cierre la
+        lista antes de marcar el último pedido se queda con renglones `abierto`
+        dentro de una lista cerrada y sin manera de moverlos — mercancía pedida
+        que el sugerido volvería a proponer y que la recepción (ticket 26) no
+        podría cruzar.
+
+        **Un pedido sin total SÍ se envía**, y eso no choca con lo de arriba: un
+        `total_sin_iva` en `NULL` quiere decir que alguna línea va sin precio, y
+        la quinta casilla del ticket 20 dice que esa línea se pide igual. El
+        precio de verdad lo ve el encargado en el portal mientras lo captura.
         """
         ...
 
@@ -2301,7 +2526,7 @@ _ELEGIR_PROVEEDOR = text(
 _LEER_PEDIDOS = text(
     """
     select pedido_id, negocio, pedido_sugerido_id, proveedor, proveedor_id,
-           estado, armado_en, total_sin_iva
+           estado, armado_en, total_sin_iva, enviado_por, enviado_en
       from pedidos.pedido
      where negocio = :negocio and pedido_sugerido_id = :pedido_sugerido_id
      order by proveedor
@@ -2325,10 +2550,10 @@ _LEER_PEDIDOS = text(
 # DDL, esto falla ruidoso en lugar de seguir funcionando contra otra parecida.
 #
 # `where pedido.estado = 'borrador'` es la tercera casilla del ticket metida en
-# el `WHERE` y no en un `if`: **solo se modifica lo que sigue en borrador**. El
-# día que el ticket 21 ponga un pedido en "enviado", volver a partir lo dejará
-# intacto y devolverá cero filas — que es lo que hay que decir, no lo que hay
-# que pisar.
+# el `WHERE` y no en un `if`: **solo se modifica lo que sigue en borrador**.
+# Desde el ticket 21 hay un pedido que puede estar en "enviado", y volver a
+# partir lo deja intacto y devuelve cero filas — que es lo que hay que decir, no
+# lo que hay que pisar.
 #
 # Se reescriben `proveedor_id` y `total_sin_iva` porque las dos pueden haber
 # cambiado entre dos particiones: el puente se pudo configurar, y una cantidad
@@ -2351,7 +2576,101 @@ _ABRIR_EL_PEDIDO = text(
            armado_en = now()
      where pedido.estado = 'borrador'
     returning pedido_id, negocio, pedido_sugerido_id, proveedor, proveedor_id,
-              estado, armado_en, total_sin_iva
+              estado, armado_en, total_sin_iva, enviado_por, enviado_en
+    """
+)
+
+# ENVIAR UN PEDIDO (ticket 21). `borrador` -> `enviado`, firmado.
+#
+# Lo que esta sentencia escribe **no es un hecho que Continental haya visto**:
+# es la declaración de una persona de que ya capturó este pedido en el portal
+# del proveedor. Continental no entra a los portales (regla 1 de CLAUDE.md, ADR
+# 0002 y ADR 0009). De ahí que lleve firma y no acuse.
+#
+# `now()` y no una hora calculada en Python, igual que en `_CERRAR` y en el
+# descarte: la pone el servidor que guarda la fila, así que dos procesos con
+# relojes distintos no escriben firmas incomparables.
+#
+# Las condiciones del `WHERE`, y cada una defiende algo distinto:
+#
+#   - `p.negocio` — regla 7. Toda sentencia dice a qué negocio pertenece.
+#   - `p.estado = 'borrador'` — la transición en el `WHERE` y no en un `if`.
+#     Cero filas es "ya estaba enviado", y el segundo clic de un botón que viajó
+#     no mueve la firma ni la hora de un hecho que ya pasó. Comprobar en Python
+#     y escribir después tiene una carrera en medio.
+#   - **`exists` sobre sus renglones** — un pedido vacío no se envía. El que se
+#     quedó sin ninguno al volver a partir sigue ahí, con total `NULL`, porque
+#     el rol no tiene `DELETE`; marcarlo `enviado` diría "capturé esto en el
+#     portal" sobre nada.
+#   - **`not exists` sobre las cantidades corregidas después de armarlo** — el
+#     total no puede quedar viejo al enviarse. `total_sin_iva` solo se reescribe
+#     al partir, así que corregir la cantidad de un renglón que ya está dentro
+#     de un pedido lo deja enseñando lo que costaba hace un rato (hilo abierto
+#     13 de `HANDOVER.md`, que le dejó este caso al ticket 21). Se NIEGA en vez
+#     de recalcular aquí: recalcular cambiaría el número después de que el
+#     encargado leyó el del botón, y enviaría un total que nadie vio. Cero filas
+#     manda a "Volver a partir", que es un botón que ya existe y cuesta un clic.
+#     Un total viejo es la cifra contra la que alguien va a comparar la factura:
+#     si no cuadra, nadie sabe si falta mercancía o si el número estaba rancio.
+#
+# **NO lleva `s.estado = 'abierto'`, y es una decisión (ADR 0009).** Todas las
+# demás sentencias de este módulo exigen la lista abierta porque `cerrada`
+# quiere decir "ya se pidió lo que se iba a pedir" y cambiarla después separaría
+# el renglón de lo que de verdad se pidió. Enviar es lo contrario: es decir que
+# sí se pidió. Con esa condición puesta, quien cierre la lista antes de marcar
+# el último pedido se queda con renglones `abierto` dentro de una lista cerrada
+# y sin manera de moverlos a `en tránsito` — o sea, con mercancía pedida que el
+# sugerido de mañana volvería a proponer.
+_ENVIAR_EL_PEDIDO = text(
+    """
+    update pedidos.pedido as p
+       set estado = 'enviado',
+           enviado_por = :quien,
+           enviado_en = now()
+     where p.negocio = :negocio
+       and p.pedido_id = :pedido_id
+       and p.estado = 'borrador'
+       and exists (select 1
+                     from pedidos.renglon as r
+                    where r.pedido_id = p.pedido_id
+                      and r.negocio = p.negocio)
+       and not exists (select 1
+                         from pedidos.renglon as r
+                        where r.pedido_id = p.pedido_id
+                          and r.negocio = p.negocio
+                          and r.ajustada_en is not null
+                          and r.ajustada_en > p.armado_en)
+    returning p.pedido_id, p.negocio, p.pedido_sugerido_id, p.proveedor,
+              p.proveedor_id, p.estado, p.armado_en, p.total_sin_iva,
+              p.enviado_por, p.enviado_en
+    """
+)
+
+# Y sus renglones pasan a `en tránsito`: "ya se le pidió a un proveedor y
+# todavía no llega" (CONTEXT.md). **Es lo que impide pedir dos veces lo mismo**,
+# porque un renglón así no se vuelve a proponer.
+#
+# Va en la MISMA transacción que la de arriba, y no es un detalle: medio envío
+# —el pedido marcado y los renglones en `abierto`— es exactamente el modo de
+# falla que este ticket viene a evitar.
+#
+#   - `r.pedido_id = :pedido_id` — solo los de ESTE pedido. Sin esto, enviar a
+#     NADRO marcaría como pedido lo que todavía está en el borrador de LEVIC.
+#   - `r.estado = 'abierto'` — un descartado sigue descartado y uno que ya
+#     estaba `en tránsito` no se vuelve a mover. Y es lo que hace que esto sea
+#     idempotente por su cuenta, aunque el `WHERE` de arriba ya lo garantice.
+#
+# El acento de `en tránsito` va en la sentencia: es el valor del glosario y el
+# del CHECK. `test_compila.py` vigila que este archivo no traiga un retorno de
+# carro que lo convierta en `'en tránsito\r'`.
+_RENGLONES_A_TRANSITO = text(
+    """
+    update pedidos.renglon as r
+       set estado = 'en tránsito'
+     where r.negocio = :negocio
+       and r.pedido_id = :pedido_id
+       and r.estado = 'abierto'
+    returning r.renglon_id
     """
 )
 
@@ -2374,11 +2693,12 @@ _ABRIR_EL_PEDIDO = text(
 #     misma condición que `_SOLTAR_RENGLONES` lleva, y aquí hacía más falta:
 #     sin ella, volver a partir **sacaría** un renglón de un pedido ya enviado
 #     para meterlo en otro, y el pedido enviado quedaría diciendo un total que
-#     ya no corresponde a lo que tiene dentro. El ticket 21 lo va a proteger
-#     además por el otro lado —sus renglones pasan a `en tránsito` al enviar, y
-#     eso ya no es `abierto`—, pero esa garantía es suya y no de aquí: una
-#     restricción que depende de que otro ticket haga su parte no es una
-#     restricción.
+#     ya no corresponde a lo que tiene dentro. El ticket 21 lo protege además
+#     por el otro lado —sus renglones pasan a `en tránsito` al enviar, y eso ya
+#     no es `abierto`—, y aun así esta condición se queda: una restricción que
+#     depende de que otra parte del sistema haga la suya no es una restricción,
+#     y el día que la recepción (ticket 26) devuelva un renglón a `abierto` esta
+#     sería la única que lo sostendría.
 _ASIGNAR_RENGLONES = text(
     """
     update pedidos.renglon as r
@@ -2974,6 +3294,37 @@ class AlmacenamientoPostgres:
                 .all()
             )
         return tuple(pedido_desde_columnas(f) for f in filas)
+
+    def enviar_el_pedido(
+        self, negocio: str, pedido_id: int, quien: str
+    ) -> PedidoEnviado | None:
+        # `begin()` y no `connect()`: las dos sentencias son UNA transacción.
+        # Medio envío —el pedido marcado y sus renglones todavía `abierto`— es
+        # el modo de falla que este ticket viene a evitar, y el rol no tiene
+        # `DELETE` para deshacerlo a mano.
+        with self._motor().begin() as conexion:
+            fila = (
+                conexion.execute(
+                    _ENVIAR_EL_PEDIDO,
+                    {"negocio": negocio, "pedido_id": pedido_id, "quien": quien},
+                )
+                .mappings()
+                .first()
+            )
+            if fila is None:
+                # Cero filas quiere decir una de tres, y las tres son "no se
+                # envió": el pedido no existe en este negocio, ya no es
+                # borrador, o se quedó sin renglones. No se distinguen desde
+                # fuera, igual que en el descarte.
+                return None
+            movidos = conexion.execute(
+                _RENGLONES_A_TRANSITO,
+                {"negocio": negocio, "pedido_id": pedido_id},
+            ).all()
+        return PedidoEnviado(
+            pedido=pedido_desde_columnas(fila),
+            renglones=tuple(int(f[0]) for f in movidos),
+        )
 
     def guardar_la_corrida(self, negocio: str, corrida: CorridaDelLote) -> int:
         columnas = columnas_de_la_corrida(corrida, negocio)

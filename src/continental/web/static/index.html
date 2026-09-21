@@ -257,6 +257,14 @@
   .particion .pedido .cuanto.nose { color: var(--tenue); font-style: italic; font-weight: 400; }
   .particion .pedido .marca { color: var(--aviso); font-size: .75rem; grid-column: 2 / -1; }
   .particion .pedido .marca.tenue { color: var(--tenue); }
+  /* QUÉ SIGNIFICA ENVIAR. Ocupa la línea entera bajo su pedido, junto al botón
+     y NO como nota al pie: quien no lee la nota al pie es exactamente quien
+     necesitaba leerla. La frase viene hecha de `particion.frase_del_envio`. */
+  .particion .pedido .envio { grid-column: 1 / -1; font-size: .78rem; color: var(--tenue); margin-top: .25rem; }
+  /* Ya capturado. Verde como el ganador de la comparación y por lo mismo: es un
+     hecho cerrado, no un aviso que pida hacer algo. */
+  .particion .pedido .envio.hecho { color: var(--ok); }
+  .particion .pedido .acciones { grid-column: 1 / -1; margin-top: .35rem; }
   .particion .fila { margin-top: .6rem; }
   /* Los cuatro proveedores, uno por renglón dentro de la celda. En columna y
      no en una línea: son cuatro cifras que se comparan entre sí, y comparar
@@ -1086,6 +1094,19 @@ const renglon = (r, acciones) => {
     producto.append(marca);
   }
 
+  // YA SE PIDIÓ (ticket 21). El renglón NO desaparece: sigue en la tabla, con
+  // sus precios y su proveedor a la vista, porque el encargado tiene que poder
+  // mirar qué pidió. Lo que cambia es que se dice —y que deja de poder
+  // tocarse—: `en tránsito` significa "ya se le pidió a un proveedor y todavía
+  // no llega" (CONTEXT.md), y de ahí sale que no se vuelva a proponer mañana.
+  if (r.esta_en_transito) {
+    const marca = document.createElement('span');
+    marca.className = 'marca tenue';
+    marca.textContent = 'Ya se pidió: en tránsito. No se vuelve a proponer '
+      + 'mientras esté así.';
+    producto.append(marca);
+  }
+
   const existencia = celdaDeCifra(r.existencia, 'Existencia', '', r.esta_agotado);
 
   // Agotado se dice con la palabra y no con un "0.0 días": es el renglón más
@@ -1101,7 +1122,18 @@ const renglon = (r, acciones) => {
       r.dias_de_cobertura === 1 ? ' día' : ' días');
   }
 
-  const cantidad = celdaDeCantidad(r, acciones.editable, acciones.ajustar);
+  // LO QUE SE PUEDE TOCAR SALE DE DOS COSAS Y NO DE UNA (ticket 21): del estado
+  // de la LISTA —"se puede corregir mientras la lista esté abierta"— y del
+  // estado del RENGLÓN. Un renglón `en tránsito` ya se le pidió a un proveedor,
+  // y las tres rutas que lo tocan exigen `abierto` en su `WHERE`, así que
+  // dejarlo editable sería ofrecer tres botones que contestan 409. Eso enseña a
+  // ignorar los avisos, que es lo mismo que el campo de la cantidad ya decidió
+  // para la lista cerrada.
+  //
+  // La garantía sigue siendo del `WHERE`, no de esto.
+  const editable = acciones.editable && !r.esta_en_transito;
+
+  const cantidad = celdaDeCantidad(r, editable, acciones.ajustar);
 
   // Descartar: UN CLIC y sin diálogo de confirmación. Lo que hace segura la
   // operación es que se puede deshacer —el renglón baja al bloque de
@@ -1120,10 +1152,12 @@ const renglon = (r, acciones) => {
   //
   // Apagado y no escondido: la columna de acciones tiene ancho fijo y quitarlo
   // movería todas las filas al cerrar la lista.
-  quitar.disabled = !acciones.editable;
-  quitar.title = acciones.editable
+  quitar.disabled = !editable;
+  quitar.title = editable
     ? 'No se pide. Se puede devolver a la lista.'
-    : 'La lista ya se cerró: lo que se iba a pedir ya se pidió.';
+    : (r.esta_en_transito
+       ? 'Ya se le pidió a un proveedor: descartarlo diría que nadie lo pidió.'
+       : 'La lista ya se cerró: lo que se iba a pedir ya se pidió.');
   // El nombre del producto va en el nombre accesible: con veinte botones
   // iguales, "Descartar" a secas no dice cuál se está tocando.
   quitar.setAttribute('aria-label', 'Descartar ' + r.descripcion);
@@ -1131,7 +1165,7 @@ const renglon = (r, acciones) => {
 
   tr.append(clave, producto, existencia, cobertura, cantidad,
             celdaDePrecios(r, acciones),
-            celdaDeProveedor(r, acciones.editable, acciones.elegirProveedor),
+            celdaDeProveedor(r, editable, acciones.elegirProveedor),
             celdaAcciones);
   return tr;
 };
@@ -1613,7 +1647,7 @@ async function cargarPedido() {
     // ajustar también — uno saca un renglón de un pedido y el otro le cambia
     // el importe. Una vista previa vieja mandaría a apretar "Partir" sobre
     // números que ya no son.
-    pintarParticion(datos.particion, datos.pedidos, acciones.editable, partir);
+    pintarParticion(datos.particion, datos.pedidos, acciones.editable, partir, enviarPedido);
     tabla.hidden = false;
   };
 
@@ -1750,6 +1784,55 @@ async function cargarPedido() {
     nota('pedido-accion',
       'Lista partida en ' + plural((datos.pedidos || []).length, 'pedido', 'pedidos')
       + '. Siguen en borrador: se pueden cambiar y volver a partir.', 'todo');
+  }
+
+  // MARCAR UN PEDIDO COMO ENVIADO (ticket 21).
+  //
+  // **Esto no le manda nada a nadie**, y el botón lo dice arriba con la frase
+  // que llega hecha del servidor: Continental no entra a los portales de los
+  // proveedores (regla 1 de CLAUDE.md, ADR 0002 y ADR 0009). Lo que se guarda
+  // es que el encargado declara haberlo capturado él, con su correo y la hora.
+  //
+  // Por eso NO se pregunta "¿estás seguro?": el diálogo de confirmación que se
+  // ve en cada clic se aprende a despachar sin leerlo, y lo que de verdad hace
+  // segura esta acción es que el total esté escrito DENTRO del botón. Es el
+  // mismo criterio con el que descartar va sin diálogo.
+  //
+  // La respuesta trae la lista ENTERA, como partir: enviar mueve el estado del
+  // pedido, el de todos sus renglones, la vista previa de la partición, el
+  // conteo de huecos y la cola del botón de completar.
+  async function enviarPedido(pedidoId, nombre, boton) {
+    boton.disabled = true;
+    nota('pedido-accion', '');
+
+    let respuesta;
+    try {
+      respuesta = await (await fetch(
+        '/api/pedido/' + pedidoId + '/enviar', { method: 'POST' })).json();
+    } catch (e) {
+      boton.disabled = false;
+      nota('pedido-accion',
+        'Continental no contestó. El pedido se quedó como estaba; inténtalo otra vez.', 'mal');
+      return;
+    }
+
+    if (!respuesta.ok) {
+      boton.disabled = false;
+      // Genérico a propósito (regla 5 de CLAUDE.md): el detalle está en la
+      // bitácora del servidor.
+      nota('pedido-accion', respuesta.detalle || 'No se pudo enviar el pedido.', 'aviso');
+      return;
+    }
+
+    datos = respuesta;
+    if (Array.isArray(datos.puente)) PROVEEDORES = datos.puente;
+    conteoEnvejecido = false;
+    repintar();
+    nota('pedido-accion',
+      'Pedido a ' + nombre + ' marcado como enviado. Sus renglones pasaron a '
+      + '«en tránsito», así que la lista de mañana ya no los va a volver a '
+      + 'proponer. Recuerda: esto no se lo mandó a ' + nombre + ' — lo capturas '
+      + 'tú en su portal.', 'todo');
   }
 
   // Consultar el precio en los cuatro proveedores (ticket 12).
@@ -2006,8 +2089,14 @@ async function cargarPedido() {
 // moviendo el interruptor.
 const pintarRenglones = (visibles, total, otra, descartados, acciones) => {
   const escondidos = total - visibles.length;
+  // LOS QUE YA SE PIDIERON NO SON "POR ATENDER" (ticket 21). Siguen en la
+  // tabla —no desaparecen— pero contarlos aquí diría que queda trabajo donde
+  // ya no queda, y ése es el número que se lee de un vistazo. Se cuentan sobre
+  // los VISIBLES y no sobre la lista entera porque es el número que acompaña a
+  // lo que se está viendo; el de la lista entera viaja aparte en `en_transito`.
+  const enTransito = visibles.filter(r => r.esta_en_transito).length;
   document.getElementById('pedido-resumen').textContent =
-    plural(visibles.length, 'renglón por atender', 'renglones por atender') +
+    plural(visibles.length - enTransito, 'renglón por atender', 'renglones por atender') +
     ', uno por producto vendido. Se propone reponer lo que salió, pieza por ' +
     'pieza. Arriba lo que se va a acabar primero. ' +
     (escondidos
@@ -2024,8 +2113,17 @@ const pintarRenglones = (visibles, total, otra, descartados, acciones) => {
     // pantalla el 2026-09-19.
     (descartados
       ? plural(descartados,
-          'renglón descartado no aparece aquí y se puede devolver desde abajo.',
-          'renglones descartados no aparecen aquí y se pueden devolver desde abajo.')
+          'renglón descartado no aparece aquí y se puede devolver desde abajo. ',
+          'renglones descartados no aparecen aquí y se pueden devolver desde abajo. ')
+      : '') +
+    // Y los que ya se pidieron, por lo mismo que los descartados: el número de
+    // arriba bajó y la razón tiene que estar donde se lee el número, o
+    // parecería que se vendió menos. Éstos SÍ siguen en la tabla, y eso se
+    // dice: "no aparecen aquí" sería mentira.
+    (enTransito
+      ? plural(enTransito,
+          'renglón más ya se pidió y sigue aquí, marcado como en tránsito.',
+          'renglones más ya se pidieron y siguen aquí, marcados como en tránsito.')
       : '');
   document.getElementById('pedido-renglones').replaceChildren(
     ...visibles.map(r => renglon(r, acciones)));
@@ -2287,17 +2385,40 @@ let PROVEEDORES = [];
 // Ningún número se calcula aquí. Los totales, el parcial, cuántas líneas van
 // sin precio y cuáles proveedores no tiene SICAR llegan de `particion.partir`,
 // que es puro y tiene su tabla de casos.
-const pintarParticion = (particion, pedidos, editable, alPartir) => {
+const pintarParticion = (particion, pedidos, editable, alPartir, alEnviar) => {
   const caja = document.getElementById('particion');
   if (!particion) { caja.hidden = true; caja.replaceChildren(); return; }
 
   caja.replaceChildren();
 
+  // LOS QUE YA NO ESTÁN EN LA PARTICIÓN, Y POR QUÉ HAY QUE PINTARLOS IGUAL
+  // (ticket 21). Al enviar un pedido, sus renglones pasan a `en tránsito` y
+  // dejan de contar como "por repartir": el pedido enviado desaparece de
+  // `particion.pedidos`, que es el cálculo de lo que queda por hacer. Si esta
+  // función solo recorriera esa lista, **el pedido recién enviado se borraría
+  // de la pantalla** — justo el que el encargado acaba de crear y el único del
+  // que necesita ver la firma.
+  //
+  // Así que se pinta la UNIÓN: primero lo que se partiría ahora, y después los
+  // pedidos guardados que ya no aparecen ahí.
+  const guardados = new Map((pedidos || []).map(p => [p.proveedor, p]));
+  const enLaParticion = new Set(particion.pedidos.map(p => p.proveedor));
+  const fueraDeLaParticion = (pedidos || []).filter(p => !enLaParticion.has(p.proveedor));
+  const enviados = (pedidos || []).filter(p => p.fue_enviado).length;
+
   const titular = document.createElement('b');
-  titular.textContent = particion.hay
+  titular.textContent = (particion.hay
     ? 'Esta lista se parte en ' + plural(particion.pedidos.length, 'pedido', 'pedidos')
       + ', uno por proveedor'
-    : 'Todavía no hay en qué partir esta lista';
+    // SIN NADA QUE PARTIR SON DOS COSAS DISTINTAS, y decirlas igual sería el
+    // peor de los mensajes: "todavía no hay en qué partir" sobre una lista que
+    // ya se pidió entera manda a elegir proveedores que ya se eligieron.
+    : (enviados
+       ? 'Esta lista ya se pidió entera'
+       : 'Todavía no hay en qué partir esta lista'))
+    + (enviados
+       ? ' · ' + plural(enviados, 'pedido ya enviado', 'pedidos ya enviados')
+       : '');
   caja.append(titular);
 
   const detalle = document.createElement('span');
@@ -2306,13 +2427,15 @@ const pintarParticion = (particion, pedidos, editable, alPartir) => {
     ? plural(particion.renglones_repartidos, 'renglón repartido', 'renglones repartidos')
       + '. Cada pedido se puede volver a armar mientras siga en borrador: '
       + 'cambia el proveedor de un renglón y vuelve a partir.'
-    : 'Elige a quién se le pide cada renglón, o consulta los precios para que '
-      + 'el sistema pueda sugerirlo.';
+    : (enviados
+       ? 'No queda nada por repartir: todo lo que había se capturó en los '
+         + 'portales y sus renglones están en tránsito. Ya se puede cerrar.'
+       : 'Elige a quién se le pide cada renglón, o consulta los precios para '
+         + 'que el sistema pueda sugerirlo.');
   caja.append(detalle);
 
   // Un pedido por proveedor, con su total. El estado sale del pedido GUARDADO
   // cuando lo hay: "borrador" es un hecho de la tabla, no de este cálculo.
-  const guardados = new Map((pedidos || []).map(p => [p.proveedor, p]));
   particion.pedidos.forEach(p => {
     const fila = document.createElement('div');
     fila.className = 'pedido';
@@ -2359,9 +2482,102 @@ const pintarParticion = (particion, pedidos, editable, alPartir) => {
     if (guardado) {
       const marca = document.createElement('span');
       marca.className = 'marca tenue';
+      // Sin punto al final: `instanteEnPalabras` ya termina en "a.m." o "p.m.",
+      // y el punto extra salía como "02:07 a.m..". Lo cazó el recorrido del
+      // navegador del 2026-09-21, no el suite.
       marca.textContent = 'Pedido ' + guardado.pedido_id + ', ' + guardado.estado
-        + ', armado ' + instanteEnPalabras(guardado.armado_en) + '.';
+        + ', armado ' + instanteEnPalabras(guardado.armado_en);
       fila.append(marca);
+
+      // QUÉ SIGNIFICA ENVIAR, y ya lo dice el servidor (ticket 21). La frase
+      // viene HECHA de `particion.frase_del_envio`: aquí no se elige entre dos
+      // literales ni se compone nada. Es la lección del ticket 15 aplicada al
+      // sitio donde más caro sale — es la frase que impide que alguien crea
+      // que Continental le mandó el pedido a NADRO.
+      const envio = document.createElement('span');
+      envio.className = 'envio' + (guardado.fue_enviado ? ' hecho' : '');
+      envio.textContent = guardado.frase_del_envio
+        + (guardado.fue_enviado && guardado.enviado_en
+           ? ' Fue ' + instanteEnPalabras(guardado.enviado_en)
+           : '');
+      fila.append(envio);
+
+      // EL BOTÓN, CON EL TOTAL DENTRO. La primera casilla del ticket pide que
+      // el total en pesos se vea ANTES de enviar, y el sitio donde de verdad
+      // se ve es la etiqueta del botón que se va a apretar. Cuando no se puede
+      // saber, dice eso — nunca "$0.00".
+      if (!guardado.fue_enviado) {
+        const acciones = document.createElement('div');
+        acciones.className = 'acciones';
+        const boton = botonDeAccion(
+          'Enviar a ' + p.nombre + ' — '
+            + (guardado.hay_total ? '$' + guardado.total_sin_iva : 'total sin saber'),
+          (b) => alEnviar(guardado.pedido_id, p.nombre, b));
+        // `se_puede_enviar` lo decide `particion.motivo_para_no_enviar`, que es
+        // la MISMA decisión que el `WHERE` del UPDATE. Esto no es la garantía:
+        // es poder decirlo antes, en vez de dejar que alguien lo apriete y
+        // reciba un 409.
+        boton.disabled = !guardado.se_puede_enviar;
+        boton.title = guardado.motivo_para_no_enviar || guardado.frase_del_envio;
+        acciones.append(boton);
+        if (guardado.motivo_para_no_enviar) {
+          const porque = document.createElement('span');
+          porque.className = 'marca';
+          porque.textContent = guardado.motivo_para_no_enviar + '.';
+          acciones.append(porque);
+        }
+        fila.append(acciones);
+      }
+    }
+
+    caja.append(fila);
+  });
+
+  // LOS PEDIDOS QUE YA NO ESTÁN EN LA PARTICIÓN. Son los enviados -sus
+  // renglones ya no se reparten- y los que se quedaron vacíos. Se pintan desde
+  // el pedido GUARDADO, que trae todo lo suyo: su nombre, su total, cuántos
+  // renglones tiene dentro y su frase de envío. No hay vista previa que
+  // enseñar porque no hay nada que volver a partir, y eso es lo correcto: un
+  // pedido enviado ya no se edita.
+  fueraDeLaParticion.forEach(g => {
+    const fila = document.createElement('div');
+    fila.className = 'pedido';
+
+    const quien = document.createElement('span');
+    quien.className = 'quien';
+    quien.textContent = g.nombre;
+
+    const que = document.createElement('span');
+    que.textContent = plural(g.renglones, 'renglón', 'renglones');
+
+    const cuanto = document.createElement('span');
+    cuanto.className = 'cuanto' + (g.hay_total ? '' : ' nose');
+    cuanto.textContent = g.hay_total ? '$' + g.total_sin_iva : 'total sin saber';
+    fila.append(quien, que, cuanto);
+
+    const marca = document.createElement('span');
+    marca.className = 'marca tenue';
+    marca.textContent = 'Pedido ' + g.pedido_id + ', ' + g.estado
+      + ', armado ' + instanteEnPalabras(g.armado_en);
+    fila.append(marca);
+
+    const envio = document.createElement('span');
+    envio.className = 'envio' + (g.fue_enviado ? ' hecho' : '');
+    envio.textContent = g.frase_del_envio
+      + (g.fue_enviado && g.enviado_en
+         ? ' Fue ' + instanteEnPalabras(g.enviado_en)
+         : '');
+    fila.append(envio);
+
+    // Un pedido que se quedó SIN renglones también cae aquí, y sigue sin
+    // poderse enviar: el motivo viene hecho de `particion.motivo_para_no_enviar`
+    // y se escribe en vez de esconder la fila. El rol no tiene DELETE, así que
+    // ese pedido existe; esconderlo sería la falla silenciosa.
+    if (!g.fue_enviado && g.motivo_para_no_enviar) {
+      const porque = document.createElement('span');
+      porque.className = 'marca';
+      porque.textContent = g.motivo_para_no_enviar + '.';
+      fila.append(porque);
     }
 
     caja.append(fila);

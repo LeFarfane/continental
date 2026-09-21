@@ -271,6 +271,8 @@ CREATE TABLE IF NOT EXISTS pedidos.pedido (
     -- mejor pegado a `proveedor_id` y aun así va aquí.
     proveedor           text          NOT NULL,
     estado              text          NOT NULL DEFAULT 'borrador',
+    enviado_por         text,
+    enviado_en          timestamptz,
 
     CONSTRAINT pk_pedido
         PRIMARY KEY (pedido_id),
@@ -329,22 +331,46 @@ CREATE TABLE IF NOT EXISTS pedidos.pedido (
     CONSTRAINT ck_pedido_proveedor_id
         CHECK (proveedor_id > 0),
 
-    -- UN SOLO ESTADO, y eso es una decisión y no una lista a medio escribir.
-    -- `borrador` es lo que el ticket 20 estrena: "los pedidos nacen en borrador
-    -- y se pueden modificar mientras estén así". El de "enviado" -y quizá uno
-    -- de cancelado- los estrena el ticket 21, y CÓMO SE LLAMEN ES SU DECISIÓN:
-    -- `CONTEXT.md` no los tiene todavía y el glosario manda sobre el nombre de
-    -- cualquier cosa.
+    -- DOS ESTADOS Y NINGUNO MÁS. `borrador` es donde nace todo pedido (ticket
+    -- 20): "se pueden modificar mientras estén así". `enviado` lo estrena el
+    -- ticket 21 y quiere decir **una persona ya lo capturó en el portal del
+    -- proveedor** -- NO que Continental se lo haya mandado a nadie, porque
+    -- Continental no entra a los portales (regla 1 de CLAUDE.md, ADR 0002 y ADR
+    -- 0009)--.
     --
-    -- Se podría haber adelantado, como el ticket 12 adelantó el motivo
-    -- `no empareja` un día antes de que nadie lo escribiera. La diferencia es
-    -- que aquel significado YA ESTABA DECIDIDO en el ADR 0002; éstos no. Lo que
-    -- cuesta, dicho: el ticket 21 paga una migración para ampliar este CHECK.
+    -- El ticket 20 se quedó con uno solo a propósito -el glosario no tenía el
+    -- otro todavía, y el glosario manda sobre el nombre de cualquier cosa- y
+    -- dejó anotado lo que costaría: "el ticket 21 paga una migración para
+    -- ampliar este CHECK". Es `sql/migraciones/0006-enviar-el-pedido.sql`.
+    --
+    -- SIN un estado de cancelado, y tampoco es un olvido: nadie lo ha pedido, y
+    -- un valor en un CHECK que ningún código escribe es vocabulario muerto
+    -- invitando a que alguien lo use con otro significado.
     CONSTRAINT ck_pedido_estado
-        CHECK (estado IN ('borrador')),
+        CHECK (estado IN ('borrador', 'enviado')),
 
     CONSTRAINT ck_pedido_total
         CHECK (total_sin_iva >= 0),
+
+    -- La cadena vacía no existe en ninguna columna de texto de este esquema.
+    -- Sin encabezado de Access, `web.app.quien()` devuelve 'sin-identificar',
+    -- que SÍ es un dato y se puede buscar.
+    CONSTRAINT ck_pedido_enviado_por
+        CHECK (enviado_por <> ''),
+
+    -- ENVIADO SI Y SOLO SI HAY FIRMA Y HORA. El mismo par que
+    -- `ck_renglon_descarte`, `ck_renglon_ajuste` y `ck_renglon_eleccion`, y aquí
+    -- es donde más falta hace: lo que esta tabla guarda al enviar NO es un hecho
+    -- que Continental haya observado -ocurrió en otra pantalla, con otras
+    -- credenciales-, así que sin la firma no queda ningún hecho guardado, solo
+    -- un "se envió" en voz pasiva y nadie a quien preguntarle qué se capturó
+    -- cuando la factura no cuadre.
+    --
+    -- Y al revés: una firma colgada de un borrador diría que alguien envió lo
+    -- que nadie envió.
+    CONSTRAINT ck_pedido_envio
+        CHECK ((estado = 'enviado')
+               = (enviado_por IS NOT NULL AND enviado_en IS NOT NULL)),
 
     CONSTRAINT fk_pedido_sugerido
         FOREIGN KEY (pedido_sugerido_id, negocio)
@@ -415,8 +441,32 @@ COMMENT ON COLUMN pedidos.pedido.proveedor_id IS
 -- se queda `abierto` con su `pedido_id` puesto -- que es justo lo que lo deja
 -- seguir siendo modificable, como la casilla pide.
 COMMENT ON COLUMN pedidos.pedido.estado IS
-    'borrador. Nace así y se puede modificar mientras esté así. El estado de '
-    '"enviado" lo estrena el ticket 21, con su migración del CHECK.';
+    'borrador o enviado. Nace en borrador y se puede modificar mientras esté '
+    'así. enviado = una persona ya lo capturó en el portal del proveedor; '
+    'Continental no le manda nada a nadie (ADR 0009).';
+
+-- LA FIRMA DEL ENVÍO, Y POR QUÉ ES UNA FIRMA Y NO UN ACUSE (ticket 21).
+--
+-- El hecho que se guarda -"ya lo capturé en el portal de NADRO"- ocurrió en
+-- OTRA pantalla, con otras credenciales, y Continental no lo vio: no entra a
+-- los portales y no va a entrar. Un acuse es la respuesta de alguien más y aquí
+-- no hay alguien más, así que lo único verdadero que se puede escribir es quién
+-- lo dice y cuándo lo dijo.
+--
+-- Es una FIRMA y NUNCA un permiso (regla 3 de CLAUDE.md): el correo lo validó
+-- Cloudflare Access y sirve para saber a quién preguntarle qué se capturó, no
+-- para decidir si podía enviarlo.
+--
+-- `timestamptz` y no `timestamp`, igual que `armado_en` y por lo mismo: el
+-- contenedor corre en UTC y un reloj de pared sin zona se lee seis horas en el
+-- futuro desde México.
+COMMENT ON COLUMN pedidos.pedido.enviado_por IS
+    'Quién declaró haberlo capturado en el portal, según '
+    'Cf-Access-Authenticated-User-Email. Es una FIRMA, no un permiso. NULL '
+    'mientras siga en borrador.';
+
+COMMENT ON COLUMN pedidos.pedido.enviado_en IS
+    'Cuándo lo dijo, instante con zona. NULL mientras siga en borrador.';
 
 -- EL DINERO ES DECIMAL EXPLÍCITO, NUNCA COMA FLOTANTE. `numeric(12,2)`, igual
 -- que `raw.precio_competencia.precio` en Marlowe, y por la misma lección

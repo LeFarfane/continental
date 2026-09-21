@@ -1,4 +1,4 @@
-# Estado de Continental — 2026-09-19
+# Estado de Continental — 2026-09-21
 
 Describe **el estado actual**, no una lista de parches por aplicar. Si algo aquí
 no coincide con el código, el código manda.
@@ -166,6 +166,54 @@ convierte la lista en un pedido por proveedor, con su total y sus renglones
 dentro; los pedidos **nacen en `borrador`** y se pueden volver a armar mientras
 sigan así.
 
+**Y desde el ticket 21 un pedido se puede enviar — que aquí quiere decir otra
+cosa de lo que parece.** `borrador` → `enviado`, firmado con el correo que
+verificó Access, y **Continental no le manda nada a ningún proveedor**: no entra
+a los portales y no va a entrar (regla 1 de `CLAUDE.md`, y el ADR 0002 lo dejó
+fuera de alcance). Lo que se guarda es la **declaración** de una persona —*yo ya
+lo capturé en el portal de NADRO*— con su correo y la hora. Por eso lleva firma
+y no acuse: el hecho ocurrió en otra pantalla, con otras credenciales, y lo
+único verdadero que se puede escribir es quién lo dice y cuándo lo dijo. El
+porqué entero, con las tres alternativas descartadas, en el ADR 0009; la
+pantalla lo desmiente con todas sus letras en el mismo bloque del botón, no en
+una nota al pie.
+
+**El total en pesos va DENTRO del botón** —`Enviar a LEVIC — $832.10`—, que es
+el sitio donde de verdad se ve antes de apretar. Cuando no se puede saber dice
+`total sin saber`, nunca `$0.00`. Y **un pedido sin total se envía igual**: la
+quinta casilla del ticket 20 dice que un renglón sin precio se pide igual, y el
+precio de verdad lo ve el encargado en el portal mientras lo captura. Lo que
+**no** se envía es un pedido **vacío** —el que se quedó sin renglones al volver
+a partir—: se parecen y son opuestos.
+
+**Al enviar, sus renglones pasan a `en tránsito`**, en la misma transacción. Es
+lo que impide pedir dos veces lo mismo, y es la primera vez que algún código
+escribe ese estado: hasta el ticket 20 solo lo nombraban comentarios y pruebas.
+De ahí sale un efecto que no estaba en el ticket y sí en el código: las cuatro
+cuentas de "qué falta" —la partición, el conteo de huecos, la cola del botón de
+completar y el aviso de sesiones caducadas— salen ahora de
+`PedidoSugeridoGuardado.por_repartir` y no de `de_trabajo`. Contar un renglón ya
+pedido mandaría a visitar cuatro portales ajenos por mercancía que viene en
+camino.
+
+**Cuatro cosas del 21 que cazó el recorrido del navegador y no el suite** — la
+tercera vez que pasa (14, 15, 21), y las cuatro tienen prueba ahora. La peor:
+**el pedido recién enviado desaparecía de la pantalla**. Sus renglones salen de
+`por_repartir`, así que el pedido sale de `particion.pedidos` —donde está bien
+que no esté— y `pintarParticion` recorría solo esa lista: se borraba de la vista
+el pedido con su firma y su total, justo el que el encargado acababa de crear.
+Ahora se pinta la **unión** de las dos listas. Las otras tres: *"3 renglones por
+atender"* seguía diciendo 3 con dos ya pedidos y sus controles encendidos para
+contestar 409; con todo enviado la pantalla decía *"Todavía no hay en qué partir
+esta lista · Elige a quién se le pide cada renglón"* sobre una lista ya pedida
+entera; y `armado ... 02:07 a.m..` con dos puntos, que era del ticket 20.
+
+**Y el invariante 3 de `continental.verificar` se encendió solo**, sin que nadie
+tocara `verificar.py`: estaba escrito desde el ticket 17 esperando `estado` y
+`enviado_por`, el 20 puso la primera y el 21 la segunda, y
+`COLUMNAS_QUE_EXIGE_EL_ENVIO` nunca cambió. Deja de imprimirse como PENDIENTE en
+cada despliegue.
+
 **Lo sugerido NO se guarda y lo decidido SÍ, y ésa es la decisión del ticket.**
 Es la misma pregunta que el 11 resolvió con `cantidad_propuesta` /
 `cantidad_final`, y **aquí la respuesta es distinta a propósito**: la sugerencia
@@ -206,7 +254,29 @@ python iniciar.py     # http://127.0.0.1:8585
 python -m continental.verificar   # los datos de producción, no el código (ticket 17)
 python -m continental.lote        # el lote nocturno, a mano (ticket 18)
 python -m continental.lote --tope-minutos 5   # ...con tope corto, para mirarlo
-pytest                # 824 pruebas, 0 saltadas, 2.85-3.11 s (2026-09-19, ticket 20)
+pytest                # 886 pruebas, 0 saltadas, 3.31-4.81 s (2026-09-21, ticket 21)
+                      # 845 AL EMPEZAR EL 21, y no las 824 que este bloque
+                      # anoto el dia del 20: entre medias entraron las de los
+                      # pendientes 2, 6, 7 y 8, que son despliegue y lote y no
+                      # tocaron el modulo. Las 41 nuevas son 40 de `test_envio.py`
+                      # (lo puro: la frase del envio y cuando se niega el boton;
+                      # lo que se guarda: los dos UPDATE en una transaccion; lo
+                      # que se ve: la ruta, la pantalla y los .sql) y 1 que
+                      # `test_compila.py` gana sola, porque sus parametrizadas
+                      # recorren los .sql y hay una migracion mas.
+                      # Medido en dos corridas: con `test_envio.py` fuera el
+                      # arbol del 20 costo 4.13-5.31 s ese mismo rato, y las 40
+                      # nuevas corriendo solas, 0.39-0.54 s. El +1.2 s contra el
+                      # ticket 20 es la torre y no las pruebas, otra vez.
+                      # NINGUNA TOCA POSTGRES y ninguna duerme.
+                      #
+                      # CUATRO DE LAS 40 SALIERON DEL NAVEGADOR Y NO DE ESCRIBIR
+                      # PRUEBAS, y una de ellas era el peor error del ticket: el
+                      # pedido recien enviado desaparecia de la pantalla. Es la
+                      # tercera vez (14, 15, 21). Abrir la pantalla y apretar el
+                      # boton sigue siendo obligatorio.
+                      #
+                      # 824 pruebas, 0 saltadas, 2.85-3.11 s (2026-09-19, ticket 20)
                       # 749 en el 19. Las 76 nuevas son 35 de
                       # `test_particion.py` (lo puro: elegir, partir,
                       # totalizar, y el puente con SICAR), 38 de
@@ -260,9 +330,10 @@ pytest                # 824 pruebas, 0 saltadas, 2.85-3.11 s (2026-09-19, ticket
 | `docs/decisiones/0005` | dónde escucha Continental: el gateway de la red `borde`, no loopback |
 | `docs/decisiones/0006` | el lote nocturno: la hora, el tope, qué pasa con lo que no alcanzó, y por qué la bitácora es el journal y no una tabla nueva |
 | `docs/decisiones/0007` | la corrida del lote en **una fila por noche**, y por qué la pantalla deduce de ahí "el lote no llegó a este renglón" en vez de escribir cuatro huecos por renglón. Reabre la opción β del 0006 por su condición de disparo |
+| `docs/decisiones/0009` | **"enviar" no es enviar**: `enviado` es la firma de que una persona ya capturó el pedido en el portal, no un envío de Continental. Por qué firma y no acuse, por qué no se puede enviar un pedido vacío y sí uno sin total, por qué enviar NO exige la lista abierta, y por qué no hay "desenviar" |
 | `docs/decisiones/0008` | **el puente que no existía**: el pedido se identifica por la clave de Doyle y el `proveedor_id` de SICAR es una correspondencia que puede faltar. Por qué el mapa va en el YAML y guarda el id y no el nombre, y por qué el UNIQUE tuvo que moverse |
 | `sql/` | el DDL de las **cinco** tablas, el rol acotado y `verificar_rol.sql`, que mira la **forma** de la base. **Se corren a mano, en ese orden, con credenciales de dueño** — no confundirlo con `continental.verificar`, que mira los **datos** en cada despliegue (la cabecera de ese módulo tiene la tabla que los separa) |
-| `sql/migraciones/` | lo que le falta a una base donde las tablas YA existen: `crear_tablas.sql` usa `CREATE TABLE IF NOT EXISTS` y calla si la tabla ya está con otra forma. También a mano y con credenciales de dueño |
+| `sql/migraciones/` | **seis** archivos numerados: lo que le falta a una base donde las tablas YA existen: `crear_tablas.sql` usa `CREATE TABLE IF NOT EXISTS` y calla si la tabla ya está con otra forma. También a mano y con credenciales de dueño |
 | `config/continental.yml` | puertos de los módulos y los parámetros del pedido |
 | `src/continental/web/app.py` | `/api/salud`, `/api/modulos`, el pedido sugerido y su cierre, la portada |
 | `src/continental/almacenamiento.py` | donde el pedido sugerido se guarda: el `Protocol`, el SQL real y las reglas de la tabla en un solo lugar |
@@ -272,7 +343,7 @@ pytest                # 824 pruebas, 0 saltadas, 2.85-3.11 s (2026-09-19, ticket
 | `src/continental/verificar.py` | los invariantes sobre los **datos** de producción, no sobre el código. Mitad pura (recibe listas, devuelve un `Informe`, se prueba) y mitad de recolección (lee de Postgres, no se prueba). Acumula todas las fallas, cada una con su comando de reparación, y sale distinto de cero. Es el paso 6 de `desplegar.sh` |
 | `src/continental/comparacion.py` | funciones puras: las cuatro lecturas congeladas + las piezas -> quién gana, con qué certeza, cuánto se ahorra contra NADRO y, para la lista entera, cuántos renglones quedaron sin comparar (`contar_la_lista`). No toca la red, la base ni el reloj |
 | `src/continental/proveedores.py` | funciones puras: el puente entre la clave de Doyle y el `proveedor_id` de SICAR (ADR 0008). Lee el mapa del YAML, se niega con un aviso a una entrada mal escrita —y deja a ese proveedor "sin puente", que es un estado que el módulo sabe decir— y **nunca devuelve un cero**: `None` es "SICAR no lo conoce" |
-| `src/continental/particion.py` | funciones puras: los renglones + sus comparaciones + el puente -> a quién se le pide cada uno, en cuántos pedidos se parte la lista y cuánto suma cada uno. Ahí vive la decisión del ticket 20 —la sugerencia se recalcula, la decisión se guarda— y la regla de que un total con una línea sin precio es `None` y no una suma parcial |
+| `src/continental/particion.py` | funciones puras: los renglones + sus comparaciones + el puente -> a quién se le pide cada uno, en cuántos pedidos se parte la lista y cuánto suma cada uno. Ahí vive la decisión del ticket 20 —la sugerencia se recalcula, la decisión se guarda—, la regla de que un total con una línea sin precio es `None` y no una suma parcial, y desde el 21 **las frases que dicen qué significa "enviar"** y cuándo no se puede (`frase_del_envio`, `motivo_para_no_enviar`) |
 | `src/continental/faltantes.py` | funciones puras: la corrida del lote + las comparaciones -> **por qué** le falta el precio a cada renglón, y **cuáles** va a consultar el botón de completar. Ahí vive la decisión cara del ticket 19: qué cuenta como "faltante", que son ~36 s de navegador por renglón de más si se estira |
 | `src/continental/latido.py` | el latido a Uptime Kuma, con monitor propio. `mandar_el_latido` **no levanta nunca** y el borde HTTP entra por argumento, así que ninguna prueba manda uno de verdad. El token vive en `KUMA_PUSH_URL_CONTINENTAL` del `.env`, jamás en el YAML |
 
@@ -344,6 +415,17 @@ más barato y se le pidió a otro.**
       -v ON_ERROR_STOP=1 < sql/verificar_rol.sql ; echo "salida: $?"
   ```
 
+  **Y desde el ticket 21 hay DOS migraciones que NO crean tabla** —la 0005 y la
+  0006, de los tickets 20 y 21— así que `crear_rol.sql` no hace falta volver a
+  correrlo por ellas: el `GRANT SELECT, INSERT, UPDATE` es sobre la tabla entera
+  y no se usan permisos por columna. Lo que sí conviene después de las dos es
+  `verificar_rol.sql`, porque sus comprobaciones **23 a 28** son suyas:
+
+  ```bash
+  docker exec -i farmacia_warehouse psql -U farmacia -d farmacia       -v ON_ERROR_STOP=1 < sql/migraciones/0005-elegir-proveedor-y-partir.sql
+  docker exec -i farmacia_warehouse psql -U farmacia -d farmacia       -v ON_ERROR_STOP=1 < sql/migraciones/0006-enviar-el-pedido.sql
+  ```
+
   **Y desde el ticket 19 hay una migración más**, que también crea una tabla y
   por lo tanto también exige volver a correr `crear_rol.sql` después:
 
@@ -353,7 +435,7 @@ más barato y se le pidió a otro.**
   # y otra vez crear_rol.sql y verificar_rol.sql, en ese orden
   ```
 
-  El tercero es el que **da el veredicto**: 22 comprobaciones con lo que se
+  El tercero es el que **da el veredicto**: 28 comprobaciones con lo que se
   esperaba y lo que se encontró, y salida distinta de cero si algo quedó mal.
   Es lo que cierra la última casilla del ticket 07, y solo lo puede correr una
   persona con credenciales de dueño en atlas. Las 18, 19 y 20 son del ticket 12
@@ -362,7 +444,13 @@ más barato y se le pidió a otro.**
   acentos, y que sigan puestas las dos restricciones que impiden que un hueco
   se vea como el más barato. La **21 y la 22** son del ticket 19 y miran la
   corrida del lote: que los cuatro finales sobrevivieran con sus acentos, y que
-  no pueda guardarse un conteo imposible ni media lista.
+  no pueda guardarse un conteo imposible ni media lista. Las **23 a 26** son del
+  ticket 20 y miran el puente con SICAR: que `proveedor_id` admita nulos, que
+  `ux_pedido_proveedor` haya quedado sobre la clave de Doyle —sobre
+  `proveedor_id` con nulos no impediría nada— y que `fk_renglon_pedido` lleve
+  las tres columnas. Las **27 y 28** son del ticket 21: que `ck_pedido_estado`
+  conozca los dos estados —con el CHECK viejo, el primer clic en "Enviar" rebota
+  en atlas— y que la firma del envío esté pareada en los dos sentidos.
 
   **Ojo con la comprobación 16: estaba mal y se arregló en el ticket 19.**
   Esperaba `3` llaves `GENERATED AS IDENTITY` cuando ya eran cuatro desde el
@@ -405,7 +493,7 @@ más barato y se le pidió a otro.**
       < sql/migraciones/0004-la-corrida-del-lote-en-una-fila.sql
   ```
 
-  Las cuatro son idempotentes: correrlas dos veces no rompe nada.
+  Las seis son idempotentes: correrlas dos veces no rompe nada.
 
   **OJO CON LA 0003 Y CON LA 0004: después de cada una HAY que volver a correr
   `sql/crear_rol.sql`**, y ahí se apartan de las dos primeras. Las 0001 y 0002
@@ -567,34 +655,27 @@ más barato y se le pidió a otro.**
    de detalle colgada de `corrida_del_lote_id`, y la función pura ya tiene el
    sitio donde dejar de adivinar (ADR 0007).
 
-4. **El tercer invariante del ticket 17 está DECLARADO, no revisado — y desde
-   el ticket 20 le falta UNA columna en vez de dos.** "Ningún pedido enviado sin
-   quién lo envió" necesitaba `estado` y `enviado_por`. **`estado` ya llegó**:
-   `pedidos.pedido` nace en `borrador`. Falta `enviado_por`, que trae el ticket
-   21 (`borrador` -> `enviado`, firmado con el correo que verificó Access).
+4. **CERRADO por el ticket 21: el tercer invariante del ticket 17 ya revisa.**
+   Se deja anotado porque la forma en que se cerró es el argumento que este
+   repositorio tiene para escribir un invariante **antes** de que se pueda
+   revisar.
 
-   **`COLUMNAS_QUE_EXIGE_EL_ENVIO` no cambió, y eso es exactamente lo que se
-   quería**: el ticket 20 usó el nombre que ya estaba escrito ahí, así que el
-   pendiente pasó de nombrar dos columnas a nombrar una **sin que nadie tocara
-   `verificar.py`**. Hay una prueba que lo fija
-   (`test_pedidos.test_el_invariante_del_envio_sigue_pendiente_por_una_sola_columna`).
+   "Ningún pedido enviado sin quién lo envió" necesitaba `estado` y
+   `enviado_por`. El ticket 20 puso la primera y el 21 la segunda, **los dos con
+   el nombre que `verificar.COLUMNAS_QUE_EXIGE_EL_ENVIO` ya tenía escrito desde
+   el 17**, así que esa tupla nunca cambió y el invariante pasó de `PENDIENTE` a
+   revisar de verdad sin que nadie tocara `verificar.py`. Dejó de imprimirse
+   como pendiente en cada despliegue.
 
-   Ojo con una tentación que el ticket 20 deja servida: **`estado = 'borrador'`
-   no es "no enviado" en un sentido que este invariante pueda usar**. Lo que se
-   revisa es lo que dice `enviado`, y mientras ese valor no exista en
-   `ck_pedido_estado` no hay nada que contar — contar cero borradores como cero
-   fallas sería dar por bueno un invariante que nadie está sosteniendo.
-
-   Cómo quedó: la recolección lee `select * from pedidos.pedido` —que de paso
-   es cómo se averigua la forma real de la tabla sin consultar el catálogo— y
-   `revisar_pedidos_enviados` decide. Sin las columnas, el resultado es
-   `PENDIENTE`: **se ve en la salida con su porqué y no tumba el despliegue**.
-   Con ellas, el invariante empieza a revisar solo, sin que nadie vuelva a
-   tocar el archivo. **Condición de disparo:** si los tickets 20 y 21 les ponen
-   otro nombre a esas columnas, lo que hay que cambiar es
-   `verificar.COLUMNAS_QUE_EXIGE_EL_ENVIO` y nada más — y si nadie lo cambia,
-   el pendiente se queda imprimiéndose en cada despliegue, que es justo lo que
-   se quiere.
+   **El mecanismo se queda, y no sobra:** una base a la que no se le haya
+   corrido la migración 0006 sigue sin esas columnas, y un `SELECT` contra
+   `enviado_por` ahí dejaría el despliegue rojo con "column does not exist". La
+   recolección trae las columnas que la tabla tiene de verdad y
+   `revisar_pedidos_enviados` decide. Fijado por
+   `test_envio.test_el_invariante_del_envio_deja_de_estar_pendiente` y por
+   `test_envio.test_lo_que_el_codigo_escribe_es_lo_que_el_invariante_espera`,
+   que le pasa la fila **tal como el ticket 21 la guardó** — que el invariante
+   sepa revisar no basta si lo que se escribe no es lo que él lee.
 
 5. **El horario del respaldo de SICAR está en `propuesta`** (ADR 0017 de
    farmacia-data): lo decide el dueño. Si se acepta mover el respaldo a las
@@ -701,12 +782,26 @@ más barato y se le pidió a otro.**
    renglón repartido —lo honesto—, y se dejó fuera para no meterle una segunda
    sentencia a la ruta del ticket 11 sin poder probarla contra Postgres.
 
-   **Condición de disparo, y le toca al ticket 21:** enviar un pedido tiene que
-   o recalcular el total al enviar, o negarse a enviar un borrador cuyo
-   `armado_en` sea anterior al último `ajustada_en` de sus renglones. Lo
-   primero es una línea —`particion.partir` ya devuelve el total— y es lo que
-   conviene: un pedido enviado con un total viejo es una cifra que alguien va a
-   comparar contra la factura.
+   **CERRADO POR EL TICKET 21, y con la otra de las dos opciones.** Enviar un
+   pedido cuyo total envejeció ahora **se niega**: el `WHERE` de
+   `_ENVIAR_EL_PEDIDO` lleva un `NOT EXISTS` contra los renglones con
+   `ajustada_en > armado_en`, y la pantalla lo dice **antes** del clic con
+   `particion.TOTAL_ENVEJECIDO`, que manda a "Volver a partir" — un botón que ya
+   existe y cuesta un clic.
+
+   Se eligió negarse y no recalcular al enviar, que era lo que esta nota
+   proponía: **recalcular cambiaría el número después de que el encargado leyó
+   el del botón**, o sea enviaría un total que nadie vio. Un total viejo
+   enseñado es malo; uno nuevo escrito a espaldas de quien lo miró es peor.
+   Fijado por `test_envio.test_corregir_una_cantidad_despues_de_partir_bloquea_el_envio`,
+   que recorre el camino entero y comprueba que volver a partir lo desbloquea.
+
+   **Lo que sigue abierto, más estrecho:** el total también envejece si llega un
+   **precio** nuevo después de armar el pedido, y eso NO se revisa. Duele mucho
+   menos —la cantidad es lo que se captura en el portal; el precio de allá manda
+   sobre el de Doyle— y revisarlo pediría comparar `armado_en` contra el
+   `consultado_en` de cada lectura. **Condición de disparo:** si un total no
+   cuadra contra una factura y la cantidad estaba bien.
 
 14. **Un pedido que se queda sin renglones no se puede borrar, y se queda a la
    vista.** Pasa al cambiar una elección y volver a partir: los renglones se van
@@ -719,8 +814,12 @@ más barato y se le pidió a otro.**
    la condición de revisión del ADR 0003 entera por un caso cosmético, y
    esconderlo de la pantalla dejaría filas que existen y no se ven. **Condición
    de disparo:** si el encargado se queja de pedidos fantasma, lo que hace falta
-   es un estado `cancelado` en `ck_pedido_estado` —que el ticket 21 va a tocar
-   de todas formas— y no un `DELETE`.
+   es un estado `cancelado` en `ck_pedido_estado` y no un `DELETE`. **El ticket
+   21 tocó ese CHECK y NO lo agregó**, a propósito: nadie ha pedido un cancelado
+   y un valor que ningún código escribe es vocabulario muerto invitando a que
+   alguien lo use con otro significado. Lo que sí hizo fue dejar el pedido vacío
+   **imposible de enviar**, con su motivo escrito en la pantalla
+   (`particion.SIN_RENGLONES_QUE_ENVIAR`), que es la mitad del daño.
 
 15. **La incoherencia del descarte sigue puesta, y este ticket NO la empeoró.**
    Descartar un renglón funciona aunque la lista esté `cerrada`: el ticket 10
