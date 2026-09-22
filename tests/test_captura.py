@@ -242,7 +242,7 @@ def _pedido(estado: str = BORRADOR, pedido_id: int = 7, proveedor: str = "nadro"
         pedido_sugerido_id=1,
         proveedor=proveedor,
         proveedor_id=1,
-        estado=estado,
+        estado_declarado=estado,
         armado_en=ARMADO,
         total_sin_iva=Decimal("100.00"),
         enviado_por=CORREO if estado == ENVIADO else None,

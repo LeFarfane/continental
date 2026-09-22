@@ -295,3 +295,50 @@ enviar— siguen en `transito.py`, `cierre.py` y `particion.py`. Moverlos
 todos de un golpe habría mezclado el arreglo de un error visible con una
 reorganización mucho más grande, que no se puede revisar por separado si
 llega junta. Queda para un ticket aparte.
+
+## Enmienda 2026-09-22 — `PedidoGuardado.estado` se renombra a `estado_declarado`, y nace `PedidoALaVista`
+
+**El nombre neutral ya había costado un error real** (commit `b849c85`): un
+CSV decía `enviado` de un pedido que ya había llegado, porque quien lo escribió
+leyó `pedido.estado` sin acordarse de que esta decisión dejó ese campo
+significando *solo* lo declarado. `estado` no distingue las dos preguntas que
+este ADR sí distingue —"¿qué dijo una persona?" contra "¿qué dice mirar los
+renglones?"—, así que cualquier lectura nueva puede repetir el mismo error sin
+que ningún tipo se lo impida.
+
+**Decisión: el campo se llama `estado_declarado`.** Es `borrador`, `enviado` o
+`cancelado` —nunca `recibido` ni `recibido parcial`—, y su docstring lo dice
+con esas palabras. La columna de `pedidos.pedido` sigue llamándose `estado`
+—el DDL no cambia, y `pedido_desde_columnas` sigue leyendo `fila["estado"]`—;
+lo que cambia es el nombre del lado de Python, que es donde el olvido ocurrió.
+Las tres propiedades que ya existían —`es_borrador`, `fue_enviado`,
+`fue_cancelado`— siguen significando lo mismo y ahora leen
+`self.estado_declarado`.
+
+**Y nace `recepcion.PedidoALaVista`**, para que la otra mitad —el estado
+calculado— tampoco se vuelva a escribir suelta. Se construye con
+`PedidoALaVista.de(pedido, renglones_de_la_lista)`, que recorta los renglones
+a los de ese `pedido_id` —el mismo recorte que `estado_del_pedido` hacía por
+su cuenta en cada llamada—, y expone `.pedido`, `.renglones`, `.estado`
+(`estado_del_pedido`) y `.frase_de_la_recepcion`
+(`frase_de_la_recepcion_del_pedido`): las dos cosas que `exportar.py` y
+`web/app.py` ya calculaban juntas, del mismo par `(pedido, renglones)`.
+`estado_del_pedido(` y `frase_de_la_recepcion_del_pedido(` ya solo se llaman
+desde dentro de `PedidoALaVista`; cada pantalla y cada archivo pasan por ella
+en vez de volver a llamarlas.
+
+**Por qué no un tercer campo guardado, ni una función que reciba menos.** La
+alternativa de guardar el estado calculado ya se descartó arriba, en la
+decisión original, y sigue descartada por las mismas razones. La alternativa
+de dejar `PedidoALaVista` sin `.pedido` ni `.renglones` —solo `.estado`— se
+descartó porque los tres consumidores existentes también necesitan el pedido
+entero (`nombre`, `proveedor`, las firmas) y los renglones ya recortados
+(`exportar._recibido` cuenta cuántos llegaron completos); esconderlos habría
+obligado a pasar el pedido y la lista dos veces, una para `PedidoALaVista` y
+otra aparte.
+
+**Las llaves del JSON no cambiaron.** `"estado"` sigue siendo
+`pedido.estado_declarado` y `"estado_a_la_vista"` sigue siendo
+`PedidoALaVista.de(...).estado`: es el mismo par que ya viajaba, con el mismo
+significado; lo único nuevo es que ahora se calculan desde un solo objeto en
+vez de dos llamadas sueltas.

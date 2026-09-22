@@ -147,7 +147,7 @@ def _pedido(
         pedido_sugerido_id=1,
         proveedor=proveedor,
         proveedor_id=1,
-        estado=estado,
+        estado_declarado=estado,
         armado_en=ARMADO,
         total_sin_iva=None if total is None else Decimal(total),
         enviado_por=CORREO if estado == ENVIADO else None,

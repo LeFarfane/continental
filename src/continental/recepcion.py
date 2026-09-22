@@ -747,8 +747,8 @@ def estado_del_pedido(pedido: "PedidoGuardado", renglones: Iterable["RenglonGuar
     **No se guarda**: sale de los renglones, que sí están guardados y
     firmados. Ver `almacenamiento.PEDIDO_RECIBIDO`.
     """
-    if pedido.estado != ENVIADO:
-        return pedido.estado
+    if pedido.estado_declarado != ENVIADO:
+        return pedido.estado_declarado
     pedidos = _del_pedido(pedido, renglones)
     if not pedidos or any(r.estado == RENGLON_EN_TRANSITO for r in pedidos):
         return ENVIADO
@@ -796,6 +796,52 @@ def frase_de_la_recepcion_del_pedido(
         f"Recibido parcial: de sus {len(pedidos)} renglones, {_enumerar(partes)}. Lo "
         "que faltó vuelve a proponerse en la siguiente lista."
     )
+
+
+@dataclass(frozen=True, slots=True)
+class PedidoALaVista:
+    """Un pedido con el estado que la pantalla enseña, no el que se guardó.
+
+    `PedidoGuardado.estado_declarado` es lo que una persona escribió
+    —`borrador`, `enviado`, `cancelado`—; nunca `recibido` ni `recibido
+    parcial`. Ese es el estado **a la vista**, y sale de mirar los renglones
+    (`estado_del_pedido`, ADR 0015). Antes del ticket de la enmienda
+    2026-09-22, cada pantalla que necesitaba los dos —la lista, el CSV—
+    llamaba `estado_del_pedido(pedido, renglones)` por su cuenta, con su
+    propio recorte de qué renglones son "los de este pedido". Este tipo junta
+    las dos preguntas en un solo lugar: se construye una vez con
+    `PedidoALaVista.de(pedido, renglones_de_la_lista)` y de ahí salen
+    `.estado` y `.frase_de_la_recepcion` sin volver a llamar
+    `estado_del_pedido` en cada pantalla.
+
+    `renglones` ya viene filtrado a los de este pedido (por `pedido_id`): es
+    lo que `.de()` hace, y lo que `estado_del_pedido` iba a filtrar de todos
+    modos con `_del_pedido`. No es una API especulativa: solo junta lo que
+    `exportar.py` y `web/app.py` ya calculaban juntos, del mismo par de datos.
+    """
+
+    pedido: "PedidoGuardado"
+    renglones: tuple["RenglonGuardado", ...]
+
+    @classmethod
+    def de(
+        cls, pedido: "PedidoGuardado", renglones_de_la_lista: Iterable["RenglonGuardado"]
+    ) -> "PedidoALaVista":
+        """Recorta los renglones de la lista a los de este pedido (`pedido_id`)."""
+        return cls(
+            pedido=pedido,
+            renglones=tuple(r for r in renglones_de_la_lista if r.pedido_id == pedido.pedido_id),
+        )
+
+    @property
+    def estado(self) -> str:
+        """`borrador`, `enviado`, `cancelado`, `recibido` o `recibido parcial`."""
+        return estado_del_pedido(self.pedido, self.renglones)
+
+    @property
+    def frase_de_la_recepcion(self) -> str | None:
+        """Lo que la pantalla dice de la recepción. `None` si no llegó."""
+        return frase_de_la_recepcion_del_pedido(self.pedido, self.renglones)
 
 
 # ------------------------------------------------------------------ el JSON

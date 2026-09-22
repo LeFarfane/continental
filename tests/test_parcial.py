@@ -60,6 +60,7 @@ from continental.almacenamiento import (
 )
 from continental.recepcion import (
     PIEZAS_RECIBIDAS_MAXIMAS,
+    PedidoALaVista,
     estado_del_pedido,
     estado_por_las_piezas,
     frase_de_la_cantidad,
@@ -406,7 +407,7 @@ def _pedido(estado: str = ENVIADO, pedido_id: int = 7) -> PedidoGuardado:
         pedido_sugerido_id=1,
         proveedor="nadro",
         proveedor_id=NADRO,
-        estado=estado,
+        estado_declarado=estado,
         armado_en=_local(LUNES, 9),
         enviado_por=CORREO if estado != "borrador" else None,
         enviado_en=_local(LUNES, 11) if estado != "borrador" else None,
@@ -465,6 +466,55 @@ def test_los_estados_guardados_se_respetan_y_los_ajenos_no_cuentan():
         _guardado(3, 3, RENGLON_EN_TRANSITO, pedido_id=99),
     ]
     assert estado_del_pedido(_pedido(), renglones) == PEDIDO_RECIBIDO
+
+
+# ------------------------------------------------- PedidoALaVista (0015, 2026-09-22)
+
+
+def test_pedido_a_la_vista_dice_recibido_aunque_lo_declarado_siga_enviado():
+    """El caso que dio nombre al rename: `estado_declarado` nunca miente —el
+    pedido sigue diciendo lo que una persona capturó, `enviado`—, pero lo que
+    la pantalla enseña es lo que se ve al mirar los renglones: si todos
+    llegaron completos, es `recibido`. Las dos preguntas conviven en el mismo
+    objeto y no se pueden confundir por accidente."""
+    pedido = _pedido(ENVIADO)
+    renglones = [
+        _guardado(1, 1, RENGLON_RECIBIDO, piezas_recibidas=10),
+        _guardado(2, 2, RENGLON_RECIBIDO, piezas_recibidas=12),
+    ]
+
+    vista = PedidoALaVista.de(pedido, renglones)
+
+    assert pedido.estado_declarado == ENVIADO
+    assert vista.estado == PEDIDO_RECIBIDO
+    assert vista.estado != pedido.estado_declarado
+
+
+def test_pedido_a_la_vista_recorta_los_renglones_a_los_de_este_pedido():
+    """`.de()` filtra por `pedido_id`, lo mismo que `estado_del_pedido` hace
+    por su cuenta: un renglón de otro pedido no debe colarse."""
+    pedido = _pedido(ENVIADO, pedido_id=7)
+    de_este = _guardado(1, 1, RENGLON_RECIBIDO, piezas_recibidas=10, pedido_id=7)
+    de_otro = _guardado(2, 2, RENGLON_EN_TRANSITO, pedido_id=99)
+
+    vista = PedidoALaVista.de(pedido, [de_este, de_otro])
+
+    assert vista.renglones == (de_este,)
+    assert vista.pedido is pedido
+    assert vista.estado == PEDIDO_RECIBIDO
+
+
+def test_pedido_a_la_vista_expone_la_misma_frase_que_frase_de_la_recepcion_del_pedido():
+    renglones = [
+        _guardado(1, 1, RENGLON_RECIBIDO, piezas_recibidas=10),
+        _guardado(2, 2, RENGLON_RECIBIDO_PARCIAL, piezas_recibidas=6),
+    ]
+    pedido = _pedido(ENVIADO)
+
+    vista = PedidoALaVista.de(pedido, renglones)
+
+    assert vista.frase_de_la_recepcion == frase_de_la_recepcion_del_pedido(pedido, renglones)
+    assert vista.frase_de_la_recepcion is not None
 
 
 def test_la_frase_del_pedido_dice_que_llego_y_que_falto():

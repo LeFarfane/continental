@@ -93,7 +93,7 @@ def _pedido(estado: str = ENVIADO) -> PedidoGuardado:
         pedido_sugerido_id=1,
         proveedor="nadro",
         proveedor_id=1,
-        estado=estado,
+        estado_declarado=estado,
         armado_en=_local(LUNES),
         enviado_por=CORREO if estado != BORRADOR else None,
         enviado_en=_local(LUNES, 11) if estado != BORRADOR else None,

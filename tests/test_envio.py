@@ -157,7 +157,7 @@ def _pedido(
         pedido_sugerido_id=1,
         proveedor=proveedor,
         proveedor_id=1,
-        estado=estado,
+        estado_declarado=estado,
         armado_en=dt.datetime(2024, 3, 5, 9, 0, tzinfo=dt.UTC),
         total_sin_iva=None if total is None else Decimal(total),
         enviado_por=enviado_por,

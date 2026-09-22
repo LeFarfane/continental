@@ -880,7 +880,14 @@ class PedidoGuardado:
     pedido_sugerido_id: int
     proveedor: str
     proveedor_id: int | None
-    estado: str
+    #: **Lo que una persona declaró** —`borrador`, `enviado` o `cancelado`—,
+    #: nunca `recibido` ni `recibido parcial`: esos dos se calculan de los
+    #: renglones y no se guardan (ADR 0015, `recepcion.estado_del_pedido`). El
+    #: nombre no es neutral a propósito: hasta el ticket 27 `estado` a secas
+    #: dejaba que quien lo leyera olvidara cuál de los dos preguntaba, y ese
+    #: olvido escribió mal un CSV. Para lo que la pantalla o el archivo
+    #: enseñan, usa `recepcion.PedidoALaVista`, no este campo.
+    estado_declarado: str
     armado_en: dt.datetime
     total_sin_iva: Decimal | None = None
     enviado_por: str | None = None
@@ -896,7 +903,7 @@ class PedidoGuardado:
     @property
     def es_borrador(self) -> bool:
         """Si todavía se puede modificar (tercera casilla del ticket 20)."""
-        return self.estado == BORRADOR
+        return self.estado_declarado == BORRADOR
 
     @property
     def fue_enviado(self) -> bool:
@@ -907,7 +914,7 @@ class PedidoGuardado:
         dejaría de querer decir "se capturó", y la pantalla escribiría la frase
         del envío sobre un pedido que nadie envió.
         """
-        return self.estado == ENVIADO
+        return self.estado_declarado == ENVIADO
 
     @property
     def fue_cancelado(self) -> bool:
@@ -918,7 +925,7 @@ class PedidoGuardado:
         envío —alguien SÍ dijo haberlo capturado, y eso también es su historia—
         y agrega la suya.
         """
-        return self.estado == CANCELADO
+        return self.estado_declarado == CANCELADO
 
     @property
     def nombre(self) -> str:
@@ -1825,7 +1832,10 @@ def pedido_desde_columnas(fila) -> PedidoGuardado:
         proveedor_id=(
             None if fila["proveedor_id"] is None else int(fila["proveedor_id"])
         ),
-        estado=fila["estado"],
+        # La columna sigue llamándose `estado` (el DDL no cambió); el campo
+        # que la recibe se llama `estado_declarado` porque es lo que una
+        # persona declaró, nunca `recibido` (ADR 0015, enmienda 2026-09-22).
+        estado_declarado=fila["estado"],
         armado_en=fila["armado_en"],
         total_sin_iva=(
             None

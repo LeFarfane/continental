@@ -113,10 +113,9 @@ from continental.particion import (
 from continental.precios import NOMBRES_DE_PROVEEDOR, nombre_del_proveedor
 from continental.proveedores import puente_como_json, puente_configurado
 from continental.recepcion import (
+    PedidoALaVista,
     Recepcion,
     desde_cuando_leer_compras,
-    estado_del_pedido,
-    frase_de_la_recepcion_del_pedido,
     frase_de_lo_recibido,
     frase_de_lo_recibido_a_mano,
     frase_del_confirmado,
@@ -1629,7 +1628,7 @@ def partir_en_pedidos(
         pedido_sugerido_id,
         negocio,
         len(pedidos),
-        ", ".join(f"{p.nombre} ({p.estado})" for p in pedidos) or "ninguno",
+        ", ".join(f"{p.nombre} ({p.estado_declarado})" for p in pedidos) or "ninguno",
         len(particion.sin_proveedor),
         (
             " SICAR no conoce a "
@@ -2433,13 +2432,13 @@ def exportar_el_pedido(
     # EL ESTADO QUE DICE EL ARCHIVO ES EL CALCULADO (ADR 0015): un pedido que
     # ya llegó se baja como `recibido` o `recibido parcial`, igual que la
     # pantalla, aunque la columna siga diciendo `enviado`. `exportar` lo saca
-    # de los renglones de la lista con `recepcion.estado_del_pedido`.
+    # de los renglones de la lista con `recepcion.PedidoALaVista`.
     nombre = nombre_del_archivo(pedido, lista.fecha_del_pedido, lista.renglones)
     log.info(
         "Se exportó el pedido %s (%s, %s) de la lista %s como %s: %d renglón(es).",
         pedido.pedido_id,
         pedido.nombre,
-        estado_del_pedido(pedido, lista.renglones),
+        PedidoALaVista.de(pedido, lista.renglones).estado,
         pedido_sugerido_id,
         nombre,
         captura.cuantos,
@@ -3873,22 +3872,23 @@ def _pedido_como_json(
     motivo = motivo_para_no_enviar(pedido, renglones_dentro, total_envejecido)
     # Un pedido con algo recibido sí se capturó (ticket 26): no se cancela.
     motivo_de_cancelar = motivo_para_no_cancelar(pedido, recibidos_dentro)
+    # LOS OTROS DOS ESTADOS (ticket 27, ADR 0015): `recibido` y `recibido
+    # parcial` se CALCULAN de sus renglones y no se guardan.
+    # `PedidoALaVista` junta esa cuenta en un solo lugar, para que
+    # `estado_del_pedido(` no se vuelva a llamar aquí.
+    vista = PedidoALaVista.de(pedido, renglones_de_la_lista)
     return {
         "pedido_id": pedido.pedido_id,
         "proveedor": pedido.proveedor,
         "nombre": pedido.nombre,
         "proveedor_id": pedido.proveedor_id,
         "tiene_puente": pedido.tiene_puente,
-        "estado": pedido.estado,
-        # LOS OTROS DOS ESTADOS (ticket 27, ADR 0015): `recibido` y `recibido
-        # parcial` se CALCULAN de sus renglones y no se guardan. `estado` sigue
-        # diciendo lo guardado —`enviado` es verdad: alguien lo capturó—, y las
-        # tres banderas de abajo siguen significando lo mismo; lo que la
-        # pantalla enseña de la recepción viaja aparte, hecho frase.
-        "estado_a_la_vista": estado_del_pedido(pedido, renglones_de_la_lista),
-        "frase_de_la_recepcion": frase_de_la_recepcion_del_pedido(
-            pedido, renglones_de_la_lista
-        ),
+        "estado": pedido.estado_declarado,
+        # `estado` sigue diciendo lo guardado —`enviado` es verdad: alguien lo
+        # capturó—, y las tres banderas de abajo siguen significando lo mismo;
+        # lo que la pantalla enseña de la recepción viaja aparte, hecho frase.
+        "estado_a_la_vista": vista.estado,
+        "frase_de_la_recepcion": vista.frase_de_la_recepcion,
         "es_borrador": pedido.es_borrador,
         "fue_enviado": pedido.fue_enviado,
         # CANCELAR (ticket 25, ADR 0013). La firma y lo que la pantalla dice

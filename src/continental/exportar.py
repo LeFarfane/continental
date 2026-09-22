@@ -86,7 +86,7 @@ from continental.almacenamiento import (
     RenglonGuardado,
 )
 from continental.particion import Captura, Linea, PedidoPorArmar
-from continental.recepcion import estado_del_pedido, frase_de_la_recepcion_del_pedido
+from continental.recepcion import PedidoALaVista
 
 #: Las columnas, en el orden del ticket y con el IVA dicho en el propio nombre:
 #: una nota arriba se pierde en cuanto alguien copia la tabla a otra hoja. La
@@ -217,10 +217,8 @@ def _recibido(pedido: PedidoGuardado, renglones: list[RenglonGuardado]) -> str:
     # `recibido` y `recibido parcial` (ticket 27): la frase es la misma que la
     # pantalla enseña junto al pedido, y la firma del envío va detrás porque
     # sigue siendo verdad —alguien lo capturó en el portal—.
-    return (
-        f"{frase_de_la_recepcion_del_pedido(pedido, renglones)} Antes, "
-        f"{_firma_del_envio(pedido)}"
-    )
+    vista = PedidoALaVista.de(pedido, renglones)
+    return f"{vista.frase_de_la_recepcion} Antes, {_firma_del_envio(pedido)}"
 
 
 def _cancelado(pedido: PedidoGuardado, renglones: list[RenglonGuardado]) -> str:
@@ -235,9 +233,9 @@ def _cancelado(pedido: PedidoGuardado, renglones: list[RenglonGuardado]) -> str:
 
 
 #: Qué se dice de cada uno de los cinco estados del glosario. **Se busca por el
-#: estado CALCULADO** (`recepcion.estado_del_pedido`, ADR 0015), nunca por
-#: `pedido.estado`: la columna de un pedido que ya llegó sigue diciendo
-#: `enviado`, y el archivo lo decía también mientras la pantalla decía
+#: estado CALCULADO** (`recepcion.PedidoALaVista`, ADR 0015), nunca por
+#: `pedido.estado_declarado`: la columna de un pedido que ya llegó sigue
+#: diciendo `enviado`, y el archivo lo decía también mientras la pantalla decía
 #: `recibido`. Cuál es cuál se decide en un solo lugar; aquí solo se redacta.
 _QUE_ES: dict[str, Callable[[PedidoGuardado, list[RenglonGuardado]], str]] = {
     BORRADOR: _borrador,
@@ -250,7 +248,7 @@ _QUE_ES: dict[str, Callable[[PedidoGuardado, list[RenglonGuardado]], str]] = {
 
 def _estado(pedido: PedidoGuardado, renglones: list[RenglonGuardado]) -> str:
     """Qué es este pedido, dicho para quien abra el archivo sin la pantalla."""
-    estado = estado_del_pedido(pedido, renglones)
+    estado = PedidoALaVista.de(pedido, renglones).estado
     redactar = _QUE_ES.get(estado)
     return estado if redactar is None else redactar(pedido, renglones)
 
@@ -420,7 +418,7 @@ def nombre_del_archivo(
     la pantalla lo dice. En la tabla seguiría `enviado`.
     """
     proveedor = _para_nombre(pedido.proveedor) or "proveedor"
-    estado = _para_nombre(estado_del_pedido(pedido, renglones)) or "pedido"
+    estado = _para_nombre(PedidoALaVista.de(pedido, renglones).estado) or "pedido"
     return f"pedido-{fecha_del_pedido.isoformat()}-{proveedor}-{estado}.csv"
 
 

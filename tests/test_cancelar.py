@@ -240,7 +240,7 @@ def _pedido(estado: str = ENVIADO, **extra) -> PedidoGuardado:
         pedido_sugerido_id=1,
         proveedor="nadro",
         proveedor_id=1,
-        estado=estado,
+        estado_declarado=estado,
         armado_en=dt.datetime(2026, 9, 14, 15, 0, tzinfo=dt.UTC),
         total_sin_iva=Decimal("37.50"),
         **{**firma_de_envio, **firma_de_cancelacion, **extra},
@@ -674,7 +674,7 @@ def test_cancelar_pasa_el_pedido_y_sus_renglones_en_transito_a_cancelado(almacen
 
     cancelado = almacenamiento.cancelar_el_pedido(NEGOCIO, enviado.pedido.pedido_id, DUENO)
 
-    assert cancelado.pedido.estado == CANCELADO
+    assert cancelado.pedido.estado_declarado == CANCELADO
     assert cancelado.pedido.cancelado_por == DUENO
     assert cancelado.pedido.cancelado_en is not None
     # La firma del envío se queda: alguien SÍ dijo haberlo capturado, y eso
