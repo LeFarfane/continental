@@ -76,6 +76,7 @@ from continental.fallas import (
     AL_LEER,
     CONFIGURACION,
     DOYLE,
+    LOTE,
     PETICION,
     SERVIDOR,
     estado_de_las_ventas,
@@ -87,7 +88,9 @@ from continental.fallas import (
     que_hacer,
 )
 from continental.faltantes import (
+    NIVEL_FALLA,
     NUNCA_SE_CONSULTO,
+    corrida_ausente_como_json,
     elegir_los_faltantes,
     faltantes_como_json,
     frase_de_la_corrida,
@@ -647,10 +650,13 @@ def pedido_sugerido(
         pedidos_con_algo_recibido=con_algo_recibido,
     )
 
+    corrida, corrida_fallo = _ultima_corrida(
+        almacenamiento, negocio, guardado.pedido_sugerido_id
+    )
     respuesta = _como_json(
         guardado,
         precios,
-        _ultima_corrida(almacenamiento, negocio, guardado.pedido_sugerido_id),
+        corrida,
         pedidos,
         en_camino=bloque,
         ya_en_camino=ya_en_camino,
@@ -663,6 +669,7 @@ def pedido_sugerido(
         # arriba para abrir el día: no se vuelve a leer. Sin su respuesta, no
         # hay botón.
         reapertura=_la_reapertura(almacen, almacenamiento, negocio, guardado, ultima),
+        corrida_fallo=corrida_fallo,
     )
     # LO QUE SOLO TRAE LA CARGA (ticket 29), igual que `en_camino`: partir,
     # enviar y tachar no lo cambian y la pantalla lo pinta una vez.
@@ -1584,11 +1591,13 @@ def partir_en_pedidos(
     # tenga que adivinar cuál renglón quedó en cuál pedido — que es justo el
     # tipo de cuenta que el navegador no debe llevar.
     relectura = almacenamiento.leer_por_id(negocio, pedido_sugerido_id) or guardado
+    corrida, corrida_fallo = _ultima_corrida(almacenamiento, negocio, pedido_sugerido_id)
     return _como_json(
         relectura,
         almacenamiento.precios_de_la_lista(negocio, pedido_sugerido_id),
-        _ultima_corrida(almacenamiento, negocio, pedido_sugerido_id),
+        corrida,
         pedidos,
+        corrida_fallo=corrida_fallo,
     )
 
 
@@ -1703,11 +1712,13 @@ def enviar_el_pedido(
                 "que_hacer": _que_hacer(AL_LEER),
             },
         )
+    corrida, corrida_fallo = _ultima_corrida(almacenamiento, negocio, lista_id)
     return _como_json(
         relectura,
         almacenamiento.precios_de_la_lista(negocio, lista_id),
-        _ultima_corrida(almacenamiento, negocio, lista_id),
+        corrida,
         almacenamiento.pedidos_de_la_lista(negocio, lista_id),
+        corrida_fallo=corrida_fallo,
     )
 
 
@@ -2414,11 +2425,13 @@ def marcar_el_renglon_como_capturado(
     )
 
     lista_id = guardado.pedido_sugerido_id
+    corrida, corrida_fallo = _ultima_corrida(almacenamiento, negocio, lista_id)
     return _como_json(
         guardado,
         _precios_de_la_lista(almacenamiento, negocio, lista_id),
-        _ultima_corrida(almacenamiento, negocio, lista_id),
+        corrida,
         almacenamiento.pedidos_de_la_lista(negocio, lista_id),
+        corrida_fallo=corrida_fallo,
     )
 
 
@@ -3001,7 +3014,7 @@ def _precios_de_la_lista(almacenamiento, negocio: str, pedido_sugerido_id: int):
 
 def _ultima_corrida(
     almacenamiento, negocio: str, pedido_sugerido_id: int
-) -> CorridaDelLote | None:
+) -> tuple[CorridaDelLote | None, bool]:
     """Cómo le fue al lote sobre esta lista, o `None` si no hay fila (ADR 0007).
 
     **`None` es un dato y no un hueco**, y esa es la mitad del ticket 19 que se
@@ -3010,26 +3023,33 @@ def _ultima_corrida(
     abierto 10 de `HANDOVER.md`). La diferencia entre encontrar la fila y no
     encontrarla es exactamente la diferencia entre los dos.
 
-    Una lectura que **falla** también devuelve `None`, y sí, eso confunde los
-    dos casos hacia el lado de "no corrió" — que dice de menos, nunca de más.
-    Es el trato que el ADR 0007 ya acepta para la corrida que muere sin poder
-    escribir su fila. La alternativa sería tumbar la lista entera porque una
+    Devuelve `(corrida, fallo)`. **Hasta la enmienda del 2026-09-21** una
+    lectura que fallaba se veía idéntica a "no hay fila" —las dos como
+    `None`— y las dos se leían igual: "el lote no corrió", en rojo. Desde la
+    decisión del dueño, ese "no hay fila" se abre en dos colores —ámbar si la
+    lista es más nueva que la última corrida programada, rojo si no— y una
+    LECTURA que se cae no puede entrar a esa cuenta: de ahí no se sabe nada,
+    ni siquiera si hubo o no una corrida. Por eso `fallo` viaja aparte, en
+    `true` exactamente cuando la EXCEPCIÓN —no la ausencia de fila— es la
+    causa, y quien arma la respuesta (`_corrida_ausente_como_json`) lo lee
+    para no comparar fechas sobre un dato que no se pudo leer.
+
+    La alternativa a atrapar la falla sería tumbar la lista entera porque una
     consulta de una fila no contestó, y una lista sin precios todavía sirve
-    para pedir. La falla queda entera en la bitácora.
+    para pedir. La falla queda entera en la bitácora (regla 5: el tipo, nunca
+    el texto de la excepción).
 
     Es **una** consulta más por carga, de una fila, con su índice
     `ix_corrida_ultima`.
     """
     try:
-        return almacenamiento.ultima_corrida(negocio, pedido_sugerido_id)
+        return almacenamiento.ultima_corrida(negocio, pedido_sugerido_id), False
     except Exception:  # noqa: BLE001 — la bitácora caída no tumba la lista
         log.exception(
-            "No se pudo leer la última corrida del lote de la lista %s. La "
-            "pantalla va a decir «el lote no corrió sobre esta lista», que "
-            "dice de menos.",
+            "No se pudo leer la última corrida del lote de la lista %s.",
             pedido_sugerido_id,
         )
-        return None
+        return None, True
 
 
 def _consulta_como_json(
@@ -3286,6 +3306,7 @@ def _como_json(
     con_propuesta: frozenset[int] = frozenset(),
     aun_faltan: frozenset[int] | None = None,
     reapertura: dict | None = None,
+    corrida_fallo: bool = False,
 ) -> dict:
     """La lista guardada, como la pantalla la lee.
 
@@ -3302,6 +3323,13 @@ def _como_json(
     omisión en `None` y no en `{}` para que los dos caminos que devuelven una
     lista sin precios —cerrar la lista, que no los toca— no tengan que
     inventarse un diccionario vacío.
+
+    **Cuando `corrida` es `None`**, la respuesta trae además
+    `corrida_ausente` (decisión del dueño, 2026-09-21): ámbar si esta lista
+    —`guardado.armado_en`— es más nueva que la última corrida programada del
+    lote, rojo si ya debía haber pasado y no dejó fila, o si `corrida_fallo`
+    dice que la LECTURA misma se cayó. `corrida_fallo` viene de
+    `_ultima_corrida`, no se adivina aquí.
 
     `fecha_de_ventas` se conserva con ese nombre y apunta a
     `ventas_consideradas_hasta`: es lo que la pantalla ya pinta como "Ventas
@@ -3422,6 +3450,18 @@ def _como_json(
         # o el lote no corrió, o la lista se armó desde esta pantalla antes de
         # que pasara por ella.
         "corrida": _corrida_como_json(corrida),
+        # POR QUÉ NO HAY CORRIDA, cuando no la hay (decisión del dueño,
+        # 2026-09-21): ámbar —el lote todavía no ha tenido su turno— o rojo
+        # —ya debía haber pasado, o la lectura se cayó—. `None` cuando SÍ hay
+        # fila: los dos son mutuamente excluyentes y la pantalla no tiene que
+        # elegir entre dos verdades.
+        "corrida_ausente": (
+            None
+            if corrida is not None
+            else _corrida_ausente_como_json(
+                guardado.armado_en, ahora, fallo_de_lectura=corrida_fallo
+            )
+        ),
         # LO QUE EL BOTÓN DE COMPLETAR VA A CONSULTAR, contado aquí y no en el
         # navegador. El número va en la etiqueta del botón, y un conteo que el
         # JavaScript llevara a mano se separa de la verdad en cuanto hay dos
@@ -3689,6 +3729,33 @@ def _corrida_como_json(corrida: CorridaDelLote | None) -> dict | None:
         "tope_minutos": corrida.tope_minutos,
         "minutos": round(corrida.segundos / 60.0, 1),
     }
+
+
+def _corrida_ausente_como_json(
+    armado_en: dt.datetime, ahora: dt.datetime, *, fallo_de_lectura: bool
+) -> dict:
+    """Por qué no hay corrida, cuando no la hay: ámbar o rojo (2026-09-21).
+
+    El nivel y la frase son de `faltantes.corrida_ausente_como_json`, pura y
+    sin YAML. `que_hacer` se agrega aquí porque necesita `a_quien_avisar`, que
+    sale de `config/continental.yml` y `cargar()` no se llama desde una
+    función pura. En ámbar no hay `que_hacer`: nada está mal, no hay nada que
+    hacer.
+
+    Dos causas de rojo, dos casos de `_que_hacer`: si la LECTURA se cayó, es
+    el mismo consejo que cualquier otro hueco de lectura (`AL_LEER` — vuelve a
+    cargar la página); si de verdad no hay fila y ya debía haberla, es un
+    problema de atlas o del timer (`LOTE`), no de la conexión de esta visita.
+    """
+    ausente = corrida_ausente_como_json(
+        armado_en, ahora, fallo_de_lectura=fallo_de_lectura
+    )
+    ausente["que_hacer"] = (
+        _que_hacer(AL_LEER if fallo_de_lectura else LOTE)
+        if ausente["nivel"] == NIVEL_FALLA
+        else None
+    )
+    return ausente
 
 
 def _renglon_como_json(

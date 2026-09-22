@@ -1511,7 +1511,7 @@ async function cargarPedido() {
     // un faltante de la cola del botón, y un botón que siga ofreciendo
     // "completar 12" después de descartar cuatro de esos doce mandaría a
     // molestar a cuatro portales por mercancía que alguien ya decidió no pedir.
-    pintarCorrida(datos.corrida);
+    pintarCorrida(datos.corrida, datos.corrida_ausente);
     pintarCompletar(datos.faltantes, datos.sesiones_caducadas, acciones);
     // En qué se parte la lista, en cada repintado y por lo mismo que el
     // conteo: elegir proveedor la cambia de la manera obvia, y descartar y
@@ -2538,28 +2538,43 @@ const pintarConteoDePrecios = (conteo, envejecido) => {
 
 // CÓMO LE FUE AL LOTE DE ANOCHE SOBRE ESTA LISTA (ticket 19, ADR 0007).
 //
-// La frase larga viene HECHA del servidor (`faltantes.frase_de_la_corrida`) y
-// aquí no se compone nada: lo único que decide esta función es el COLOR, que
-// es lo único que le toca decidir a una pantalla. Los tres son tres acciones
-// distintas —nada, apretar el botón, mirar el journal— y por eso son tres.
+// Las frases largas vienen HECHAS del servidor —`corrida.frase`
+// (`faltantes.frase_de_la_corrida`) cuando SÍ hay fila, `corridaAusente.frase`
+// (`faltantes.corrida_ausente_como_json`) cuando NO la hay— y aquí no se
+// compone ninguna: lo único que decide esta función es la CLASE CSS, que es
+// lo único que le toca decidir a una pantalla.
 //
-// `null` no es un hueco que disimular: quiere decir "no hay corrida de esta
-// lista", y eso se dice con todas sus letras. Es la otra mitad del hilo
-// abierto 10: hasta hoy, un lote que no corrió y un lote que no llegó a este
-// renglón se veían idénticos.
-const pintarCorrida = (corrida) => {
+// `corrida` nulo YA NO es una sola cosa (decisión del dueño, 2026-09-21):
+// puede ser que el lote todavía no haya tenido su turno sobre esta lista
+// —ámbar, nada está mal— o que ya debía haber pasado y no dejó fila, o que
+// la LECTURA misma se cayera —las dos, rojo—. Cuál de las dos es viene en
+// `corridaAusente.nivel`, decidido en Python contra el horario real del
+// timer y no adivinado aquí. Es la otra mitad del hilo abierto 10: hasta el
+// ticket 19, un lote que no corrió y un lote que no llegó a este renglón se
+// veían idénticos; hasta esta enmienda, un lote que no corrió y uno que
+// todavía no le tocaba también.
+const pintarCorrida = (corrida, corridaAusente) => {
   const p = document.getElementById('pedido-corrida');
   p.replaceChildren();
 
   if (!corrida) {
-    p.className = 'nota corrida falla';
+    if (!corridaAusente) {
+      // Ni corrida ni el porqué de que no la haya (las rutas que no la leen,
+      // como cerrar y reabrir, la mandan igual — esto es solo el cinturón):
+      // no hay nada que pintar, y un hueco vacío no es mejor que nada.
+      p.hidden = true;
+      return;
+    }
+    p.className = 'nota corrida ' + corridaAusente.nivel;
     const titular = document.createElement('b');
-    titular.textContent = 'El lote no corrió sobre esta lista.';
-    p.append(titular,
-      ' Nadie le ha pedido el precio a estos renglones de noche: o el lote no ' +
-      'corrió (atlas apagado a las 22:00, el timer sin habilitar, la unidad en ' +
-      '«failed») o esta lista se armó desde aquí y el lote todavía no ha pasado ' +
-      'por ella. Los precios que veas son los que alguien pidió a mano.');
+    titular.textContent = corridaAusente.frase;
+    p.append(titular);
+    if (corridaAusente.que_hacer) {
+      const queHacer = document.createElement('span');
+      queHacer.className = 'cuando';
+      queHacer.textContent = corridaAusente.que_hacer;
+      p.append(queHacer);
+    }
     p.hidden = false;
     return;
   }

@@ -198,23 +198,30 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
 .nota.conteo b { color: var(--tinta); font-variant-numeric: tabular-nums; }
 .nota.conteo.todo b { color: inherit; }
 .nota.conteo .desglose { display: block; margin-top: .25rem; font-size: .85rem; }
-/* CÓMO LE FUE AL LOTE DE ANOCHE (ticket 19). Mismo recuadro que el conteo
-   —son el mismo tipo de afirmación: sobre la lista entera, no sobre un
-   renglón— y tres colores que no son decoración, porque son tres cosas que
-   se atienden distinto:
+/* CÓMO LE FUE AL LOTE DE ANOCHE (ticket 19, y su ausencia desde la enmienda
+   del ADR 0007 del 2026-09-21). Mismo recuadro que el conteo —son el mismo
+   tipo de afirmación: sobre la lista entera, no sobre un renglón— y colores
+   que no son decoración, porque son cosas que se atienden distinto:
      · verde  = recorrió la lista entera. Nada que hacer.
-     · ámbar  = se detuvo al tope. NO ES UN ERROR: es lo que se le pide.
-                Se arregla con el botón de completar, o esperando a mañana.
-     · rojo   = la corrida se cortó, o no hay corrida. Eso sí es una falla y
-                lo que hay que mirar es el journal de esa noche.
+     · ámbar  = se detuvo al tope (`tope`), NO ES UN ERROR —se arregla con el
+                botón de completar, o esperando a mañana—; o no hay corrida
+                porque la lista es más nueva que la última programada
+                (`espera`, `corridaAusente.nivel === 'espera'`): el lote
+                todavía no ha tenido su turno, tampoco es un error.
+     · rojo   = la corrida se cortó, o no hay corrida y ya debía haberla
+                (`corridaAusente.nivel === 'falla'`), o la LECTURA de la
+                corrida se cayó. Eso sí es una falla: lo que hay que mirar es
+                el journal de esa noche, o `systemctl status
+                continental-lote`.
    El ámbar y el rojo son distintos a propósito: pintar de rojo un lote que
-   hizo lo que se le pidió enseña a ignorar el rojo. */
+   hizo lo que se le pidió —o que todavía no le tocaba— enseña a ignorar el
+   rojo. */
 .nota.corrida {
   border: 1px solid var(--linea); border-left-width: 3px; border-radius: .4rem;
   padding: .55rem .75rem; line-height: 1.45;
 }
 .nota.corrida.bien { border-left-color: var(--ok); }
-.nota.corrida.tope { border-left-color: var(--aviso); }
+.nota.corrida.tope, .nota.corrida.espera { border-left-color: var(--aviso); }
 .nota.corrida.falla { border-left-color: var(--mal); color: var(--mal); }
 .nota.corrida b { color: var(--tinta); font-variant-numeric: tabular-nums; }
 .nota.corrida.falla b { color: inherit; }

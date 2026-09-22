@@ -47,6 +47,10 @@ AL_GUARDAR = "al_guardar"
 #: Doyle no contesta. La lista no depende de él —los precios guardados se leen
 #: de `pedidos`—, así que se trabaja igual; lo que no funciona es consultar.
 DOYLE = "doyle"
+#: Una corrida programada del lote ya debía haber pasado sobre esta lista y
+#: no dejó fila (ADR 0007, enmienda 2026-09-21): atlas pudo estar apagado a
+#: las 22:00, el timer sin habilitar, o la unidad en `failed`.
+LOTE = "lote"
 #: `config/continental.yml` falta o está mal escrito. Desde el navegador no hay
 #: nada que hacer, y decir "vuelve a intentarlo" sería mentir.
 CONFIGURACION = "configuracion"
@@ -56,7 +60,7 @@ SERVIDOR = "servidor"
 #: la práctica es una pantalla vieja contra un servidor nuevo.
 PETICION = "peticion"
 
-CASOS = (AL_LEER, AL_GUARDAR, DOYLE, CONFIGURACION, SERVIDOR, PETICION)
+CASOS = (AL_LEER, AL_GUARDAR, DOYLE, CONFIGURACION, SERVIDOR, PETICION, LOTE)
 
 _QUE_HACER = {
     AL_LEER: (
@@ -84,6 +88,10 @@ _QUE_HACER = {
     PETICION: (
         "Vuelve a cargar la página: puede que esté vieja. Si vuelve a pasar, "
         "avísale {a_quien}."
+    ),
+    LOTE: (
+        "Revisa `systemctl status continental-lote` y el journal "
+        "(`journalctl -u continental-lote`) en atlas, o avísale {a_quien}."
     ),
 }
 

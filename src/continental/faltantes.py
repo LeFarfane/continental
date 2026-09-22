@@ -44,6 +44,7 @@ noche con Doyle caído, y eso es ruidoso por su cuenta.
 
 from __future__ import annotations
 
+import datetime as dt
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
@@ -55,6 +56,7 @@ from continental.precios import (
     SIN_TIEMPO,
     explicacion_del_motivo,
 )
+from continental.transito import ZONA_DE_LA_FARMACIA
 
 # =========================================================================
 # POR QUÉ ESTE RENGLÓN NO TIENE NI UNA LECTURA
@@ -331,6 +333,180 @@ def frase_de_la_corrida(corrida: CorridaDelLote | None) -> str:
         )
 
     return cabeza + (" " + "; ".join(cola) + "." if cola else "")
+
+
+# =========================================================================
+# CUÁNDO NO HAY FILA: ¿ESPERA, O FALLA? (decisión del dueño, 2026-09-21)
+# =========================================================================
+#
+# Hasta hoy `corrida is None` se leía siempre igual: "el lote no corrió sobre
+# esta lista", en rojo, con la frase compuesta en JavaScript —el único
+# archivo que ninguna prueba de Python mira—. Y son dos cosas distintas:
+#
+# - **La lista se armó DESPUÉS de la última corrida programada.** El lote
+#   todavía no ha tenido oportunidad de pasar por ella. Nada está mal.
+#   Ámbar, como el tope.
+# - **La lista se armó ANTES de una corrida que ya debía haber pasado** —
+#   según `continental-lote.timer`— y no hay fila: atlas pudo estar
+#   apagado a las 22:00, el timer sin habilitar, o la unidad en `failed`.
+#   Rojo.
+# - **La LECTURA de la corrida se cayó.** De ahí no se sabe nada, ni
+#   siquiera si el lote corrió: rojo siempre, sin importar cuándo se armó
+#   la lista.
+#
+# El horario del lote vive AQUÍ, en una constante, y no se repite en el
+# `.timer`: una prueba parsea `scripts/systemd/continental-lote.timer` y
+# compara su `OnCalendar` contra `DIAS_DEL_LOTE` y `HORA_DEL_LOTE`, para que
+# los dos no se puedan separar sin que algo se ponga rojo.
+
+#: Los días en que corre el lote: lunes a viernes, los mismos que
+#: `continental-lote.timer` (`OnCalendar=Mon-Fri 22:00`). `0` es lunes,
+#: igual que `date.weekday()`.
+DIAS_DEL_LOTE: frozenset[int] = frozenset({0, 1, 2, 3, 4})
+
+#: La hora del lote, la misma razón que `DIAS_DEL_LOTE`.
+HORA_DEL_LOTE = dt.time(22, 0)
+
+_DIAS_DE_LA_SEMANA = (
+    "lunes",
+    "martes",
+    "miércoles",
+    "jueves",
+    "viernes",
+    "sábado",
+    "domingo",
+)
+
+
+def _en_la_farmacia(instante: dt.datetime) -> dt.datetime:
+    """El instante en la hora de la farmacia. Uno sin zona se toma como UTC.
+
+    La misma regla que `transito._en_la_farmacia` y `fallas._en_la_farmacia`,
+    repetida y no importada: los dos nombres son privados por la misma razón
+    que éste lo es aquí.
+    """
+    if instante.tzinfo is None:
+        instante = instante.replace(tzinfo=dt.UTC)
+    return instante.astimezone(ZONA_DE_LA_FARMACIA)
+
+
+def ultima_corrida_programada(ahora: dt.datetime) -> dt.datetime:
+    """El instante programado del lote más reciente, a o antes de `ahora`.
+
+    Lunes a viernes a las 22:00, hora de la farmacia. Un martes a las 23:00
+    la última programada es HOY a las 22:00; un martes a las 20:00, es el
+    LUNES a las 22:00; un sábado o un domingo, cualquier hora, es el viernes.
+    """
+    local = _en_la_farmacia(ahora)
+    dia = local.date()
+    if not (dia.weekday() in DIAS_DEL_LOTE and local.time() >= HORA_DEL_LOTE):
+        dia -= dt.timedelta(days=1)
+        while dia.weekday() not in DIAS_DEL_LOTE:
+            dia -= dt.timedelta(days=1)
+    return dt.datetime.combine(dia, HORA_DEL_LOTE, tzinfo=ZONA_DE_LA_FARMACIA)
+
+
+def siguiente_corrida_programada(ahora: dt.datetime) -> dt.datetime:
+    """El instante programado del lote que sigue, después de `ahora`.
+
+    El par de `ultima_corrida_programada`: es lo que la pantalla enseña en
+    el caso ámbar —"le toca hoy/el lunes a las 22:00"—. Un viernes a las
+    23:00 la siguiente es el LUNES, no el sábado: el lote no corre en fin de
+    semana.
+    """
+    local = _en_la_farmacia(ahora)
+    dia = local.date()
+    if not (dia.weekday() in DIAS_DEL_LOTE and local.time() < HORA_DEL_LOTE):
+        dia += dt.timedelta(days=1)
+        while dia.weekday() not in DIAS_DEL_LOTE:
+            dia += dt.timedelta(days=1)
+    return dt.datetime.combine(dia, HORA_DEL_LOTE, tzinfo=ZONA_DE_LA_FARMACIA)
+
+
+#: Los dos niveles. Vocabulario cerrado, como el de los motivos del hueco:
+#: viaja hasta el JavaScript y ahí solo elige la clase CSS, nada más.
+NIVEL_ESPERA = "espera"
+NIVEL_FALLA = "falla"
+
+
+def nivel_de_ausencia(
+    armado_en: dt.datetime, ahora: dt.datetime, *, fallo_de_lectura: bool = False
+) -> str:
+    """Ámbar o rojo cuando no hay fila de corrida para esta lista.
+
+    Una LECTURA que se cae es rojo siempre y **le gana a todo lo demás**: de
+    ahí no se sabe nada, ni siquiera si hubo o no una corrida (ver
+    `web.app._ultima_corrida`), así que comparar fechas sobre un dato que no
+    se pudo leer sería adivinar.
+
+    Si la lectura sí funcionó y de verdad no hay fila, se compara
+    `armado_en` —cuándo se armó ESTA lista— contra
+    `ultima_corrida_programada(ahora)` —cuándo tocaba la corrida más
+    reciente—: si la lista es tan nueva que ni esa corrida alcanzó a pasar
+    por ella, es ámbar; si la lista ya llevaba encima una corrida programada
+    y no dejó fila, es rojo.
+    """
+    if fallo_de_lectura:
+        return NIVEL_FALLA
+    if _en_la_farmacia(armado_en) >= ultima_corrida_programada(ahora):
+        return NIVEL_ESPERA
+    return NIVEL_FALLA
+
+
+def _cuando_en_palabras(instante: dt.datetime, ahora: dt.datetime) -> str:
+    """`hoy` o `el lunes`, en la hora de la farmacia.
+
+    Nunca una fecha larga: la próxima corrida programada siempre cae dentro
+    de la semana que sigue, así que el día de la semana solo no se confunde
+    (la misma razón que `transito.DIAS_CON_NOMBRE`).
+    """
+    dia = instante.date()
+    hoy = _en_la_farmacia(ahora).date()
+    return "hoy" if dia == hoy else f"el {_DIAS_DE_LA_SEMANA[dia.weekday()]}"
+
+
+def frase_de_espera(ahora: dt.datetime) -> str:
+    """Ámbar: nada está mal, el lote todavía no ha tenido su turno."""
+    proxima = siguiente_corrida_programada(ahora)
+    return (
+        "El lote todavía no pasa por esta lista: le toca "
+        f"{_cuando_en_palabras(proxima, ahora)} a las {HORA_DEL_LOTE:%H:%M}."
+    )
+
+
+#: Rojo: la lectura de la corrida se cayó. De ahí no se sabe nada — ni
+#: siquiera si el lote corrió.
+FRASE_NO_SE_PUDO_LEER_SI_CORRIO = "No se pudo leer si el lote corrió sobre esta lista."
+
+#: Rojo: ya debía haber pasado una corrida programada y no dejó fila. Las
+#: mismas causas que traía la frase que hasta hoy componía el JavaScript,
+#: con todas sus letras y ahora en Python.
+FRASE_EL_LOTE_NO_CORRIO = (
+    "El lote no corrió sobre esta lista: atlas pudo estar apagado a las "
+    "22:00, el timer sin habilitar, o la unidad en «failed». Los precios "
+    "que veas son los que alguien pidió a mano."
+)
+
+
+def corrida_ausente_como_json(
+    armado_en: dt.datetime, ahora: dt.datetime, *, fallo_de_lectura: bool = False
+) -> dict:
+    """Qué dice la pantalla cuando NO hay fila de corrida para esta lista.
+
+    El nivel y la frase, los dos decididos aquí y no en el JavaScript —la
+    misma lección de siempre—. `que_hacer` no viaja desde aquí: solo tiene
+    sentido en rojo y depende de `a_quien_avisar`, que sale del YAML y no de
+    una función pura; lo agrega quien llama (`web.app`), igual que en
+    cualquier otro hueco de `fallas.py`.
+    """
+    nivel = nivel_de_ausencia(armado_en, ahora, fallo_de_lectura=fallo_de_lectura)
+    if nivel == NIVEL_ESPERA:
+        frase = frase_de_espera(ahora)
+    elif fallo_de_lectura:
+        frase = FRASE_NO_SE_PUDO_LEER_SI_CORRIO
+    else:
+        frase = FRASE_EL_LOTE_NO_CORRIO
+    return {"nivel": nivel, "frase": frase}
 
 
 # =========================================================================

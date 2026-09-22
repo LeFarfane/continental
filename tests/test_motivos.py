@@ -74,24 +74,35 @@ from continental.dobles import (
     respuesta_lista,
 )
 from continental.faltantes import (
+    DIAS_DEL_LOTE,
     EL_LOTE_NO_CORRIO,
     EL_LOTE_NO_LO_MIRO,
     EL_LOTE_NO_PUDO,
     EL_LOTE_SE_CORTO_POR_TIEMPO,
     EL_LOTE_SE_INTERRUMPIO,
+    FRASE_EL_LOTE_NO_CORRIO,
+    FRASE_NO_SE_PUDO_LEER_SI_CORRIO,
+    HORA_DEL_LOTE,
     MOTIVOS_DEL_HUECO,
     MOTIVOS_QUE_SE_ARREGLAN_REINTENTANDO,
+    NIVEL_ESPERA,
+    NIVEL_FALLA,
     NUNCA_SE_CONSULTO,
     SE_PUEDE_REINTENTAR,
     SIN_CLAVE_QUE_BUSCAR,
+    corrida_ausente_como_json,
     elegir_los_faltantes,
     faltantes_como_json,
+    frase_de_espera,
     frase_de_la_corrida,
     hueco_como_json,
     huecos_que_se_pueden_reintentar,
+    nivel_de_ausencia,
     por_que_falta,
     por_que_no_hay_lectura,
     proveedores_con_sesion_caducada,
+    siguiente_corrida_programada,
+    ultima_corrida_programada,
 )
 from continental.precios import (
     MOTIVOS,
@@ -104,6 +115,8 @@ from continental.precios import (
     SIN_TIEMPO,
     VARIOS_RESULTADOS,
 )
+from continental.transito import ZONA_DE_LA_FARMACIA
+from continental.web import app as modulo_app
 
 RAIZ = Path(__file__).resolve().parent.parent
 SQL = RAIZ / "sql"
@@ -111,6 +124,7 @@ CREAR_TABLAS = SQL / "crear_tablas.sql"
 CREAR_ROL = SQL / "crear_rol.sql"
 VERIFICAR_ROL = SQL / "verificar_rol.sql"
 MIGRACION = SQL / "migraciones" / "0004-la-corrida-del-lote-en-una-fila.sql"
+LOTE_TIMER = RAIZ / "scripts" / "systemd" / "continental-lote.timer"
 
 RUTA = "/api/pedido-sugerido"
 NEGOCIO = "farmacia_01"
@@ -136,6 +150,24 @@ def _texto(ruta: Path) -> str:
     creado con el acento deformado y sin nadie mirando.
     """
     return ruta.read_bytes().decode("utf-8")
+
+
+def _en_la_farmacia(fecha: dt.date, hora: int, minuto: int = 0) -> dt.datetime:
+    """Un instante con la zona de la farmacia, sin pasar por `dt.time`."""
+    return dt.datetime(
+        fecha.year, fecha.month, fecha.day, hora, minuto, tzinfo=ZONA_DE_LA_FARMACIA
+    )
+
+
+def _fijar_la_hora(monkeypatch: pytest.MonkeyPatch, instante: dt.datetime) -> None:
+    """Congela `_ahora()` de `web.app`, igual que `test_fallas._fijar_la_hora`.
+
+    Sin esto, la ruta comparándose contra la HORA DE VERDAD haría que estas
+    pruebas pasaran o fallaran según cuándo se corra el suite — exactamente
+    lo que este repo prohíbe medir sin fecha (regla de `CLAUDE.md`: "lo que
+    se mide se anota con la fecha y el número, no como afirmación general").
+    """
+    monkeypatch.setattr(modulo_app, "_ahora", lambda: instante)
 
 
 def _corrida(**cambios) -> CorridaDelLote:
@@ -554,6 +586,287 @@ def test_la_frase_de_sin_lista_no_inventa_un_dia_concreto():
 
     assert "domingo" not in frase.lower()
     assert "feriado" not in frase.lower()
+
+
+# =========================================================================
+# CUÁNDO NO HAY FILA: ¿ESPERA, O FALLA? (decisión del dueño, 2026-09-21)
+# =========================================================================
+#
+# Hasta esta enmienda `corrida is None` se leía siempre igual — rojo, "el
+# lote no corrió"—, compuesto en JavaScript. Ahora se distinguen tres causas
+# y dos colores, decididos aquí contra el horario real de
+# `continental-lote.timer` y no adivinados en la pantalla.
+
+# Una semana de septiembre de 2026, con nombre — la misma que usa
+# `test_fallas.py`, y la misma semana en la que corre esta sesión.
+LUNES_14 = dt.date(2026, 9, 14)
+MARTES_15 = dt.date(2026, 9, 15)
+VIERNES_18 = dt.date(2026, 9, 18)
+SABADO_19 = dt.date(2026, 9, 19)
+DOMINGO_20 = dt.date(2026, 9, 20)
+LUNES_21 = dt.date(2026, 9, 21)
+MARTES_22 = dt.date(2026, 9, 22)
+
+
+def test_el_horario_del_lote_no_se_separa_del_timer():
+    """`DIAS_DEL_LOTE` y `HORA_DEL_LOTE`, contra el `OnCalendar` real.
+
+    Si alguien mueve el timer —el aviso del propio archivo: "SI SE MUEVE LA
+    CADENA, HAY QUE MOVER ESTO"— y no toca la constante, esta prueba se pone
+    roja antes de que la pantalla empiece a decir un horario que ya no es el
+    de atlas.
+    """
+    texto = _texto(LOTE_TIMER)
+    encontrado = re.search(r"OnCalendar=(\S[^\n]*)", texto)
+    assert encontrado, "no está OnCalendar en continental-lote.timer"
+    assert encontrado.group(1).strip() == "Mon-Fri 22:00"
+    assert DIAS_DEL_LOTE == frozenset({0, 1, 2, 3, 4})  # Mon-Fri = weekday() 0-4
+    assert HORA_DEL_LOTE == dt.time(22, 0)
+
+
+def test_la_ultima_programada_es_hoy_si_ya_paso_su_hora():
+    ahora = _en_la_farmacia(MARTES_15, 23, 0)
+
+    assert ultima_corrida_programada(ahora) == _en_la_farmacia(MARTES_15, 22, 0)
+
+
+def test_la_ultima_programada_es_ayer_si_todavia_no_llega_su_hora():
+    ahora = _en_la_farmacia(MARTES_15, 20, 0)
+
+    assert ultima_corrida_programada(ahora) == _en_la_farmacia(LUNES_14, 22, 0)
+
+
+def test_la_ultima_programada_en_fin_de_semana_es_el_viernes():
+    """Sábado y domingo, cualquier hora: el lote no corre en fin de semana."""
+    assert ultima_corrida_programada(_en_la_farmacia(SABADO_19, 8, 0)) == _en_la_farmacia(
+        VIERNES_18, 22, 0
+    )
+    assert ultima_corrida_programada(_en_la_farmacia(DOMINGO_20, 23, 0)) == _en_la_farmacia(
+        VIERNES_18, 22, 0
+    )
+    assert ultima_corrida_programada(_en_la_farmacia(LUNES_21, 8, 0)) == _en_la_farmacia(
+        VIERNES_18, 22, 0
+    )
+
+
+def test_la_siguiente_programada_un_viernes_de_noche_es_el_lunes():
+    """El viernes por la noche, después de las 22:00: no hay sábado que cuente."""
+    assert siguiente_corrida_programada(_en_la_farmacia(VIERNES_18, 23, 0)) == (
+        _en_la_farmacia(LUNES_21, 22, 0)
+    )
+
+
+def test_la_siguiente_programada_en_fin_de_semana_es_el_lunes():
+    assert siguiente_corrida_programada(_en_la_farmacia(SABADO_19, 8, 0)) == (
+        _en_la_farmacia(LUNES_21, 22, 0)
+    )
+    assert siguiente_corrida_programada(_en_la_farmacia(DOMINGO_20, 23, 0)) == (
+        _en_la_farmacia(LUNES_21, 22, 0)
+    )
+
+
+def test_la_siguiente_programada_hoy_si_todavia_no_llega_su_hora():
+    assert siguiente_corrida_programada(_en_la_farmacia(MARTES_15, 8, 0)) == (
+        _en_la_farmacia(MARTES_15, 22, 0)
+    )
+
+
+def test_nivel_espera_cuando_la_lista_es_mas_nueva_que_la_ultima_programada():
+    """Nada está mal: el lote todavía no ha tenido su turno sobre esta lista."""
+    ahora = _en_la_farmacia(MARTES_15, 10, 0)  # última programada: lunes 22:00
+    armado_en = _en_la_farmacia(MARTES_15, 9, 0)  # después del lunes 22:00
+
+    assert nivel_de_ausencia(armado_en, ahora) == NIVEL_ESPERA
+
+
+def test_nivel_falla_cuando_la_lista_es_mas_vieja_que_la_ultima_programada():
+    """Ya debía haber pasado una corrida sobre esta lista y no dejó fila."""
+    ahora = _en_la_farmacia(MARTES_15, 10, 0)  # última programada: lunes 22:00
+    armado_en = _en_la_farmacia(LUNES_14, 20, 0)  # antes del lunes 22:00
+
+    assert nivel_de_ausencia(armado_en, ahora) == NIVEL_FALLA
+
+
+def test_nivel_espera_de_viernes_de_noche_a_lunes_pese_al_fin_de_semana():
+    """El caso que pidió la ronda: viernes en la noche → lunes, con el fin de
+    semana de por medio y SIN que el lote corra en él. Una lista armada el
+    viernes a las 22:30 —después de la corrida de esa misma noche— sigue en
+    espera el lunes por la mañana: no hay ninguna corrida programada entre
+    medio (el lote no corre sábado ni domingo), así que el lunes 22:00 sigue
+    siendo la primera que le toca.
+    """
+    armado_en = _en_la_farmacia(VIERNES_18, 22, 30)
+    ahora_el_lunes_de_manana = _en_la_farmacia(LUNES_21, 8, 0)
+
+    assert nivel_de_ausencia(armado_en, ahora_el_lunes_de_manana) == NIVEL_ESPERA
+
+
+def test_nivel_falla_de_viernes_de_noche_a_lunes_si_se_armo_antes_de_las_22():
+    """El contraste: armada ANTES de la corrida del viernes —no después—, esa
+    misma corrida ya debía haber pasado por ella. Sin fila el lunes por la
+    mañana, es una falla y no una espera larga por el fin de semana.
+    """
+    armado_en = _en_la_farmacia(VIERNES_18, 21, 0)
+    ahora_el_lunes_de_manana = _en_la_farmacia(LUNES_21, 8, 0)
+
+    assert nivel_de_ausencia(armado_en, ahora_el_lunes_de_manana) == NIVEL_FALLA
+
+
+def test_nivel_falla_gana_siempre_a_la_hora_cuando_la_lectura_se_cae():
+    """Una LECTURA que se cae es rojo siempre, sin importar cuándo se armó la
+    lista: de ahí no se sabe nada, ni siquiera si hubo o no una corrida.
+    """
+    ahora = _en_la_farmacia(MARTES_15, 10, 0)
+    recien_armada = _en_la_farmacia(MARTES_15, 9, 59)  # sería ámbar sin el fallo
+
+    assert (
+        nivel_de_ausencia(recien_armada, ahora, fallo_de_lectura=True) == NIVEL_FALLA
+    )
+
+
+def test_la_frase_de_espera_dice_hoy_cuando_la_proxima_es_hoy():
+    ahora = _en_la_farmacia(MARTES_15, 8, 0)  # la siguiente: hoy a las 22:00
+
+    frase = frase_de_espera(ahora)
+
+    assert "le toca hoy a las 22:00" in frase
+
+
+def test_la_frase_de_espera_dice_el_dia_cuando_no_es_hoy():
+    ahora = _en_la_farmacia(VIERNES_18, 23, 0)  # la siguiente: el lunes
+
+    frase = frase_de_espera(ahora)
+
+    assert "le toca el lunes a las 22:00" in frase
+
+
+def test_corrida_ausente_como_json_en_ambar_no_tiene_las_causas_de_falla():
+    ahora = _en_la_farmacia(MARTES_15, 10, 0)
+    armado_en = _en_la_farmacia(MARTES_15, 9, 0)
+
+    ausente = corrida_ausente_como_json(armado_en, ahora)
+
+    assert ausente["nivel"] == NIVEL_ESPERA
+    assert "atlas" not in ausente["frase"]
+    assert "que_hacer" not in ausente  # lo agrega `web.app`, no esta función
+
+
+def test_corrida_ausente_como_json_en_rojo_trae_las_causas_utiles():
+    ahora = _en_la_farmacia(MARTES_15, 10, 0)
+    armado_en = _en_la_farmacia(LUNES_14, 20, 0)
+
+    ausente = corrida_ausente_como_json(armado_en, ahora)
+
+    assert ausente["nivel"] == NIVEL_FALLA
+    assert ausente["frase"] == FRASE_EL_LOTE_NO_CORRIO
+    assert "atlas" in ausente["frase"] and "timer" in ausente["frase"]
+
+
+def test_corrida_ausente_como_json_con_fallo_de_lectura_no_habla_de_atlas():
+    """La lectura que se cae no sabe nada de por qué: no hereda las causas de
+    "el lote no corrió", que sí sabe que no hay fila."""
+    ahora = _en_la_farmacia(MARTES_15, 10, 0)
+    armado_en = _en_la_farmacia(MARTES_15, 9, 0)  # sería ámbar sin el fallo
+
+    ausente = corrida_ausente_como_json(armado_en, ahora, fallo_de_lectura=True)
+
+    assert ausente["nivel"] == NIVEL_FALLA
+    assert ausente["frase"] == FRASE_NO_SE_PUDO_LEER_SI_CORRIO
+    assert "atlas" not in ausente["frase"]
+
+
+# ------------------------------------------------------------- la ruta
+
+
+def test_la_ruta_dice_espera_para_una_lista_recien_armada(
+    cliente, almacen, doyle, almacenamiento, monkeypatch
+):
+    """La lista recién se armó: el lote todavía no ha tenido su turno."""
+    almacen.catalogo_en_memoria = [_producto(1, SIN_LECTURA_CLAVE)]
+    almacen.ventas_en_memoria = [_venta(1)]
+    _fijar_la_hora(monkeypatch, _en_la_farmacia(MARTES_15, 10, 0))
+    cliente.get(RUTA)  # arma la lista (con `armado_en` real; se fija abajo)
+    almacenamiento.listas[0]["armado_en"] = _en_la_farmacia(MARTES_15, 9, 0)
+
+    datos = cliente.get(RUTA).json()
+
+    assert datos["corrida"] is None
+    assert datos["corrida_ausente"]["nivel"] == NIVEL_ESPERA
+    assert "todavía no pasa" in datos["corrida_ausente"]["frase"]
+    assert datos["corrida_ausente"]["que_hacer"] is None
+
+
+def test_la_ruta_dice_falla_para_una_lista_mas_vieja_que_la_ultima_programada(
+    cliente, almacen, doyle, almacenamiento, monkeypatch
+):
+    """La lista ya llevaba encima una corrida programada y no dejó fila:
+    atlas pudo estar apagado, el timer sin habilitar, la unidad en «failed».
+    """
+    almacen.catalogo_en_memoria = [_producto(1, SIN_LECTURA_CLAVE)]
+    almacen.ventas_en_memoria = [_venta(1)]
+    _fijar_la_hora(monkeypatch, _en_la_farmacia(MARTES_15, 10, 0))
+    datos = cliente.get(RUTA).json()
+    almacenamiento.listas[0]["armado_en"] = _en_la_farmacia(LUNES_14, 20, 0)
+
+    despues = cliente.get(RUTA).json()
+
+    assert despues["corrida"] is None
+    assert despues["corrida_ausente"]["nivel"] == NIVEL_FALLA
+    assert despues["corrida_ausente"]["frase"] == FRASE_EL_LOTE_NO_CORRIO
+    assert "continental-lote" in despues["corrida_ausente"]["que_hacer"]
+
+
+def test_la_ruta_dice_falla_cuando_la_lectura_de_la_corrida_se_cae(
+    cliente, almacen, doyle, almacenamiento, monkeypatch
+):
+    """Una LECTURA que se cae es rojo siempre, y su `que_hacer` es el de
+    cualquier otro hueco de lectura —vuelve a cargar la página—, no el de un
+    lote que de verdad no corrió: de la lectura caída no se sabe cuál de las
+    dos es.
+    """
+    almacen.catalogo_en_memoria = [_producto(1, SIN_LECTURA_CLAVE)]
+    almacen.ventas_en_memoria = [_venta(1)]
+    _fijar_la_hora(monkeypatch, _en_la_farmacia(MARTES_15, 10, 0))
+    cliente.get(RUTA)  # arma la lista
+    # Sería ÁMBAR sin el fallo: la lectura caída le gana igual (contraste con
+    # `test_nivel_falla_gana_siempre_a_la_hora_cuando_la_lectura_se_cae`).
+    almacenamiento.listas[0]["armado_en"] = _en_la_farmacia(MARTES_15, 9, 0)
+
+    original = almacenamiento.ultima_corrida
+
+    def caido(*a, **k):
+        raise RuntimeError("se cayó Postgres")
+
+    almacenamiento.ultima_corrida = caido
+    try:
+        despues = cliente.get(RUTA).json()
+    finally:
+        almacenamiento.ultima_corrida = original
+
+    assert despues["corrida"] is None
+    assert despues["corrida_ausente"]["nivel"] == NIVEL_FALLA
+    assert despues["corrida_ausente"]["frase"] == FRASE_NO_SE_PUDO_LEER_SI_CORRIO
+    assert "Vuelve a cargar" in despues["corrida_ausente"]["que_hacer"]
+
+
+def test_la_ruta_no_confunde_una_lectura_caida_con_una_corrida_interrumpida(
+    cliente, almacen, doyle, almacenamiento, monkeypatch
+):
+    """El contraste: cuando SÍ hay fila, una lectura caída no la tapa con el
+    aviso de ausencia — las dos llaves son mutuamente excluyentes."""
+    almacen.catalogo_en_memoria = [_producto(1, SIN_LECTURA_CLAVE)]
+    almacen.ventas_en_memoria = [_venta(1)]
+    _fijar_la_hora(monkeypatch, _en_la_farmacia(MARTES_15, 10, 0))
+    lista = cliente.get(RUTA).json()
+    almacenamiento.guardar_la_corrida(
+        NEGOCIO,
+        _corrida(pedido_sugerido_id=lista["pedido_sugerido_id"], final=TERMINO),
+    )
+
+    despues = cliente.get(RUTA).json()
+
+    assert despues["corrida"] is not None
+    assert despues["corrida_ausente"] is None
 
 
 # =========================================================================
@@ -1516,10 +1829,28 @@ def test_la_pantalla_escribe_la_frase_de_la_corrida_que_llega():
     portada = _pantalla()
 
     assert "corrida.frase" in portada
-    assert "El lote no corrió sobre esta lista" in portada
-    # Los tres colores, que son tres acciones distintas: nada, apretar el
-    # botón, mirar el journal.
+    # Los tres colores de la corrida en sí, que son tres acciones distintas:
+    # nada, apretar el botón, mirar el journal.
     assert "corrida.se_corto_por_tiempo ? 'tope'" in portada
+    # Y cuando no hay corrida, el NIVEL —ámbar o rojo— decide la clase, y la
+    # frase viene hecha igual que la de arriba: nada se compone aquí.
+    assert "corridaAusente.frase" in portada
+    assert "corridaAusente.nivel" in portada
+
+
+def test_la_pantalla_ya_no_compone_la_frase_de_que_el_lote_no_corrio():
+    """La lección de los tickets 15 y 21, otra vez: eso lo compone Python.
+
+    Hasta la enmienda del dueño (2026-09-21), "El lote no corrió sobre esta
+    lista" y sus causas —atlas apagado a las 22:00, el timer sin habilitar,
+    la unidad en «failed»— se escribían aquí, sin distinguir esa falla de
+    "todavía no le toca". Ahora vienen hechas en `corridaAusente.frase`
+    (`faltantes.corrida_ausente_como_json`) y este archivo solo las pinta.
+    """
+    portada = _pantalla()
+
+    assert "Nadie le ha pedido el precio a estos renglones de noche" not in portada
+    assert "el timer sin habilitar, la unidad en" not in portada
 
 
 def test_la_pantalla_saca_el_numero_del_boton_del_servidor():
