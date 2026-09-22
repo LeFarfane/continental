@@ -112,7 +112,66 @@ túnel, y por eso la política de Access no es opcional ni "se pone después".
   precedencia es entorno (systemd) → `.env` → `127.0.0.1`. Lo vigilan tres
   pruebas de `tests/test_despliegue.py`.
 - La regla 2 **no se rompe**: los que siguen en loopback son Doyle (8383) y
-  Marlowe (8484), que son los que no tienen autenticación. Continental es la
+  Marlowe (8484) *(corregido abajo, 2026-09-21: Marlowe no sigue en
+  loopback)*, que son los que no tienen autenticación. Continental es la
   puerta, y una puerta tiene que ser alcanzable por el túnel para ser puerta.
   Si algún día Doyle o Marlowe necesitan salir de loopback, esa suposición sí
   deja de valer y hace falta un token entre servicios **antes** de moverlos.
+
+## Enmienda del 2026-09-21 — Marlowe no está en loopback, y no lo ha estado desde antes de este ADR
+
+**Falso lo dicho arriba en Consecuencias:** Marlowe **no** sigue en loopback.
+Medido en atlas el 2026-09-21 (mismo día, misma herramienta que el hecho 4 de
+este ADR): `ss -ltn` da una sola línea para el 8484, `LISTEN 172.19.0.1:8484`
+—el gateway de `borde`, no `127.0.0.1`— y `curl http://172.19.0.1:8484/api/salud`
+contesta `200`. Doyle sí sigue en loopback: su propia unidad de systemd fija
+`Environment=DOYLE_HOST=127.0.0.1` y no hay nada en sus ADRs que lo mueva. La
+frase de arriba juntó a los dos servicios y solo describe bien a uno.
+
+**No es un cambio reciente ni una sorpresa nueva.** `marlowe-web.service` fija
+`Environment=MARLOWE_HOST=172.19.0.1` desde el sprint 02 de Marlowe (su ADR
+0011, 2026-09-06) —trece días antes de que este ADR se escribiera—, por la
+misma razón que llevó a Continental a la opción 3: Marlowe todavía tiene su
+propia pantalla de curación, `https://marlowe.farfanlab.uk`, detrás de su
+propio túnel y de Cloudflare Access, y para el contenedor del túnel
+`localhost` es él mismo (hecho 3 de este ADR, que es literalmente el golpe que
+Marlowe se llevó el 2026-09-06). El propio
+`Doyle/scripts/systemd/doyle.service` ya lo tenía escrito, antes de este ADR:
+*"Marlowe y Continental escuchan en 172.19.0.1"*. Y el commit `de94e57` de
+este repo (2026-09-21) es la prueba práctica del error: `config/continental.yml`
+apuntaba a Marlowe en `http://127.0.0.1:8484`, Continental lo veía como
+`ConnectError`, y el arreglo fue apuntar a `http://172.19.0.1:8484` —no
+cambiarle nada a Marlowe, que ya estaba ahí.
+
+**Qué quiere decir esto para la regla 2.** La regla se sostiene en que un
+módulo sin autenticación propia es seguro porque nada externo lo alcanza. Eso
+ya no describe a Marlowe: su interfaz web no tiene autenticación propia
+(revisado `src/marlowe/web/app.py` y `static/index.html` de ese repo: no hay
+`Depends`, cabecera ni middleware de auth, solo lo que Cloudflare Access añade
+delante del túnel) y escucha en el gateway de `borde`, así que **cualquier
+cosa que esté en esa red Docker la alcanza sin pasar por Access**. Medido en
+este mismo ADR (hechos 1 y 5), hoy eso son `borde_tunel` (cloudflared,
+172.19.0.2) y los contenedores que publican a loopback desde dentro de
+`borde` (`farmacia_bi`/Metabase, `borde_kuma`, `farmacia_warehouse`). Desde
+internet, a Marlowe solo se llega por su túnel más Access, igual que a
+Continental. La garantía real sigue siendo la misma que ya razona la
+Decisión de este ADR para 172.19.0.1: Access, y que la LAN no tiene ruta a
+`172.19.0.0/16` —que es *no estar enrutado*, no *estar bloqueado*—.
+
+**Lo que este ADR no decide — queda abierto para el dueño.** Que Marlowe
+quede expuesto a `borde` sin token propio fue una decisión de Marlowe (su
+propio ADR 0011), tomada antes de que existiera este ADR y sin que este
+documento la describiera bien hasta hoy. Tres caminos, ninguno se toma aquí:
+
+a. **Dejarlo como está**, aceptando que cualquier contenedor de `borde`
+   alcanza la interfaz de curación de Marlowe sin pasar por Access.
+b. **Separar las dos cosas de Marlowe**: mover su interfaz de datos —la que
+   Continental consulta— a loopback, y dejar solo su pantalla de curación en
+   `borde`, si se puede separar sin duplicar el proceso.
+c. **Un token entre servicios**, que es justo lo que la frase original de
+   este ADR ya preveía para el día en que Doyle o Marlowe salieran de
+   loopback —ese día ya llegó para Marlowe, sin que nadie lo hubiera
+   decidido a propósito.
+
+Doyle, que sí sigue en loopback y no tiene pantalla propia, no tiene esta
+exposición.

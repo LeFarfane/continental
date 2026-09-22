@@ -20,10 +20,16 @@ Repo aparte, con su propio `.git`, igual que Doyle y Marlowe. El porqué está e
    pide a Doyle por HTTP; si necesita un precio de competencia, a Marlowe. El
    día que aquí aparezca un `import playwright`, la decisión del ADR 0001 se
    rompió y hay que reabrirla a propósito, no de a poquito.
-2. **Continental es la única puerta al exterior.** Los módulos escuchan en
-   loopback y no tienen autenticación propia porque nada externo los alcanza.
-   Si un módulo tiene que escuchar en otra interfaz, esa suposición deja de
-   valer y hace falta un token entre servicios **antes** de moverlo.
+2. **Continental es la única puerta al exterior.** Doyle escucha en loopback y
+   no tiene autenticación propia porque nada externo lo alcanza. **Marlowe no
+   cumple esto** desde antes de que se escribiera esta regla: tiene su propia
+   pantalla detrás de su propio túnel, escucha en el gateway de la red Docker
+   `borde` y no tiene autenticación propia, así que lo alcanza cualquier cosa
+   que esté en esa red — no algo externo, pero tampoco loopback. Ver la
+   enmienda del 2026-09-21 al ADR 0005, donde queda como pregunta abierta para
+   el dueño. Para Doyle, o cualquier módulo que hoy sí esté en loopback, la
+   regla sigue firme: si tiene que escuchar en otra interfaz, esa suposición
+   deja de valer y hace falta un token entre servicios **antes** de moverlo.
 3. **El rol es una firma, no un permiso.** El correo llega en
    `Cf-Access-Authenticated-User-Email`, ya verificado por Cloudflare Access,
    y sirve para saber quién hizo qué. La seguridad real es Access. Nunca
