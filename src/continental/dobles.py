@@ -1538,6 +1538,29 @@ class AlmacenamientoFalso:
             for fila in otra["renglones"]
         )
 
+    def productos_atendidos_despues(
+        self, negocio: str, pedido_sugerido_id: int
+    ) -> frozenset[int]:
+        """`_PRODUCTOS_ATENDIDOS_DESPUES`, en memoria: reusa `_ya_se_atendio`.
+
+        La misma pregunta de `_ya_se_atendio`, hecha una vez por cada
+        `producto_id` de ESTA lista en vez de una vez por renglón suelto, para
+        que el doble y Postgres no puedan divergir en qué cuenta como
+        "atendido" (2026-09-21).
+        """
+        self._revisar()
+        for lista in self.listas:
+            if lista["negocio"] != negocio or lista["pedido_sugerido_id"] != pedido_sugerido_id:
+                continue
+            return frozenset(
+                fila["producto_id"]
+                for fila in lista["renglones"]
+                if self._ya_se_atendio(
+                    negocio, fila["producto_id"], lista["fecha_del_pedido"]
+                )
+            )
+        return frozenset()
+
     def rechazar_la_recepcion(
         self, negocio: str, renglon_id: int, compras, quien: str
     ) -> RenglonGuardado | None:

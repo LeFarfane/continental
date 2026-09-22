@@ -256,3 +256,42 @@ parcial pasa lo mismo: llegó algo, luego sí se capturó. La prueba nueva lo fi
   con lo que faltó. Si la segunda factura llega casi siempre después de que se
   cerró la lista, el candado de "atendido" está demasiado apretado y conviene
   una acción "ya no falta" sobre el renglón de la lista.
+
+## Enmienda 2026-09-21 — el motivo real vive en `transiciones.py`, no en `app.py`
+
+**El caso que encontró la revisión de arquitectura (propuesta 1), sobre el
+código ya aceptado arriba.** La bandera `se_puede_corregir` que la pantalla
+usa para pintar el botón era, desde que este ADR se escribió,
+`renglon.esta_recibido` a secas (`app.py` ~línea 3832): no miraba que el
+pedido siguiera `enviado`, ni el "atendido" del punto 3 de la decisión. La
+pantalla ofrecía "Corregir" en casos que el `WHERE` de
+`_CORREGIR_LO_RECIBIDO` iba a rechazar con un 409, y ese 409 a su vez
+**adivinaba** el motivo con `antes.esta_recibido` y un texto genérico que
+mentía cuando la razón real era "no viene en camino" (recibir a mano sobre un
+renglón que nunca se envió) en vez de "ya lo atendió una lista posterior" o
+"la cifra ya es ésa".
+
+**Decisión:** la regla de este punto de la decisión —"salvo que una lista
+posterior ya haya atendido el producto"— se escribe **una sola vez**, en
+`continental.transiciones.motivo_para_no_corregir`, función pura sin I/O.
+Tres consumidores la comparten: la bandera `se_puede_corregir` del JSON de la
+lista, el 409 de `POST /api/renglon/{id}/recepcion/a-mano` (que antes
+adivinaba) y —en pasos futuros de la misma propuesta— el doble. El **candado
+real sigue siendo el `WHERE`**; `transiciones.py` es la copia legible y
+probada, igual que `cierre.motivo_para_no_reabrir` ya lo es para reabrir.
+
+La lectura que le falta al renglón —si una lista posterior ya lo atendió—
+también se escribe una sola vez: `almacenamiento.productos_atendidos_despues
+(negocio, pedido_sugerido_id)` devuelve el conjunto de `producto_id` de una
+lista que una lista posterior ya atendió, con el mismo texto SQL
+(`_ATENDIDO_POR_UNA_LISTA_POSTERIOR`) que ahora usa también
+`_CORREGIR_LO_RECIBIDO` —extraído de su `NOT EXISTS` para que las dos no
+puedan divergir—. La pantalla la pregunta **una vez por respuesta**, no una
+vez por renglón recibido (la misma economía que ya tenía `_la_reapertura`
+para el botón de reabrir).
+
+**Qué NO se movió, a propósito.** Los demás motivos —cancelar, reabrir,
+enviar— siguen en `transito.py`, `cierre.py` y `particion.py`. Moverlos
+todos de un golpe habría mezclado el arreglo de un error visible con una
+reorganización mucho más grande, que no se puede revisar por separado si
+llega junta. Queda para un ticket aparte.

@@ -650,6 +650,20 @@ def _sentencia_python(nombre: str) -> str:
     return re.sub(r"--[^\n]*", "", fuente[inicio:fin])
 
 
+def _sql(nombre: str) -> str:
+    """El SQL YA COMPILADO de una sentencia con fragmentos por f-string.
+
+    Al revés que `_sentencia_python` —que recorta el texto fuente tal como
+    está escrito, con el `{nombre_del_fragmento}` sin sustituir—, esto lee
+    `.text` del objeto `text()` ya construido: lo que de verdad corre es el
+    fragmento YA interpolado. Es el mismo criterio que ya usa
+    `test_cierre.py` para `_REABRIR` y `_SE_PUEDE_REABRIR`.
+    """
+    import continental.almacenamiento as modulo
+
+    return re.sub(r"\s+", " ", getattr(modulo, nombre).text)
+
+
 def _lista_con(almacenamiento, fecha: dt.date, cantidades: dict[int, int]):
     return almacenamiento.insertar_la_lista(
         NEGOCIO,
@@ -826,6 +840,102 @@ def test_una_lista_posterior_abierta_no_impide_corregir(almacenamiento):
     assert almacenamiento.recibir_a_mano(NEGOCIO, renglon_id, 10, DUENO).estado == RENGLON_RECIBIDO
 
 
+# ------------- la bandera de la pantalla y el candado del WHERE, de acuerdo
+#
+# 2026-09-21, propuesta 1 de la revisión de arquitectura: para cada escenario,
+# `transiciones.motivo_para_no_corregir` (con `productos_atendidos_despues` y
+# `pedidos_de_la_lista`, las mismas lecturas que usaría la pantalla) tiene que
+# decir "no se puede" exactamente cuando `almacenamiento.recibir_a_mano`
+# —el candado real— también dice que no.
+
+
+def _pedido_del_renglon(almacenamiento, renglon):
+    """El `PedidoGuardado` de un renglón, buscado como lo haría la ruta."""
+    if renglon.pedido_id is None or renglon.pedido_sugerido_id is None:
+        return None
+    return next(
+        (
+            p
+            for p in almacenamiento.pedidos_de_la_lista(NEGOCIO, renglon.pedido_sugerido_id)
+            if p.pedido_id == renglon.pedido_id
+        ),
+        None,
+    )
+
+
+def _flag_y_candado_de_acuerdo(almacenamiento, renglon_id: int, piezas: int) -> None:
+    """Calcula la bandera con `transiciones` y compara contra el candado real.
+
+    Se calcula la bandera ANTES de intentar corregir —igual que la pantalla,
+    que la calculó al cargar—, y luego se intenta de verdad: el candado
+    (`recibir_a_mano`) tiene que estar de acuerdo con lo que la bandera dijo.
+    """
+    from continental.transiciones import motivo_para_no_corregir
+
+    antes = almacenamiento.leer_renglon(NEGOCIO, renglon_id)
+    pedido = _pedido_del_renglon(almacenamiento, antes)
+    atendido = antes.propuesto.producto_id in almacenamiento.productos_atendidos_despues(
+        NEGOCIO, antes.pedido_sugerido_id
+    )
+    motivo_general = motivo_para_no_corregir(antes, pedido, atendido)
+    motivo_con_piezas = motivo_para_no_corregir(antes, pedido, atendido, piezas)
+
+    resultado = almacenamiento.recibir_a_mano(NEGOCIO, renglon_id, piezas, DUENO)
+
+    assert (motivo_general is None) == (motivo_con_piezas is None), (
+        "con piezas nuevas y distintas la pregunta general y la concreta "
+        "tienen que coincidir"
+    )
+    assert (motivo_con_piezas is None) == (resultado is not None), (
+        motivo_con_piezas,
+        resultado,
+    )
+
+
+def test_flag_y_candado_de_acuerdo_lista_posterior_cerrada(almacenamiento):
+    """Escenario 1: una lista posterior CERRADA ya trae el producto."""
+    _, enviado = _en_transito(almacenamiento)
+    [renglon_id] = enviado.renglones
+    almacenamiento.recibir_a_mano(NEGOCIO, renglon_id, 6, CORREO)
+    jueves = _lista_con(almacenamiento, JUEVES, {1: 4})
+    almacenamiento.cerrar(NEGOCIO, jueves.pedido_sugerido_id)
+
+    _flag_y_candado_de_acuerdo(almacenamiento, renglon_id, 10)
+
+
+def test_flag_y_candado_de_acuerdo_lista_posterior_en_transito(almacenamiento):
+    """Escenario 2: una lista posterior con el producto EN TRÁNSITO (se le
+    volvió a pedir, sin recibirlo) también lo atiende."""
+    _, enviado = _en_transito(almacenamiento)
+    [renglon_id] = enviado.renglones
+    almacenamiento.recibir_a_mano(NEGOCIO, renglon_id, 6, CORREO)
+    _en_transito(almacenamiento, fecha=JUEVES, cantidades={1: 4})
+
+    _flag_y_candado_de_acuerdo(almacenamiento, renglon_id, 10)
+
+
+def test_flag_y_candado_de_acuerdo_pedido_cancelado(almacenamiento):
+    """Escenario 3: el pedido de la lista posterior se CANCELÓ; su renglón
+    queda `cancelado`, que también cuenta como "lo atendió" (ADR 0013)."""
+    _, enviado = _en_transito(almacenamiento)
+    [renglon_id] = enviado.renglones
+    almacenamiento.recibir_a_mano(NEGOCIO, renglon_id, 6, CORREO)
+    jueves = _lista_con(almacenamiento, JUEVES, {1: 4})
+    jueves_enviado = _enviar_en_el_doble(almacenamiento, jueves, {1})
+    almacenamiento.cancelar_el_pedido(NEGOCIO, jueves_enviado.pedido.pedido_id, DUENO)
+
+    _flag_y_candado_de_acuerdo(almacenamiento, renglon_id, 10)
+
+
+def test_flag_y_candado_de_acuerdo_recibido_normal(almacenamiento):
+    """Escenario 4 (control): sin ninguna lista posterior, se puede corregir."""
+    _, enviado = _en_transito(almacenamiento)
+    [renglon_id] = enviado.renglones
+    almacenamiento.recibir_a_mano(NEGOCIO, renglon_id, 6, CORREO)
+
+    _flag_y_candado_de_acuerdo(almacenamiento, renglon_id, 10)
+
+
 def test_recibir_parcial_con_la_evidencia(almacenamiento):
     """**La decisión 5**, en la tabla: la compra de 3 contra un pedido de 5."""
     _, enviado = _en_transito(almacenamiento, cantidades={1: 5})
@@ -976,15 +1086,110 @@ def test_recibir_a_mano_lleva_la_transicion_en_el_where():
 
 
 def test_corregir_exige_que_lo_que_falto_no_se_haya_atendido():
-    sentencia = _sentencia_python("_CORREGIR_LO_RECIBIDO")
+    # `.text` y no `_sentencia_python`: desde el 2026-09-21 el `NOT EXISTS` es
+    # un fragmento compartido (`_ATENDIDO_POR_UNA_LISTA_POSTERIOR`) que esta
+    # sentencia interpola por f-string; el texto fuente sin interpolar solo
+    # trae el nombre del fragmento, no "not exists".
+    sentencia = _sql("_CORREGIR_LO_RECIBIDO")
     assert "r.estado in ('recibido', 'recibido parcial')" in sentencia
     assert "r.piezas_recibidas <> :piezas" in sentencia
-    assert "not exists" in sentencia
+    # El fragmento compartido está en POSITIVO ("sí lo atendió") y esta
+    # sentencia lo niega envolviéndolo: "not (... exists (...))", no el
+    # "not exists" pegado de un `NOT EXISTS` escrito a mano.
+    assert "not (" in sentencia and "exists (" in sentencia
+    assert sentencia.index("not (") < sentencia.index("exists (")
     assert "s2.estado = 'cerrado'" in sentencia
     assert "s2.fecha_del_pedido > s.fecha_del_pedido" in sentencia
     assert "s.negocio = r.negocio" in sentencia and "s2.negocio = r2.negocio" in sentencia
     # Lo que se corrige es la cifra, no la evidencia: las compras se quedan.
     assert "recibido_con_compras" not in sentencia
+
+
+def test_atendido_esta_escrito_una_sola_vez_y_lo_usan_las_dos_sentencias():
+    """El `NOT EXISTS` de corregir y la lectura en lote (2026-09-21, propuesta
+    1 de la revisión de arquitectura) comparten el mismo texto, para que la
+    bandera de la pantalla y el candado del `WHERE` no puedan divergir."""
+    from continental.almacenamiento import _ATENDIDO_POR_UNA_LISTA_POSTERIOR
+
+    fragmento = re.sub(r"\s+", " ", _ATENDIDO_POR_UNA_LISTA_POSTERIOR).strip()
+    assert "exists" in fragmento
+    assert "s2.fecha_del_pedido > s.fecha_del_pedido" in fragmento
+    assert "r2.producto_id = r.producto_id" in fragmento
+    assert fragmento in _sql("_CORREGIR_LO_RECIBIDO")
+    assert fragmento in _sql("_PRODUCTOS_ATENDIDOS_DESPUES")
+
+
+def test_productos_atendidos_despues_pregunta_por_toda_la_lista():
+    sentencia = _sql("_PRODUCTOS_ATENDIDOS_DESPUES")
+    assert sentencia.lstrip().startswith("select distinct r.producto_id")
+    assert "s.negocio = :negocio" in sentencia
+    assert "s.pedido_sugerido_id = :pedido_sugerido_id" in sentencia
+
+
+# --------------------------------- productos_atendidos_despues, en el doble
+
+
+def test_productos_atendidos_despues_vacio_sin_lista_posterior(almacenamiento):
+    _, enviado = _en_transito(almacenamiento)
+    [renglon_id] = enviado.renglones
+    almacenamiento.recibir_a_mano(NEGOCIO, renglon_id, 6, CORREO)
+    lunes = almacenamiento.leer_renglon(NEGOCIO, renglon_id).pedido_sugerido_id
+
+    assert almacenamiento.productos_atendidos_despues(NEGOCIO, lunes) == frozenset()
+
+
+def test_productos_atendidos_despues_con_lista_posterior_cerrada(almacenamiento):
+    _, enviado = _en_transito(almacenamiento)
+    [renglon_id] = enviado.renglones
+    almacenamiento.recibir_a_mano(NEGOCIO, renglon_id, 6, CORREO)
+    lunes = almacenamiento.leer_renglon(NEGOCIO, renglon_id).pedido_sugerido_id
+    jueves = _lista_con(almacenamiento, JUEVES, {1: 4})
+    almacenamiento.cerrar(NEGOCIO, jueves.pedido_sugerido_id)
+
+    assert almacenamiento.productos_atendidos_despues(NEGOCIO, lunes) == frozenset({1})
+
+
+def test_productos_atendidos_despues_con_producto_en_transito_despues(almacenamiento):
+    _, enviado = _en_transito(almacenamiento)
+    [renglon_id] = enviado.renglones
+    almacenamiento.recibir_a_mano(NEGOCIO, renglon_id, 6, CORREO)
+    lunes = almacenamiento.leer_renglon(NEGOCIO, renglon_id).pedido_sugerido_id
+    _en_transito(almacenamiento, fecha=JUEVES, cantidades={1: 4})
+
+    assert almacenamiento.productos_atendidos_despues(NEGOCIO, lunes) == frozenset({1})
+
+
+def test_productos_atendidos_despues_con_pedido_posterior_cancelado(almacenamiento):
+    _, enviado = _en_transito(almacenamiento)
+    [renglon_id] = enviado.renglones
+    almacenamiento.recibir_a_mano(NEGOCIO, renglon_id, 6, CORREO)
+    lunes = almacenamiento.leer_renglon(NEGOCIO, renglon_id).pedido_sugerido_id
+    jueves = _lista_con(almacenamiento, JUEVES, {1: 4})
+    jueves_enviado = _enviar_en_el_doble(almacenamiento, jueves, {1})
+    almacenamiento.cancelar_el_pedido(NEGOCIO, jueves_enviado.pedido.pedido_id, DUENO)
+
+    assert almacenamiento.productos_atendidos_despues(NEGOCIO, lunes) == frozenset({1})
+
+
+def test_productos_atendidos_despues_lista_posterior_abierta_no_atiende(almacenamiento):
+    """La misma regla que `test_una_lista_posterior_abierta_no_impide_corregir`:
+    una lista posterior ABIERTA, sin nada pedido, no cuenta como atendida."""
+    _, enviado = _en_transito(almacenamiento)
+    [renglon_id] = enviado.renglones
+    almacenamiento.recibir_a_mano(NEGOCIO, renglon_id, 6, CORREO)
+    lunes = almacenamiento.leer_renglon(NEGOCIO, renglon_id).pedido_sugerido_id
+    _lista_con(almacenamiento, JUEVES, {1: 4})
+
+    assert almacenamiento.productos_atendidos_despues(NEGOCIO, lunes) == frozenset()
+
+
+def test_productos_atendidos_despues_otro_negocio_no_se_ve(almacenamiento):
+    _, enviado = _en_transito(almacenamiento)
+    [renglon_id] = enviado.renglones
+    almacenamiento.recibir_a_mano(NEGOCIO, renglon_id, 6, CORREO)
+    lunes = almacenamiento.leer_renglon(NEGOCIO, renglon_id).pedido_sugerido_id
+
+    assert almacenamiento.productos_atendidos_despues("otra_farmacia", lunes) == frozenset()
 
 
 def test_recibir_parcial_con_compras_lleva_sus_garantias_en_el_where():
@@ -1266,6 +1471,27 @@ def test_escenario_ya_no_se_corrige_lo_que_una_lista_cerrada_ya_propuso(
     assert respuesta.status_code == 409
     assert "ya se volvió a proponer" in respuesta.json()["detalle"]
     assert almacenamiento.leer_renglon(NEGOCIO, renglon_id).piezas_recibidas == 6
+
+
+def test_a_mano_sobre_un_renglon_abierto_contesta_el_motivo_real(
+    cliente, almacen, almacenamiento, monkeypatch
+):
+    """2026-09-21: antes de `transiciones.py`, un renglón que nunca se envió
+    contestaba el mismo texto catch-all que uno ya atendido. Ahora dice **no
+    viene en camino**, que es la razón de verdad (`_RECIBIR_A_MANO` exige
+    `r.estado = 'en tránsito'`, y este renglón sigue `abierto`)."""
+    _fijar_la_hora(monkeypatch, _local(LUNES, 18))
+    almacen.catalogo_en_memoria = [_producto(1)]
+    almacen.ventas_en_memoria = [_venta(LUNES, 1, 10)]
+    lunes = _abrir(cliente)
+    renglon_id = _renglon_de(lunes, 1)  # nunca se partió ni se envió
+
+    respuesta = _a_mano(cliente, renglon_id, 6)
+
+    assert respuesta.status_code == 409
+    detalle = respuesta.json()["detalle"]
+    assert "no viene en camino" in detalle
+    assert "ya se volvió a proponer" not in detalle  # el texto del otro motivo
 
 
 def test_escenario_la_propuesta_que_trae_de_menos_se_recibe_parcial(

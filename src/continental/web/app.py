@@ -35,6 +35,7 @@ from continental.almacenamiento import (
     CorridaDelLote,
     PedidoGuardado,
     PedidoSugeridoGuardado,
+    RenglonGuardado,
     LLAVE_DEL_ATRASO,
     Ventana,
     dias_en_transito_para_atrasado_configurados,
@@ -128,6 +129,10 @@ from continental.recepcion import (
     recepcion_con_hueco,
 )
 from continental.sugerido import armar_la_lista
+from continental.transiciones import (
+    motivo_para_no_corregir,
+    motivo_para_no_recibir_a_mano,
+)
 from continental.transito import (
     ETIQUETA_PARA_CORREGIR,
     MemoriaDeLoPedido,
@@ -670,6 +675,13 @@ def pedido_sugerido(
         # hay botón.
         reapertura=_la_reapertura(almacen, almacenamiento, negocio, guardado, ultima),
         corrida_fallo=corrida_fallo,
+        # CORREGIR LO RECIBIDO (2026-09-21, propuesta 1 de la revisión de
+        # arquitectura). Una lectura, UNA vez por respuesta —no una vez por
+        # renglón recibido— de qué productos de esta lista ya atendió una
+        # lista posterior: es lo que `se_puede_corregir` necesita para no
+        # pintar un botón que el `WHERE` de `_CORREGIR_LO_RECIBIDO` iba a
+        # rechazar.
+        atendidos_despues=_los_atendidos_despues(almacenamiento, negocio, guardado),
     )
     # LO QUE SOLO TRAE LA CARGA (ticket 29), igual que `en_camino`: partir,
     # enviar y tachar no lo cambian y la pantalla lo pinta una vez.
@@ -964,6 +976,38 @@ def cerrar_pedido_sugerido(
     return _como_json(
         cerrado, reapertura=_la_reapertura(almacen, almacenamiento, negocio, cerrado)
     )
+
+
+def _los_atendidos_despues(
+    almacenamiento: AlmacenamientoDelPedido,
+    negocio: str,
+    guardado: PedidoSugeridoGuardado,
+) -> frozenset[int]:
+    """Qué `producto_id` de esta lista ya atendió una lista posterior.
+
+    Una lectura por respuesta (`almacenamiento.productos_atendidos_despues`),
+    igual de barata que la de `_la_reapertura`. **Si falla, el lado seguro no
+    es "vacío"**: un conjunto vacío diría "nada se atendió" y pintaría
+    "Corregir" en renglones que el `WHERE` de `_CORREGIR_LO_RECIBIDO` podría
+    rechazar. En su lugar se marcan como atendidos **todos** los `producto_id`
+    ya recibidos de esta lista —apaga el botón de los que sí importan, sin
+    inventar un tercer valor que el resto de la firma no espera— y se
+    registra el tipo de la falla (regla 5), nunca su texto. La lista se sigue
+    viendo.
+    """
+    try:
+        return almacenamiento.productos_atendidos_despues(
+            negocio, guardado.pedido_sugerido_id
+        )
+    except Exception:  # noqa: BLE001 — sin la respuesta, ningún botón de corregir
+        log.exception(
+            "No se pudo saber qué productos de la lista %s ya atendió una "
+            "lista posterior",
+            guardado.pedido_sugerido_id,
+        )
+        return frozenset(
+            r.propuesto.producto_id for r in guardado.renglones if r.esta_recibido
+        )
 
 
 def _la_reapertura(
@@ -2128,6 +2172,78 @@ class PiezasRecibidas(BaseModel):
     piezas: Any = None
 
 
+def _motivo_del_409_a_mano(
+    almacenamiento: AlmacenamientoDelPedido,
+    negocio: str,
+    antes: RenglonGuardado | None,
+    piezas: int,
+) -> dict:
+    """El motivo real del 409 de `recibir_a_mano`, no la adivinanza de antes.
+
+    Hasta el 2026-09-21 esto decidía con `antes.esta_recibido` y un texto
+    catch-all —"...o la cifra ya era ésa"— que era el mismo para "ya lo
+    atendió una lista posterior", "la cifra ya es ésa" y "el pedido ya no
+    está enviado". Ahora se re-lee lo que `transiciones.motivo_para_no_corregir`
+    y `transiciones.motivo_para_no_recibir_a_mano` necesitan y que `antes` —ya
+    leído antes de intentar el `UPDATE`— no trae: **su pedido**, y si una
+    lista posterior ya atendió su producto (ADR 0015). `antes.pedido_sugerido_id`
+    viene poblado porque `leer_renglon` usa `_LEER_RENGLON_POR_ID`.
+
+    Devuelve `{"detalle": ...}`, listo para mezclarse en el `content` del
+    409. Si esta segunda lectura también falla, se agrega `"que_hacer"`
+    —regla 4, ningún `ok: false` se queda sin decir qué hacer— con el TIPO de
+    la falla y nunca su texto (regla 5): la escritura ya falló, y este `try`
+    solo intenta explicar por qué, nunca reintenta nada.
+    """
+    if antes is None:
+        return {"detalle": motivo_para_no_recibir_a_mano(None, None)}
+    try:
+        pedido = None
+        if antes.pedido_id is not None and antes.pedido_sugerido_id is not None:
+            pedido = next(
+                (
+                    p
+                    for p in almacenamiento.pedidos_de_la_lista(
+                        negocio, antes.pedido_sugerido_id
+                    )
+                    if p.pedido_id == antes.pedido_id
+                ),
+                None,
+            )
+        if not antes.esta_recibido:
+            return {"detalle": motivo_para_no_recibir_a_mano(antes, pedido)}
+        atendido_despues = antes.pedido_sugerido_id is not None and (
+            antes.propuesto.producto_id
+            in almacenamiento.productos_atendidos_despues(
+                negocio, antes.pedido_sugerido_id
+            )
+        )
+        motivo = motivo_para_no_corregir(antes, pedido, atendido_despues, piezas)
+    except Exception as exc:  # noqa: BLE001 — sin el motivo real, se dice que no se pudo
+        log.exception(
+            "No se pudo leer por qué no se pudo recibir a mano el renglón %s",
+            antes.renglon_id,
+        )
+        return {
+            "detalle": (
+                "Esa cifra no se guardó, y no se pudo saber por qué "
+                f"({type(exc).__name__}). Vuelve a cargar la página."
+            ),
+            "que_hacer": _que_hacer(AL_LEER),
+        }
+    if motivo is None:
+        # El `WHERE` ya dijo que no; si la relectura dice que ahora sí se
+        # podría, alguien más cambió el renglón en el instante de en medio
+        # (la misma carrera que el ADR 0016 ya mide y acepta en otras rutas).
+        return {
+            "detalle": (
+                "Esa cifra ya no se pudo guardar: algo cambió en este renglón "
+                "justo antes. Vuelve a cargar la página para ver cómo quedó."
+            )
+        }
+    return {"detalle": motivo}
+
+
 @app.post("/api/renglon/{renglon_id}/recepcion/a-mano")
 def recibir_a_mano(
     renglon_id: int,
@@ -2186,20 +2302,11 @@ def recibir_a_mano(
             negocio,
             piezas,
         )
-        ya_recibido = antes is not None and antes.esta_recibido
         return JSONResponse(
             status_code=409,
             content={
                 "ok": False,
-                "detalle": (
-                    "Esa cifra ya no se puede corregir: lo que faltó ya se volvió a "
-                    "proponer en una lista posterior que se cerró, o el producto ya "
-                    "se volvió a pedir (o la cifra ya era ésa). Si llegó de más, "
-                    "descuéntalo en la lista de hoy. Vuelve a cargar la página."
-                    if ya_recibido
-                    else "Ese renglón no se puede recibir: no viene en camino. "
-                    "Vuelve a cargar la página para ver cómo quedó."
-                ),
+                **_motivo_del_409_a_mano(almacenamiento, negocio, antes, piezas),
             },
         )
 
@@ -3307,6 +3414,7 @@ def _como_json(
     aun_faltan: frozenset[int] | None = None,
     reapertura: dict | None = None,
     corrida_fallo: bool = False,
+    atendidos_despues: frozenset[int] = frozenset(),
 ) -> dict:
     """La lista guardada, como la pantalla la lee.
 
@@ -3347,6 +3455,15 @@ def _como_json(
     salir exactamente de la misma `Comparacion` que la fila enseña, o el día que
     una de las dos llamadas cambie de argumentos la pantalla y su resumen dirán
     cosas distintas sobre el mismo renglón.
+
+    `atendidos_despues` es el conjunto de `producto_id` que una lista
+    posterior ya atendió (`almacenamiento.productos_atendidos_despues`),
+    leído **una vez por respuesta y no una vez por renglón recibido** —quien
+    llama lo trae ya calculado, con su propio `try`/`except` (regla 4)—. De
+    ahí sale `se_puede_corregir` de cada renglón, con
+    `transiciones.motivo_para_no_corregir`. Por omisión, vacío: ningún
+    renglón se da por atendido, que es la misma cosa que decir "esta lectura
+    no se hizo" en las rutas que no la necesitan.
     """
     comparaciones = {
         r.renglon_id: comparar((precios or {}).get(r.renglon_id, ()), r.cantidad_a_pedir)
@@ -3408,6 +3525,7 @@ def _como_json(
                 umbral=umbral,
                 con_propuesta=con_propuesta,
                 aun_faltan=aun_faltan,
+                atendidos_despues=atendidos_despues,
             )
             for r in guardado.renglones
         ],
@@ -3771,6 +3889,7 @@ def _renglon_como_json(
     umbral: int | None = None,
     con_propuesta: frozenset[int] = frozenset(),
     aun_faltan: frozenset[int] | None = None,
+    atendidos_despues: frozenset[int] = frozenset(),
 ) -> dict:
     """Un renglón guardado, como la pantalla lo lee.
 
@@ -3824,12 +3943,23 @@ def _renglon_como_json(
         # arriba. De él cuelgan la marca, los controles apagados y el conteo.
         "esta_recibido": renglon.esta_recibido,
         "frase_de_lo_recibido": frase_de_lo_recibido(renglon),
-        # CUÁNTAS LLEGARON, Y CORREGIRLO (ticket 27). Un renglón de hoy que ya
-        # llegó se puede corregir —la segunda factura, un error de captura—:
-        # ninguna lista posterior lo ha atendido todavía. La garantía es el
-        # `WHERE` de `_CORREGIR_LO_RECIBIDO`.
+        # CUÁNTAS LLEGARON, Y CORREGIRLO (ticket 27, ADR 0015). Hasta el
+        # 2026-09-21 esta bandera era solo `renglon.esta_recibido`, sin mirar
+        # que el pedido siguiera `enviado` ni que ninguna lista posterior
+        # hubiera atendido el producto: pintaba "Corregir" en casos que el
+        # `WHERE` de `_CORREGIR_LO_RECIBIDO` iba a rechazar con un 409. Ahora
+        # es **la misma decisión**, con `transiciones.motivo_para_no_corregir`
+        # — `piezas=None` porque aquí se pregunta si se podría ofrecer
+        # corregir EN GENERAL, no si una cifra concreta se aceptaría.
         "piezas_recibidas": renglon.piezas_recibidas,
-        "se_puede_corregir": renglon.esta_recibido,
+        "se_puede_corregir": (
+            motivo_para_no_corregir(
+                renglon,
+                pedido,
+                renglon.propuesto.producto_id in atendidos_despues,
+            )
+            is None
+        ),
         "etiqueta_a_mano": ETIQUETA_PARA_CORREGIR if renglon.esta_recibido else None,
         # LO QUE FALTÓ Y ESTE RENGLÓN TRAE (ticket 27): sin la frase, "pide 6"
         # con 2 vendidas no se puede verificar. La cifra ya viene de `asdict`.

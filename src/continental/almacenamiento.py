@@ -698,6 +698,15 @@ class RenglonGuardado:
     #: `recibido` o `recibido parcial` —`ck_renglon_completo_o_parcial` los
     #: amarra— y cuánto faltó.
     piezas_recibidas: float | None = None
+    #: **A qué lista pertenece** (2026-09-21, propuesta 1 de la revisión de
+    #: arquitectura: `transiciones.py`). Al final y opcional a propósito, como
+    #: las columnas de los tickets 20, 22 y 25: `leer_renglon` la trae —es lo
+    #: que deja preguntar `productos_atendidos_despues` sobre un renglón
+    #: suelto, sin volver a leer la lista entera—, pero la lectura de la lista
+    #: completa (`_LEER_RENGLONES`) no la repite en cada fila porque quien
+    #: llama ya sabe de qué lista se trata (`PedidoSugeridoGuardado.
+    #: pedido_sugerido_id`). `None` ahí, nunca un dato inventado.
+    pedido_sugerido_id: int | None = None
 
     @property
     def esta_recibido_parcial(self) -> bool:
@@ -2926,6 +2935,27 @@ class AlmacenamientoDelPedido(Protocol):
         """
         ...
 
+    def productos_atendidos_despues(
+        self, negocio: str, pedido_sugerido_id: int
+    ) -> frozenset[int]:
+        """Qué `producto_id` de esta lista ya atendió una lista posterior (ADR 0015).
+
+        Es `_ATENDIDO_POR_UNA_LISTA_POSTERIOR` —el mismo `NOT EXISTS` de
+        `_CORREGIR_LO_RECIBIDO`— preguntado por lista entera y no renglón por
+        renglón: se cerró con el producto dentro, o lo volvió a atender —se le
+        volvió a pedir, llegó, o se canceló otra vez—. Sirve para que
+        `transiciones.motivo_para_no_corregir` y la bandera `se_puede_corregir`
+        del JSON pregunten **una vez por lista** y no una vez por renglón
+        recibido.
+
+        Solo lectura y **no la garantía**: el candado sigue siendo el `WHERE`
+        de `_CORREGIR_LO_RECIBIDO`. Un `producto_id` fuera del conjunto no
+        promete que corregir vaya a funcionar —el pedido pudo dejar de estar
+        `enviado`, o alguien pudo corregir la misma cifra un instante antes—,
+        solo que esta lectura no encontró la razón más común para negarlo.
+        """
+        ...
+
     def rechazar_la_recepcion(
         self, negocio: str, renglon_id: int, compras: Sequence[int], quien: str
     ) -> RenglonGuardado | None:
@@ -3988,10 +4018,38 @@ _RECIBIR_A_MANO = text(
 #     nadie ha pedido nada, y la ruta avisa que esa lista ya armada trae lo que
 #     faltó (lo que se muestra es lo guardado y no se recalcula, ADR 0012).
 #
+# YA LO ATENDIÓ UNA LISTA POSTERIOR (ADR 0015). **LA REGLA, ESCRITA UNA SOLA
+# VEZ** (2026-09-21, propuesta 1 de la revisión de arquitectura: `transiciones.
+# py`) — el mismo `not exists` que antes vivía solo dentro de
+# `_CORREGIR_LO_RECIBIDO`, ahora en su propio texto para que la sentencia que lo
+# hace cumplir (`_CORREGIR_LO_RECIBIDO`) y la lectura que lo pregunta por
+# adelantado (`_PRODUCTOS_ATENDIDOS_DESPUES`, con la que la pantalla decide si
+# pinta el botón de corregir) no puedan decir dos cosas distintas.
+#
+# En POSITIVO ("sí lo atendió"): una lista de fecha posterior **se cerró con el
+# producto dentro**, o **lo volvió a atender** —se le volvió a pedir, llegó, o
+# se canceló otra vez (`ESTADOS_QUE_ATIENDEN_EL_PRODUCTO`)—. Es el mismo
+# "atendido" de `_LO_YA_PEDIDO`, dicho sobre el renglón `r` y su lista `s` que
+# las dos sentencias que la usan declaran con esos alias.
+_ATENDIDO_POR_UNA_LISTA_POSTERIOR = """
+           exists (
+               select 1
+                 from pedidos.renglon as r2
+                 join pedidos.pedido_sugerido as s2
+                   on s2.pedido_sugerido_id = r2.pedido_sugerido_id
+                  and s2.negocio = r2.negocio
+                where r2.negocio = r.negocio
+                  and r2.producto_id = r.producto_id
+                  and s2.fecha_del_pedido > s.fecha_del_pedido
+                  and (s2.estado = 'cerrado'
+                       or r2.estado in ('en tránsito', 'recibido', 'recibido parcial')
+                       or r2.estado = 'cancelado'))
+"""
+
 # La firma se MUEVE: `recibido_por` es quien dijo la cifra que está guardada, que
 # es a quien se le pregunta cuando no cuadre. La de antes queda en la bitácora.
 _CORREGIR_LO_RECIBIDO = text(
-    """
+    f"""
     update pedidos.renglon as r
        set estado = case
                       when coalesce(r.cantidad_final, r.cantidad_propuesta) <= :piezas
@@ -4012,19 +4070,31 @@ _CORREGIR_LO_RECIBIDO = text(
        and p.estado = 'enviado'
        and s.pedido_sugerido_id = r.pedido_sugerido_id
        and s.negocio = r.negocio
-       and not exists (
-           select 1
-             from pedidos.renglon as r2
-             join pedidos.pedido_sugerido as s2
-               on s2.pedido_sugerido_id = r2.pedido_sugerido_id
-              and s2.negocio = r2.negocio
-            where r2.negocio = r.negocio
-              and r2.producto_id = r.producto_id
-              and s2.fecha_del_pedido > s.fecha_del_pedido
-              and (s2.estado = 'cerrado'
-                   or r2.estado in ('en tránsito', 'recibido', 'recibido parcial')
-                   or r2.estado = 'cancelado'))
+       and not ({_ATENDIDO_POR_UNA_LISTA_POSTERIOR})
     returning r.renglon_id, r.pedido_sugerido_id
+    """
+)
+
+# PRODUCTOS YA ATENDIDOS DESPUÉS, DE TODA UNA LISTA (2026-09-21, propuesta 1 de
+# la revisión de arquitectura). La misma pregunta que `_CORREGIR_LO_RECIBIDO`
+# hace por renglón, pero para todos los de una lista a la vez: con esto
+# `_como_json` la contesta **una vez por respuesta**, no una vez por renglón
+# recibido, y `app._renglon_como_json` solo pregunta si el `producto_id` de
+# cada renglón está en el conjunto que devuelve.
+#
+# Vacío no distingue "nada se atendió" de "esta lista no tiene nada recibido
+# que preguntar": quien llama solo la cruza contra renglones que sí están
+# `recibido` o `recibido parcial` (`RenglonGuardado.esta_recibido`).
+_PRODUCTOS_ATENDIDOS_DESPUES = text(
+    f"""
+    select distinct r.producto_id
+      from pedidos.renglon as r
+      join pedidos.pedido_sugerido as s
+        on s.pedido_sugerido_id = r.pedido_sugerido_id
+       and s.negocio = r.negocio
+     where s.negocio = :negocio
+       and s.pedido_sugerido_id = :pedido_sugerido_id
+       and ({_ATENDIDO_POR_UNA_LISTA_POSTERIOR})
     """
 )
 
@@ -5070,6 +5140,16 @@ class AlmacenamientoPostgres:
             )
         return None if fila is None else renglon_guardado_desde_columnas(fila)
 
+    def productos_atendidos_despues(
+        self, negocio: str, pedido_sugerido_id: int
+    ) -> frozenset[int]:
+        with self._motor().connect() as conexion:
+            filas = conexion.execute(
+                _PRODUCTOS_ATENDIDOS_DESPUES,
+                {"negocio": negocio, "pedido_sugerido_id": pedido_sugerido_id},
+            ).scalars().all()
+        return frozenset(int(p) for p in filas)
+
     def rechazar_la_recepcion(
         self, negocio: str, renglon_id: int, compras: Sequence[int], quien: str
     ) -> RenglonGuardado | None:
@@ -5276,6 +5356,14 @@ def renglon_guardado_desde_columnas(fila) -> RenglonGuardado:
             None
             if fila.get("piezas_recibidas") is None
             else float(fila["piezas_recibidas"])
+        ),
+        # Solo la trae `_LEER_RENGLON_POR_ID` y `_LO_YA_PEDIDO` (un renglón
+        # suelto); `_LEER_RENGLONES` no la repite por fila y aquí es `None`,
+        # que es correcto: quien lee la lista completa ya sabe de cuál es.
+        pedido_sugerido_id=(
+            None
+            if fila.get("pedido_sugerido_id") is None
+            else int(fila["pedido_sugerido_id"])
         ),
     )
 
