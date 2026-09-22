@@ -57,6 +57,7 @@ from continental.latido import (
     ESTADOS,
     LARGO_DEL_MENSAJE,
     VARIABLE_DEL_LATIDO,
+    VARIABLE_DEL_LATIDO_VERIFICAR,
     ResultadoDelLatido,
     armar_la_url,
     mandar_el_latido,
@@ -387,6 +388,57 @@ def test_el_nombre_de_la_variable_es_propio_y_esta_en_el_ejemplo():
     assert VARIABLE_DEL_LATIDO not in (
         raiz / "config" / "continental.yml"
     ).read_text(encoding="utf-8")
+
+
+def test_la_verificacion_diaria_tiene_su_propia_variable_y_no_la_del_lote():
+    """La misma casilla que arriba, para el segundo monitor propio.
+
+    Si `continental.verificar --latido` mandara por `KUMA_PUSH_URL_CONTINENTAL`
+    —la del lote—, una noche en la que los DATOS están rotos se vería idéntica
+    a una noche en la que el LOTE no trajo precios: el mismo monitor rojo por
+    dos problemas que se arreglan de maneras distintas. Ver
+    `VARIABLE_DEL_LATIDO_VERIFICAR`.
+    """
+    from pathlib import Path
+
+    raiz = Path(__file__).resolve().parent.parent
+    ejemplo = (raiz / ".env.example").read_text(encoding="utf-8")
+
+    assert VARIABLE_DEL_LATIDO_VERIFICAR == "KUMA_PUSH_URL_VERIFICAR"
+    assert VARIABLE_DEL_LATIDO_VERIFICAR != VARIABLE_DEL_LATIDO
+    assert VARIABLE_DEL_LATIDO_VERIFICAR in ejemplo
+    assert VARIABLE_DEL_LATIDO_VERIFICAR not in (
+        raiz / "config" / "continental.yml"
+    ).read_text(encoding="utf-8")
+
+
+def test_url_del_latido_pregunta_por_la_variable_que_se_le_diga(monkeypatch):
+    """Que `url_del_latido` deje de tener la variable del lote cableada
+    adentro es lo que permite que el mismo módulo sirva a los dos monitores."""
+    monkeypatch.delenv(VARIABLE_DEL_LATIDO, raising=False)
+    monkeypatch.setenv(VARIABLE_DEL_LATIDO_VERIFICAR, URL_FALSA)
+
+    assert url_del_latido(VARIABLE_DEL_LATIDO_VERIFICAR) == URL_FALSA
+    # Y sin decirlo, sigue preguntando por la del lote (el valor por omisión):
+    assert url_del_latido() is None
+
+
+def test_mandar_el_latido_pregunta_por_la_variable_propia_y_lo_avisa(caplog):
+    """`variable` decide tanto de dónde se lee la URL como qué nombre lleva el
+    WARNING cuando no está — las dos cosas, o el aviso mentiría sobre cuál
+    variable falta."""
+    with caplog.at_level("WARNING", logger="continental"):
+        resultado = mandar_el_latido(
+            estado=ARRIBA,
+            mensaje="x",
+            variable=VARIABLE_DEL_LATIDO_VERIFICAR,
+            pedir=lambda url: pytest.fail("no debía intentar una petición"),
+        )
+
+    assert resultado.se_omitio is True
+    assert VARIABLE_DEL_LATIDO_VERIFICAR in resultado.motivo
+    assert VARIABLE_DEL_LATIDO_VERIFICAR in caplog.text
+    assert VARIABLE_DEL_LATIDO not in caplog.text
 
 
 # =========================================================================

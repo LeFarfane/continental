@@ -1,10 +1,16 @@
 """Invariantes sobre los datos REALES de Continental. **Señala y no repara.**
 
     python -m continental.verificar
+    python -m continental.verificar --latido
 
 Sale con código distinto de cero si algo falla, y dice **todo** lo que falla,
 junto y con el comando con el que se arregla cada cosa. Corre como último paso
-de `scripts/desplegar.sh`, sin que nadie tenga que acordarse.
+de `scripts/desplegar.sh`, sin que nadie tenga que acordarse, y **una vez al
+día por su cuenta** con `--latido` (`continental-verificar.timer`): si nadie
+despliega en varios días, un invariante roto se queda sin que nadie lo mire
+hasta el próximo despliegue, y este timer es lo que cierra ese hueco. `--latido`
+solo AGREGA un latido a Uptime Kuma al final (`enviar_latido`, monitor propio:
+`KUMA_PUSH_URL_VERIFICAR`); no cambia qué se revisa ni el código de salida.
 
 ## Por qué existe, si ya hay 525 pruebas en verde
 
@@ -65,7 +71,9 @@ que se imprime, pero pasa antes por `redactar`, una vez y en el borde.
 from __future__ import annotations
 
 import argparse
+import logging
 import re
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -113,6 +121,8 @@ from continental.informe import (
 
 RAIZ = Path(__file__).resolve().parents[2]
 CREAR_ROL = RAIZ / "sql" / "crear_rol.sql"
+
+log = logging.getLogger("continental")
 
 #: El estado del glosario, escrito **una vez** y usado tanto por el `WHERE` de
 #: la recolección como por la mitad pura. Separarlos es cómo un día la consulta
@@ -649,6 +659,35 @@ def revisar_permisos(esquema: str, lecturas: Sequence[LecturaDeTabla]) -> Inform
     )
 
 
+def mensaje_para_el_latido(informe: Informe) -> str:
+    """Una línea para Kuma. **Función pura.** Sin comandos y sin el texto de
+    una excepción (regla 5): cada `resumen` de una `FALLA` ya pasó por
+    `redactar` en la recolección, así que unirlos es seguro.
+
+    La misma idea que `forma.mensaje_para_el_latido`, y a propósito no la
+    misma función: ésta cuenta pendientes en la línea de "todo en orden" —algo
+    que `forma.py` no tiene, porque columnas de más no son un pendiente ahí—
+    y la de `forma.py` solo conoce fallas de forma, no de datos. Compartir una
+    sola función entre las dos obligaría a una a saber del vocabulario de la
+    otra.
+    """
+    fallas = informe.fallas
+    if not fallas:
+        pendientes = len(informe.pendientes)
+        extra = (
+            f", {_plural(pendientes, 'pendiente', 'pendientes')}"
+            if pendientes
+            else ""
+        )
+        return (
+            f"{_plural(len(informe.resultados), 'comprobación', 'comprobaciones')} "
+            f"en orden{extra}"
+        )
+    return "los invariantes de producción fallan: " + "; ".join(
+        r.resumen for r in fallas
+    )
+
+
 # ==========================================================================
 # MITAD DE RECOLECCIÓN — aquí sí se lee de Postgres. Esto NO se prueba.
 # ==========================================================================
@@ -891,6 +930,59 @@ def correr() -> Informe:
     )
 
 
+# ==========================================================================
+# `--latido` — la verificación diaria SEÑALA a Kuma, nunca decide con eso
+# ==========================================================================
+#
+# `continental-verificar.timer` corre esto una vez al día (ver
+# docs/despliegue-en-atlas.md, parte D, y el ADR 0017). Su monitor es PROPIO
+# —`KUMA_PUSH_URL_VERIFICAR`, `VARIABLE_DEL_LATIDO_VERIFICAR`— y no el del
+# lote: los dos vigilan preguntas distintas y un monitor compartido confunde
+# "los datos están rotos" con "no se trajeron precios".
+
+
+def enviar_latido(
+    informe: Informe,
+    *,
+    segundos: float = 0.0,
+    latir=None,
+) -> None:
+    """Manda el veredicto de `informe` a Kuma. **Nunca cambia el código de
+    salida**: el latido señala, no decide (regla 4 — falla ruidoso, nunca en
+    silencio — y regla 5 — nunca el texto de una excepción).
+
+    `arriba` si no hay ninguna `FALLA` (un informe con solo `PENDIENTE` late
+    arriba: un pendiente no es un dato roto, es una columna que llega con otro
+    ticket). `abajo` con el resumen corto de cada falla si las hay — nunca el
+    texto de una excepción, porque cada `resumen` ya pasó por `redactar`.
+
+    `latir` entra por argumento por la misma razón que en todo este repo:
+    ninguna prueba manda un latido de verdad. Por omisión es
+    `latido.mandar_el_latido`, que **ya no levanta nunca por su cuenta** —pero
+    aquí hay otro `try` igual que en `forma.antes_del_lote` y en el `finally`
+    del lote: quien se llama es `latir`, que puede ser un doble mal escrito, y
+    un latido perdido no puede llevarse por delante el código de salida que ya
+    se calculó.
+    """
+    from continental.latido import ABAJO, ARRIBA, VARIABLE_DEL_LATIDO_VERIFICAR
+
+    if latir is None:
+        from continental.latido import mandar_el_latido as latir
+
+    estado = ABAJO if informe.fallas else ARRIBA
+    try:
+        latir(
+            estado=estado,
+            mensaje=mensaje_para_el_latido(informe),
+            segundos=segundos,
+            variable=VARIABLE_DEL_LATIDO_VERIFICAR,
+        )
+    except Exception as exc:  # noqa: BLE001 — un latido perdido no cambia el veredicto
+        # El TIPO y nunca el texto (regla 5): el texto de un error de httpx
+        # trae la URL completa, y la URL completa ES el token del monitor.
+        log.warning("El latido a Uptime Kuma levantó (%s).", type(exc).__name__)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Imprime el informe entero y devuelve el código de salida.
 
@@ -914,13 +1006,32 @@ def main(argv: list[str] | None = None) -> int:
             "del reinicio (ADR 0017)."
         ),
     )
-    if parseador.parse_args(argv).forma:
+    parseador.add_argument(
+        "--latido",
+        action="store_true",
+        help=(
+            "Manda el veredicto de esta corrida a Uptime Kuma: arriba si no hay "
+            "ninguna FALLA (un pendiente no cuenta), abajo con el resumen corto "
+            "de cada falla si las hay. Monitor propio, distinto del lote: "
+            "KUMA_PUSH_URL_VERIFICAR en .env. Si la variable no está puesta, la "
+            "corrida sigue igual y lo dice a viva voz en el journal — nunca en "
+            "silencio (regla 4). Pensado para continental-verificar.timer, una "
+            "vez al día; no bloquea nada."
+        ),
+    )
+    argumentos = parseador.parse_args(argv)
+
+    inicio = time.monotonic()
+    if argumentos.forma:
         informe = forma.correr()
         print(informe.como_texto(forma.TITULO))
-        return informe.codigo_de_salida
+    else:
+        informe = correr()
+        print(informe.como_texto())
 
-    informe = correr()
-    print(informe.como_texto())
+    if argumentos.latido:
+        enviar_latido(informe, segundos=time.monotonic() - inicio)
+
     return informe.codigo_de_salida
 
 

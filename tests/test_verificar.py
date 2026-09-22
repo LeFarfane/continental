@@ -125,6 +125,7 @@ PURAS = (
     "revisar_pedidos_enviados",
     "revisar_clase_abc",
     "revisar_permisos",
+    "mensaje_para_el_latido",
 )
 
 #: Lo que una función pura no puede nombrar. `now` y `today` están porque un
@@ -769,3 +770,220 @@ def test_el_nombre_de_la_columna_sale_del_almacen_y_no_esta_copiado():
 
     assert v.COLUMNAS_QUE_EXIGE_EL_ORDEN == (almacen.COLUMNA_DE_LA_CLASE_ABC,)
     assert almacen.COLUMNA_DE_LA_CLASE_ABC == "clase_abc"
+
+
+# ==========================================================================
+# `--latido` — la verificación diaria manda su veredicto a Kuma, en su propio
+# monitor (continental-verificar.timer, docs/despliegue-en-atlas.md parte D).
+# ==========================================================================
+#
+# Ninguna prueba de este archivo manda un latido de verdad: `latir` entra por
+# argumento, igual que en `tests/test_forma.py` y `tests/test_latido.py`.
+
+
+class _Latidos:
+    """El mismo doble que usa `tests/test_forma.py`, para el mismo propósito:
+    que `enviar_latido` se pueda probar sin tocar la red."""
+
+    def __init__(self, levanta=None):
+        self.llamadas: list[dict] = []
+        self._levanta = levanta
+
+    def __call__(self, **kw):
+        self.llamadas.append(kw)
+        if self._levanta:
+            raise self._levanta
+
+
+def _informe_en_orden() -> v.Informe:
+    return v.revisar_sugeridos_abiertos([])
+
+
+def _informe_pendiente() -> v.Informe:
+    return v._pendiente(
+        "el lote nocturno puede ordenar por clase ABC",
+        "pendiente: de mentira",
+        "detalle de mentira",
+    )
+
+
+def _informe_con_falla() -> v.Informe:
+    return v.revisar_transito_con_pedido([_renglon(1, estado=v.EN_TRANSITO)])
+
+
+# --------------------------------------------------------------------------
+# mensaje_para_el_latido — pura
+# --------------------------------------------------------------------------
+
+
+def test_mensaje_del_latido_sin_fallas_ni_pendientes():
+    mensaje = v.mensaje_para_el_latido(_informe_en_orden())
+
+    assert mensaje == "1 comprobación en orden"
+
+
+def test_mensaje_del_latido_cuenta_los_pendientes_sin_fallar():
+    informe = _informe_en_orden() + _informe_pendiente()
+
+    mensaje = v.mensaje_para_el_latido(informe)
+
+    assert "en orden" in mensaje
+    assert "1 pendiente" in mensaje
+
+
+def test_mensaje_del_latido_con_falla_trae_el_resumen_y_no_el_detalle():
+    informe = _informe_con_falla()
+    (falla,) = informe.fallas
+
+    mensaje = v.mensaje_para_el_latido(informe)
+
+    assert falla.resumen in mensaje
+    assert "en tránsito sin pedido" in mensaje
+    # El DETALLE trae el párrafo entero con el comando de reparación; el
+    # mensaje del latido no tiene por qué llevarlo — es el resumen corto.
+    assert "OJO" not in mensaje, "se coló el detalle largo, no solo el resumen"
+
+
+def test_mensaje_del_latido_nunca_lleva_texto_de_excepcion():
+    """Regla 5, comprobada sobre el propio código y no de palabra: ni
+    `str(exc)` ni una f-string con `{exc}` adentro de la función."""
+    definiciones = _definiciones()
+    cuerpo = ast.unparse(definiciones["mensaje_para_el_latido"])
+
+    assert "str(exc)" not in cuerpo
+    assert "{exc}" not in cuerpo
+
+
+# --------------------------------------------------------------------------
+# enviar_latido — recolección, con un `latir` de mentira
+# --------------------------------------------------------------------------
+
+
+def test_enviar_latido_con_todo_en_orden_manda_arriba():
+    latir = _Latidos()
+
+    v.enviar_latido(_informe_en_orden(), segundos=12.5, latir=latir)
+
+    (llamada,) = latir.llamadas
+    assert llamada["estado"] == "up"
+    assert llamada["segundos"] == 12.5
+    assert llamada["variable"] == "KUMA_PUSH_URL_VERIFICAR"
+
+
+def test_enviar_latido_con_solo_pendientes_manda_arriba():
+    """Un pendiente no es un dato roto: es una columna que llega con otro
+    ticket, y por eso `codigo_de_salida` tampoco cuenta con él."""
+    informe = _informe_en_orden() + _informe_pendiente()
+    latir = _Latidos()
+
+    v.enviar_latido(informe, latir=latir)
+
+    assert latir.llamadas[0]["estado"] == "up"
+
+
+def test_enviar_latido_con_una_falla_manda_abajo_con_el_resumen():
+    latir = _Latidos()
+
+    v.enviar_latido(_informe_con_falla(), latir=latir)
+
+    (llamada,) = latir.llamadas
+    assert llamada["estado"] == "down"
+    assert "en tránsito sin pedido" in llamada["mensaje"]
+
+
+def test_enviar_latido_usa_el_monitor_propio_y_no_el_del_lote():
+    """La casilla entera: un monitor DISTINTO del que usa el lote, para que
+    una verificación rota no se confunda con un lote que no trajo precios."""
+    from continental.latido import VARIABLE_DEL_LATIDO, VARIABLE_DEL_LATIDO_VERIFICAR
+
+    latir = _Latidos()
+
+    v.enviar_latido(_informe_en_orden(), latir=latir)
+
+    assert latir.llamadas[0]["variable"] == VARIABLE_DEL_LATIDO_VERIFICAR
+    assert VARIABLE_DEL_LATIDO_VERIFICAR != VARIABLE_DEL_LATIDO
+
+
+def test_un_latido_que_levanta_no_cambia_nada_mas():
+    """`enviar_latido` no tiene código de salida propio que perder, pero la
+    garantía es la misma que en `forma.antes_del_lote`: un doble mal escrito
+    no puede levantar fuera de la función."""
+    latir = _Latidos(levanta=RuntimeError("kaboom"))
+
+    v.enviar_latido(_informe_con_falla(), latir=latir)  # no debe levantar
+
+
+def test_sin_latir_usa_mandar_el_latido_de_verdad_y_no_manda_nada_sin_url(
+    monkeypatch, caplog
+):
+    """Sin doble, `enviar_latido` cae en `latido.mandar_el_latido` de verdad.
+    Sin `KUMA_PUSH_URL_VERIFICAR` en el entorno, no intenta una petición HTTP
+    —lo comprueba que la prueba no tenga red— y lo dice en voz alta."""
+    monkeypatch.delenv("KUMA_PUSH_URL_VERIFICAR", raising=False)
+    monkeypatch.delenv("KUMA_PUSH_URL_CONTINENTAL", raising=False)
+
+    with caplog.at_level("WARNING", logger="continental"):
+        v.enviar_latido(_informe_en_orden())
+
+    assert "KUMA_PUSH_URL_VERIFICAR" in caplog.text
+    assert "NO se mandó latido" in caplog.text
+
+
+# --------------------------------------------------------------------------
+# main(["--latido"]) — que la CLI de verdad llame a enviar_latido
+# --------------------------------------------------------------------------
+
+
+def test_main_sin_latido_no_manda_nada(monkeypatch):
+    monkeypatch.setattr(v, "correr", lambda: _informe_en_orden())
+    monkeypatch.setattr(
+        v, "enviar_latido", lambda *a, **k: pytest.fail("no debía llamarse")
+    )
+
+    assert v.main([]) == 0
+
+
+def test_main_con_latido_manda_el_informe_completo(monkeypatch):
+    llamadas = []
+    monkeypatch.setattr(v, "correr", lambda: _informe_con_falla())
+    monkeypatch.setattr(
+        v, "enviar_latido", lambda informe, **k: llamadas.append((informe, k))
+    )
+
+    codigo = v.main(["--latido"])
+
+    assert codigo == 1  # el latido no cambia el código de salida
+    assert len(llamadas) == 1
+    informe, extra = llamadas[0]
+    assert informe.fallas
+    assert extra["segundos"] >= 0.0
+
+
+def test_main_con_forma_y_latido_manda_el_informe_de_la_forma(monkeypatch):
+    from continental import forma as f
+
+    llamadas = []
+    monkeypatch.setattr(f, "correr", lambda: _informe_en_orden())
+    monkeypatch.setattr(v, "correr", lambda: pytest.fail("corrió los invariantes"))
+    monkeypatch.setattr(
+        v, "enviar_latido", lambda informe, **k: llamadas.append(informe)
+    )
+
+    codigo = v.main(["--forma", "--latido"])
+
+    assert codigo == 0
+    assert len(llamadas) == 1
+
+
+def test_latido_es_opcional_y_no_cambia_el_texto_impreso(monkeypatch, capsys):
+    """`--latido` solo AGREGA el latido; lo que se imprime en la terminal no
+    cambia — es la misma garantía que el docstring del módulo promete."""
+    monkeypatch.setattr(v, "correr", lambda: _informe_en_orden())
+    monkeypatch.setattr(v, "enviar_latido", lambda *a, **k: None)
+
+    v.main([])
+    sin_latido = capsys.readouterr().out
+    v.main(["--latido"])
+    con_latido = capsys.readouterr().out
+
+    assert sin_latido == con_latido

@@ -1,0 +1,105 @@
+# Cuándo corre la verificación diaria de los datos de producción (ADR 0017).
+#
+#   sudo systemctl enable --now continental-verificar.timer
+#   systemctl list-timers continental-verificar.timer
+#
+# ====================================================================
+#  LA HORA, QUE ES LA ÚNICA DECISIÓN DE ESTE ARCHIVO
+# ====================================================================
+#
+# TODOS LOS DÍAS, y no lun-vie como el lote. La razón entera de este timer es
+# que un invariante roto no se quede sin que nadie lo mire mientras nadie
+# despliega (ver la cabecera de continental-verificar.service): eso puede
+# pasar cualquier día de la semana, no solo los que la cadena de
+# farmacia-data corre. Y aunque sábado y domingo la base de `pedidos` no
+# cambie -no hay cadena, no hay lote-, el latido diario de todos modos vale:
+# es la prueba de que el timer sigue vivo y de que el rol sigue pudiendo leer
+# lo que tiene que leer.
+#
+# 23:30, por DOS razones que hay que cumplir juntas:
+#
+# 1. DESPUÉS DE QUE LA CADENA TERMINE DE VERDAD, no solo de que empiece. La
+#    cadena de farmacia-data (`farmacia-diario.timer`, lun-vie 20:30) hace
+#    `dbt build` con sus 124 pruebas, y CADA `dbt build` RECREA LOS MODELOS DE
+#    `marts` Y SE LLEVA LOS PERMISOS POR DELANTE (src/continental/verificar.py
+#    lo mide contra Marlowe, 2026-09-06). Si esta verificación cayera
+#    DENTRO de esa ventana, un `SELECT 1` sobre una tabla que `dbt` está
+#    recreando en ese instante contestaría "permission denied" o "no existe"
+#    de forma TRANSITORIA, y el latido mandaría un `down` falso sobre una
+#    base que en realidad está sana -justo el ruido que un monitor no se
+#    puede permitir (ver docs/despliegue-en-atlas.md, parte D, sobre por qué
+#    un rojo que no significa nada enseña a ignorar el rojo). El mismo
+#    colchón de 90 minutos que `continental-lote.timer` ya midió y razonó
+#    para este mismo riesgo (ADR 0006) es el que se reutiliza aquí: 20:30 + 90
+#    min = 22:00 como piso.
+#
+# 2. SIN CHOCAR CON EL LOTE. `continental-lote.timer` dispara a las 22:00
+#    lun-vie y su unidad tiene `TimeoutStartSec=75min`, así que en el peor
+#    caso sigue vivo hasta las 23:15. Poner la verificación exactamente a las
+#    22:00 sería correr dos procesos de Continental a la vez sobre el mismo
+#    almacén y la misma máquina -nada prohíbe que Postgres atienda a los dos,
+#    pero es una complicación que no aporta nada, y confundiría cualquier
+#    lectura del journal de esa franja-. 23:30 deja QUINCE MINUTOS de margen
+#    después del peor caso del lote.
+#
+# Las dos cuentas dan el mismo resultado por casualidad (22:00 alcanzaría por
+# la cuenta 1) y por eso se sube hasta 23:30: es lo que hace falta para
+# cumplir la cuenta 2, y sigue sobrando colchón de sobra para la 1.
+#
+# FUERA DE HORARIO DE OPERACIÓN, que es la otra cara de la regla 1 de
+# farmacia-data/CLAUDE.md ("nunca una consulta pesada sobre producción en
+# horario de operación"). Las lecturas de esta corrida NO son pesadas -ver la
+# cabecera de continental-verificar.service, una decena de `SELECT 1 LIMIT 1`
+# y unas pocas filas de las tablas propias de `pedidos`- y de hecho el paso
+# 7/7 de `scripts/desplegar.sh` ya corre EXACTAMENTE ESTO a cualquier hora del
+# día, en cada despliegue, sin que eso sea un problema. Aun así, 23:30 cae
+# bien entrada la noche, lejos de cualquier hora de mostrador, que es la
+# postura más conservadora y la que no obliga a defender caso por caso que
+# "esta lectura sí es lo bastante ligera".
+#
+# >>> SI SE MUEVE LA CADENA, HAY QUE REVISAR ESTO TAMBIÉN. <<<
+#
+# Igual que avisa continental-lote.timer: el hilo abierto 5 de HANDOVER.md y
+# el ADR 0017 de farmacia-data -en estado PROPUESTA, lo decide el dueño-. Si
+# el respaldo de SICAR se mueve a las ~20:15, la cadena se mueve a las 21:00,
+# el lote de Continental se mueve a las 22:30 (continental-lote.timer) y esto
+# entonces sube a las 23:45 -mismo colchón de 90 min sobre la cadena, mismos
+# quince minutos sobre el peor caso del lote-. Moverla a ella y no a esto
+# dejaría una ventana en la que esta verificación puede leer `marts` a medio
+# recrear y mandar un `down` que no significa nada.
+
+[Unit]
+Description=Dispara la verificación diaria de los datos de producción de Continental
+Documentation=file:///home/eddie/proyectos/Continental/docs/decisiones/0017-el-despliegue-mira-la-forma-de-la-base-antes-de-reiniciar.md
+Documentation=file:///home/eddie/proyectos/Continental/docs/despliegue-en-atlas.md
+
+[Timer]
+OnCalendar=*-*-* 23:30:00
+Unit=continental-verificar.service
+
+# Un minuto de holgura, lo mismo que continental-lote.timer y por la misma
+# razón: lo que importa es estar después de la cadena y del lote, no el
+# segundo exacto.
+AccuracySec=1min
+
+# SIN RandomizedDelaySec, por lo mismo que el lote: aquí hay una sola máquina
+# y nada por lo que dispersar el arranque.
+
+# CON Persistent=true, Y AQUÍ SÍ -al revés que continental-lote.timer, y a
+# propósito-. La razón por la que el lote NO lo lleva es que un atlas que
+# arrancara a media mañana dispararía CUATRO NAVEGADORES contra los portales
+# del dueño en horario de mostrador (ADR 0006): un costo real, hacia afuera,
+# contra terceros. Esta corrida no tiene ese costo: son lecturas de Postgres
+# y un latido HTTP a un contenedor local, la misma clase de trabajo que el
+# paso 7/7 de `desplegar.sh` ya hace a cualquier hora sin que nadie se lo
+# cuestione. Y perderse un día completo de verificación -si atlas estuvo
+# apagado toda la noche y `Persistent` no estuviera- es exactamente el hueco
+# que este timer existe para cerrar: la idea entera es que un invariante roto
+# no se quede sin avisar durante días. Con `Persistent=true`, si atlas estuvo
+# apagado a las 23:30, la verificación corre en cuanto el sistema arranca -sin
+# esperar al día siguiente-, y de ahí en adelante vuelve a caer a las 23:30.
+
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -143,3 +143,100 @@ dos veces, a mano, con las mismas palabras— pasa a ser `COMANDO_FORMA`, una
 constante de `informe.py` que los dos citan. La conducta pública de
 `python -m continental.verificar`, con o sin `--forma`, no cambió: mismo
 texto, mismo código de salida.
+
+## Enmienda 2026-09-21: verificación diaria
+
+**El hueco que quedaba.** `continental.verificar` —la corrida completa, forma
+más invariantes de datos— solo corría en dos momentos: a mano, o como paso 7/7
+de `scripts/desplegar.sh`. Los dos dependen de que **alguien despliegue**. Si
+pasan varios días sin un `git push` —y nada obliga a que los haya todos los
+días—, un invariante que se rompió (una migración a medias corrida a mano por
+fuera del flujo normal, un GRANT que `dbt build` se llevó por delante, dos
+listas abiertas el mismo día por un dato capturado a mano) se queda sin que
+nadie lo mire hasta el próximo despliegue. El propio texto del módulo ya lo
+decía sin sacar la consecuencia: *"pytest dice que el código hace lo que dice;
+esto dice que los datos de producción están sanos"* — y "esto" solo corría
+cuando el código cambiaba, no cuando los datos podían haber cambiado solos.
+
+**La decisión.** Un timer de systemd, `continental-verificar.timer`, que
+dispara `continental-verificar.service` (`Type=oneshot`) **todos los días**
+—no solo lun-vie, porque un dato se puede romper cualquier día de la semana,
+no solo los que corre la cadena de farmacia-data— y ejecuta
+`python -m continental.verificar --latido`: la misma verificación completa de
+siempre, con una única adición, `--latido`, que manda el veredicto a un
+**segundo monitor propio** de Uptime Kuma
+(`KUMA_PUSH_URL_VERIFICAR`/`VARIABLE_DEL_LATIDO_VERIFICAR` en
+`src/continental/latido.py`, distinto del que ya tenía el lote,
+`KUMA_PUSH_URL_CONTINENTAL`). Un monitor compartido con el lote confundiría
+"los datos están rotos" con "el lote no trajo precios", que son dos preguntas
+distintas con reparaciones distintas — la misma razón, aplicada otra vez, por
+la que el ticket 19 le dio monitor propio al lote frente a los de
+farmacia-data y Marlowe.
+
+**Solo señala, nunca bloquea.** Este timer no reinicia `continental-web.service`,
+no toca el lote y no repara un solo dato: es exactamente la misma regla que ya
+regía el paso 7/7 de `desplegar.sh` (*"señala y no repara"*, y *"un dato roto
+no tiene por qué impedir que un código bueno llegue"*), aplicada ahora a una
+corrida que no depende de que nadie despliegue nada.
+
+**La hora: 23:30, todos los días.** Dos colchones, razonados enteros en
+`scripts/systemd/continental-verificar.timer`:
+
+- **90 minutos después de la cadena de las 20:30** —el mismo colchón que el
+  ADR 0006 ya midió y justificó para el lote—, porque `dbt build` recrea los
+  modelos de `marts` y **se lleva los permisos por delante** en cada corrida:
+  una lectura de esta verificación en medio de esa ventana vería
+  `permission denied` de forma transitoria y mandaría un `down` falso sobre
+  una base que en realidad está sana. Eso pone el piso en las 22:00.
+- **Después del peor caso del lote**, que dispara a las 22:00 lun-vie y puede
+  seguir vivo hasta las 23:15 (`TimeoutStartSec=75min`). No hay un motivo
+  técnico fuerte para que las dos corridas no puedan convivir —esta
+  verificación solo lee y el lote solo habla con Doyle y escribe sus propias
+  filas—, pero evitar la coincidencia evita tener que defender esa afirmación
+  cada vez que alguien mire el journal de esa franja.
+
+23:30 cumple las dos cuentas con margen (quince minutos sobre el peor caso del
+lote) y cae bien fuera del horario de mostrador de la farmacia, que es la otra
+cara de la regla de farmacia-data *"nunca una consulta pesada sobre producción
+en horario de operación"*. **Dicho con todas sus letras, porque importa para
+lo que sigue: lo que corre aquí no es pesado.** `continental.verificar` hace
+una decena de `SELECT 1 ... LIMIT 1` y unas pocas lecturas de las tablas
+propias de `pedidos` —pequeñas, no las ~460 mil filas de farmacia-data—, y el
+paso 7/7 de `desplegar.sh` ya ejecuta exactamente esto mismo en cada
+despliegue, a cualquier hora del día, sin que eso haya sido nunca un problema.
+Correrlo de madrugada es la postura conservadora, no una que haga falta
+defender caso por caso.
+
+**`Persistent=true`, al revés que el lote, y a propósito.** El ADR 0006 dejó
+al lote sin `Persistent` porque un atlas que arrancara a media mañana
+dispararía cuatro navegadores contra los portales del dueño en horario de
+mostrador: un costo real, hacia afuera, contra terceros. Esta corrida no tiene
+ese costo — son lecturas de Postgres y un latido HTTP a un contenedor local —,
+así que perderse un día entero de verificación por un atlas apagado a las
+23:30 es exactamente el hueco que este timer existe para cerrar, y protegerlo
+con la misma decisión que el lote habría sido copiar la forma sin copiar la
+razón.
+
+**Qué NO se decidió aquí.** Si algún día la verificación se vuelve más pesada
+—por ejemplo si crece a mirar `EXPLAIN` de cada sentencia, la alternativa F
+que este mismo ADR dejó para después— la hora y el `Persistent=true` hay que
+revisarlos con los mismos ojos con que se revisó el lote: puede que a esa
+verificación más pesada sí le convenga negarse a correr fuera de su ventana.
+Hoy no le convenía inventarse esa restricción sobre un trabajo que tarda
+segundos.
+
+**Consecuencias.**
+
+- `desplegar.sh` **no instala ni refresca** `continental-verificar.{service,timer}`,
+  el mismo trato que ya recibía la unidad del lote: el script despliega
+  código, no unidades de systemd. Instalarlas es un paso de dueño, documentado
+  en `docs/despliegue-en-atlas.md`, parte A.9.
+- El código que la unidad ejecuta llega solo con cada `git pull`, sin
+  reinstalar nada: `Type=oneshot` arranca un proceso nuevo en cada disparo.
+- `.env.example` gana `KUMA_PUSH_URL_VERIFICAR`, vacía y comentada, con la
+  misma frontera que ya separaba `WAREHOUSE_URL` y `KUMA_PUSH_URL_CONTINENTAL`
+  del YAML versionado: el token es un secreto y vive solo en `.env`.
+- `src/continental/latido.py` deja de tener la variable del monitor cableada:
+  `url_del_latido` y `mandar_el_latido` reciben `variable` por argumento, con
+  el valor de siempre como omisión, para poder servir a los dos monitores sin
+  que uno tenga que conocer el nombre del otro.

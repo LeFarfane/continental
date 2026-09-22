@@ -1,0 +1,154 @@
+# La verificación diaria de los datos de producción de Continental (ADR 0017).
+#
+# Es un TRABAJO DE UNA CORRIDA, no un servicio persistente: corre, revisa,
+# manda su latido y se muere. Lo mismo que continental-lote.service y que
+# farmacia-diario.service en farmacia-data, y lo contrario de
+# continental-web.service, que está vivo todo el día.
+# Quien lo dispara es continental-verificar.timer, que está al lado.
+#
+# POR QUÉ EXISTE, si `scripts/desplegar.sh` ya corre `continental.verificar`
+# en su paso 7/7: ese paso solo se ejecuta cuando ALGUIEN DESPLIEGA. Si nadie
+# despliega durante varios días -y no hay ninguna obligación de hacerlo todos
+# los días-, un invariante que se rompió (una migración a medias, un permiso
+# que `dbt build` se llevó por delante, dos listas abiertas el mismo día) se
+# queda sin que nadie lo mire hasta el próximo despliegue. Este timer es lo
+# que cierra ese hueco: corre TODOS los días, deploy o no, y le avisa al
+# dueño por Kuma en vez de esperar a que alguien lo note en la pantalla.
+#
+# SOLO SEÑALA, NUNCA BLOQUEA NADA (regla 4 de CLAUDE.md, y la misma idea que
+# el paso 7 de desplegar.sh): no reinicia continental-web.service, no toca el
+# lote y no repara un solo dato. Lo único que hace es correr
+# `python -m continental.verificar --latido` -la corrida COMPLETA, forma +
+# invariantes de datos- y mandar el veredicto a su propio monitor de Kuma.
+#
+# Instalación (en atlas, con el repo ya clonado en ~/proyectos/Continental):
+#   sudo cp scripts/systemd/continental-verificar.service /etc/systemd/system/
+#   sudo cp scripts/systemd/continental-verificar.timer   /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemd-analyze verify continental-verificar.service   # que no calle nada
+#   sudo systemctl enable --now continental-verificar.timer
+#
+# OJO: se habilita el TIMER, no el servicio. `enable` sobre el servicio no
+# hace nada útil aquí -no tiene [Install] con WantedBy=multi-user.target a
+# propósito- y dejaría la verificación diaria sin disparar sin un solo error
+# que ver. Es el mismo trato que continental-lote.service.
+#
+# Ver cómo le fue anoche -AQUÍ VIVE LA BITÁCORA DE LA CORRIDA-:
+#   journalctl -u continental-verificar -n 200 --no-pager
+#   systemctl list-timers continental-verificar.timer
+#
+# Correrla a mano, sin esperar a la noche:
+#   sudo systemctl start continental-verificar.service
+#   cd ~/proyectos/Continental && PYTHONPATH=src .venv/bin/python \
+#       -m continental.verificar --latido
+
+[Unit]
+Description=Continental: verificación diaria de los datos de producción (forma + invariantes)
+Documentation=file:///home/eddie/proyectos/Continental/docs/decisiones/0017-el-despliegue-mira-la-forma-de-la-base-antes-de-reiniciar.md
+Documentation=file:///home/eddie/proyectos/Continental/docs/despliegue-en-atlas.md
+
+# LAS DEPENDENCIAS, y por qué son estas y no más:
+#
+# - `docker.service` es REQUISITO DURO: el almacén (`farmacia_warehouse`,
+#   postgres:16) corre en Docker, y sin él no hay nada que verificar.
+#
+# - NI DOYLE NI MARLOWE son dependencia, ni dura ni blanda: esta corrida no
+#   les habla a ninguno de los dos. Lee Postgres con el rol `continental` y
+#   manda un latido HTTP a Kuma (loopback), nada más.
+#
+# - `farmacia-diario.service` (la cadena de las 20:30 de farmacia-data)
+#   TAMPOCO es dependencia, por la misma razón escrita en
+#   continental-lote.service: `After=` solo ordena unidades que arrancan en
+#   la MISMA transacción de systemd, y estas dos las disparan timers
+#   distintos a horas distintas. Lo que de verdad separa a las dos es la hora
+#   del timer, con su colchón, y está razonado en continental-verificar.timer.
+#
+# - `continental-lote.service` TAMPOCO es dependencia: la verificación no
+#   necesita que el lote haya corrido -al contrario, lee la base tal como
+#   esté, con o sin lote-, y la hora del timer ya la deja después (o el
+#   mismo día en que el lote no corre, sábado y domingo).
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+# EL FRENO CONTRA UN BUCLE DE REINICIOS, EN [Unit] Y NO EN [Service].
+#
+# Ésta es la lección cara de Marlowe, ya vivida una vez en este mismo repo
+# (ver continental-web.service): `StartLimitIntervalSec` y `StartLimitBurst`
+# en [Service] no son un error de systemd -las IGNORA EN SILENCIO y sigue
+# arrancando la unidad, "Unknown key ... in section [Service], ignoring"-, así
+# que el freno no existiría y nadie se enteraría hasta ver el servicio
+# reintentar sin parar. `tests/test_verificar_timer.py` lo vigila.
+#
+# Con `Restart=on-failure` puesto abajo, tres intentos en diez minutos y
+# después se detiene: un fallo sostenido -el almacén caído de verdad- no
+# reintenta para siempre, y el próximo disparo del timer, mañana, lo vuelve a
+# intentar solo.
+StartLimitIntervalSec=600
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+User=eddie
+Group=eddie
+WorkingDirectory=/home/eddie/proyectos/Continental
+# El repo va PLANO en atlas -~/proyectos/Continental, hermano de
+# ~/proyectos/Marlowe y de ~/proyectos/Farmacia (que es farmacia-data)-, al
+# revés que en la torre, donde cuelga de Farmacia/.
+
+# El paquete no está instalado en el venv de atlas (no hace falta: nunca se
+# distribuye), así que `continental` solo se encuentra con esto.
+Environment=PYTHONPATH=/home/eddie/proyectos/Continental/src
+
+# SIN CONTINENTAL_HOST: este proceso NO ESCUCHA EN NINGÚN PUERTO. No es un
+# servidor web, no lo alcanza el túnel y no tiene nada que ver con el gateway
+# de la red `borde` (ADR 0005). Habla de salida con dos cosas: el Postgres
+# del contenedor y Kuma por loopback (el latido).
+
+# SIN xvfb-run, igual que continental-web.service y continental-lote.service,
+# y por la misma razón: Continental no abre un navegador nunca (regla 1 de
+# CLAUDE.md, ADR 0001). Esta corrida solo lee Postgres.
+#
+# `--latido` es lo que distingue esta corrida de la que hace `desplegar.sh`
+# en su paso 7/7: la misma verificación completa (forma + invariantes de
+# datos), pero además manda el veredicto a Kuma. Ver
+# src/continental/verificar.py y VARIABLE_DEL_LATIDO_VERIFICAR en
+# src/continental/latido.py.
+ExecStart=/home/eddie/proyectos/Continental/.venv/bin/python -m continental.verificar --latido
+
+# CINCO MINUTOS BASTAN Y SOBRAN, Y NO SON LOS 75 DEL LOTE.
+#
+# Lo que corre aquí son una decena de `SELECT 1 ... LIMIT 1`, un puñado de
+# `SELECT` sobre las tablas PROPIAS de `pedidos` -pequeñas, no las 460 mil
+# filas de farmacia-data- y una petición HTTP a Kuma con un timeout de 5 s
+# (TIMEOUT_SEG en latido.py). Nada de esto es una "consulta pesada sobre
+# producción" en el sentido de la regla 1 de farmacia-data/CLAUDE.md -esa
+# regla habla de análisis sobre la réplica completa, no de un puñado de
+# lecturas acotadas sobre un esquema propio de unas pocas filas-, y el propio
+# paso 7/7 de `desplegar.sh` ya corre exactamente esto mismo en cada
+# despliegue, a cualquier hora del día, sin que nadie lo haya cuestionado.
+# `Type=oneshot` usa este valor para matar el proceso si algo se cuelga -un
+# Postgres que no contesta, un DNS que no resuelve-, y cinco minutos es
+# generoso de sobra sobre un trabajo que en la práctica tarda segundos.
+TimeoutStartSec=5min
+
+# CON Restart, Y AQUÍ SÍ -al revés que continental-lote.service-. La razón
+# por la que el lote NO reintenta es que reintentar significa volver a
+# molestar a cuatro portales de proveedor de noche por renglones que ya
+# tienen precio: un costo real, hacia afuera. Esta corrida solo LEE Postgres
+# y manda un latido; no hay ningún portal ajeno al que reintentar le cueste
+# nada, y un tropiezo transitorio -el almacén tardó en responder, Kuma no
+# contestó al primer intento- merece un segundo intento antes de esperar
+# veinticuatro horas al próximo disparo del timer. El freno contra reintentar
+# para siempre (StartLimitIntervalSec/StartLimitBurst) va en [Unit], arriba.
+Restart=on-failure
+RestartSec=30
+
+StandardOutput=journal
+StandardError=journal
+
+# SIN [Install]. Quien se habilita es el timer de al lado. Un
+# `WantedBy=multi-user.target` aquí arrancaría la verificación EN CADA
+# ARRANQUE de atlas, a la hora que fuera -es el mismo trato que
+# continental-lote.service, aunque aquí el costo de un arranque a destiempo
+# sea mucho más chico: solo son lecturas.

@@ -37,6 +37,9 @@ número de pruebas, tres veces más lento, que es lo que se espera de ese CPU.
 | El latido a Uptime Kuma | `src/continental/latido.py` | `tests/test_latido.py` (34 casos) |
 | La quinta tabla, `pedidos.corrida_del_lote` | `sql/crear_tablas.sql`, `sql/migraciones/0004-*` | `tests/test_motivos.py` |
 | El porqué de la quinta tabla | `docs/decisiones/0007-*` | — |
+| La verificación diaria y su timer | `scripts/systemd/continental-verificar.{service,timer}` | `tests/test_verificar_timer.py` (17 casos) |
+| `--latido` de `continental.verificar` y el segundo monitor de Kuma | `src/continental/verificar.py`, `src/continental/latido.py` | `tests/test_verificar.py`, `tests/test_latido.py` |
+| El porqué de la verificación diaria | ADR 0017, enmienda 2026-09-21 | — |
 
 ---
 
@@ -349,6 +352,73 @@ journalctl -u continental-lote -n 200 --no-pager
 > columna existe desde farmacia-data `c989ecb`; qué es "cumplido" está en la
 > enmienda del ADR 0006).
 
+### A.9 — Instalar la verificación diaria (ADR 0017, enmienda 2026-09-21)
+
+Es lo que hace que un invariante roto **no se quede sin que nadie lo mire
+mientras nadie despliega**. `scripts/desplegar.sh` ya corre
+`continental.verificar` en su paso 7/7, pero solo cuando alguien despliega; si
+pasan varios días sin un `git push`, la base puede llevar días con un
+invariante roto sin que nadie se entere hasta la próxima vez que alguien toque
+el repo. `continental-verificar.timer` corre esa misma verificación completa
+—forma + datos— **todos los días**, con `--latido`, y avisa por su propio
+monitor de Kuma.
+
+No depende de A.8 ni del lote: solo necesita Postgres (Docker) y Kuma por
+loopback. Se puede instalar **antes** de A.8, o aunque A.8 nunca se instale.
+
+```bash
+sudo cp scripts/systemd/continental-verificar.service /etc/systemd/system/
+sudo cp scripts/systemd/continental-verificar.timer   /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemd-analyze verify continental-verificar.service   # no debe decir nada
+sudo systemctl enable --now continental-verificar.timer
+systemctl list-timers continental-verificar.timer           # ¿cuándo dispara?
+```
+
+- [ ] **Probarla a mano antes de dejarla sola:**
+
+```bash
+cd ~/proyectos/Continental
+PYTHONPATH=src .venv/bin/python -m continental.verificar --latido
+journalctl -u continental-verificar -n 100 --no-pager
+```
+
+- [ ] **Crear el segundo monitor de Kuma** (`KUMA_PUSH_URL_VERIFICAR`) antes de
+      dejarla corriendo sola, siguiendo el mismo procedimiento que el del lote
+      —parte D, más abajo— pero con su propio nombre: si se reutiliza el token
+      del lote (`KUMA_PUSH_URL_CONTINENTAL`), una noche en la que los DATOS
+      están rotos se ve idéntica a una noche en la que el LOTE no trajo
+      precios, y son dos problemas que se arreglan de maneras distintas. Sin
+      esta variable, `--latido` **no falla**: escribe un `WARNING` en el
+      journal que nombra la variable que falta y sigue —nunca en silencio
+      (regla 4 de `CLAUDE.md`).
+
+**La hora es 23:30, todos los días, y no es independiente** (razonado entero
+en `scripts/systemd/continental-verificar.timer`): 90 minutos después de la
+cadena de las 20:30 —el mismo colchón que ya midió el ADR 0006 para el lote,
+porque `dbt build` recrea los permisos de `marts` y una lectura a medio
+recrear daría un `down` falso— y después del peor caso del lote (22:00 + hasta
+75 min = 23:15), para no competir por el almacén al mismo tiempo. **Si la
+cadena se mueve, esto se revisa igual que el lote** (hilo abierto 5 de
+`HANDOVER.md`).
+
+**`Persistent=true`, al revés que el lote, y a propósito.** El lote no lo
+lleva porque dispararía cuatro navegadores contra portales ajenos en horario
+de mostrador si atlas arrancara a media mañana; esta corrida solo lee Postgres
+y manda un latido HTTP local, así que perderse un día entero de verificación
+por un atlas apagado a las 23:30 es justo el hueco que este timer existe para
+cerrar.
+
+**`desplegar.sh` NO instala ni refresca esta unidad, y es a propósito: es el
+mismo trato que ya recibe `continental-lote.{service,timer}`.** El script
+despliega código, no unidades de systemd —ninguno de sus siete pasos copia un
+archivo a `/etc/systemd/system/`—, así que si algún día cambia
+`continental-verificar.service` o `.timer`, hay que volver a copiarlo a mano y
+correr `daemon-reload`, igual que con la unidad del lote. Lo que sí llega solo
+con cada `git pull` es el CÓDIGO que la unidad ejecuta
+(`continental.verificar`): como es `Type=oneshot`, cada disparo del timer
+arranca un proceso nuevo desde el repo tal como está en ese momento.
+
 ---
 
 ## Parte B — en el dashboard de Cloudflare (esto NO se puede hacer por ssh)
@@ -544,7 +614,13 @@ tabla. La cabecera de `src/continental/verificar.py` lo tiene en una tabla.
 
 ## Parte D — el monitor de Uptime Kuma (esto lo hace el dueño, en la interfaz de Kuma)
 
-**Qué caza este monitor, y por qué ninguna otra cosa lo caza:** un lote que
+**Dos monitores, uno por cada corrida desatendida.** D.1-D.3 son del lote
+nocturno; D.4 es de la verificación diaria (ADR 0017, enmienda 2026-09-21).
+Los dos son *push* y los dos son PROPIOS —tokens distintos, en variables
+distintas de `.env`— por la misma razón: un monitor compartido confundiría
+"los datos están rotos" con "no se trajeron precios".
+
+**Qué caza el del lote, y por qué ninguna otra cosa lo caza:** un lote que
 truena deja el journal en rojo y `continental-lote.service` en `failed`. Un
 lote que **no corre** —atlas apagado a las 22:00, el timer sin habilitar, un
 `daemon-reload` a medias— no deja nada en ningún sitio, y a la mañana la lista
@@ -738,6 +814,55 @@ URL completa y la URL completa **es** el token— y la corrida vale lo que valí
 > interfaz sin dejar rastro. Su ventana sería igual pero cerrando a las **20:25**,
 > porque late a las 20:35.
 
+### D.4 — El segundo monitor: la verificación diaria (ADR 0017, enmienda 2026-09-21)
+
+**Mismo procedimiento que D.1-D.2, con su propio nombre y valores más
+simples** —simples porque `continental-verificar.timer` dispara **todos los
+días**, no lun-vie: nada de la ventana de mantenimiento de D.3 hace falta
+aquí, porque no hay ningún fin de semana sin latido que tapar.
+
+- [ ] **Add New Monitor** en Kuma:
+
+| Campo | Valor | Por qué |
+|---|---|---|
+| Monitor Type | **Push** | Igual que el del lote: es la corrida quien avisa |
+| Friendly Name | `Continental — verificación diaria` | Que se distinga del lote y de Marlowe de un vistazo |
+| Heartbeat Interval | **90000** s (25 h) | Dispara a las 23:30 todos los días; 25 h y no 24 h justas deja un colchón para que `AccuracySec=1min` del timer, o un reintento de `Restart=on-failure` (hasta 30 s + el próximo intento), nunca produzcan un falso rojo |
+| Retries | **1** | Un solo reintento de gracia: a diferencia del lote, aquí no hay fin de semana que tapar, así que no hace falta la ventana de dos horas |
+| Heartbeat Retry Interval | **1800** s | 30 minutos de gracia antes del rojo |
+| Resend Notification if Down | **0** | Igual que el del lote: `0` es "no reenviar" |
+
+- [ ] Copiar la **Push URL** y ponerla en `~/proyectos/Continental/.env` como
+      `KUMA_PUSH_URL_VERIFICAR=...` — **nunca** la misma URL que
+      `KUMA_PUSH_URL_CONTINENTAL`, o los dos monitores se confundirían.
+
+```bash
+# en atlas, desde ~/proyectos/Continental
+echo 'KUMA_PUSH_URL_VERIFICAR=http://127.0.0.1:3002/api/push/EL_OTRO_TOKEN' >> .env
+```
+
+- [ ] Probar a mano y mirar Kuma:
+
+```bash
+cd ~/proyectos/Continental
+PYTHONPATH=src .venv/bin/python -m continental.verificar --latido
+journalctl -u continental-verificar -n 50 --no-pager | grep -i latido
+```
+
+Si la variable falta, `--latido` **no falla la corrida**: escribe un
+`WARNING` que la nombra y el código de salida sigue siendo el de la
+verificación misma (0 si todo está en orden, 1 si algo falló). *"Marcar como
+rota una corrida buena es peor que perderse un latido"* — la misma regla que
+D.2, aplicada al segundo monitor.
+
+**Qué se va a ver, sin la complicación del fin de semana de D.3:**
+
+| Situación | Qué manda `--latido` | Cómo se ve en Kuma |
+|---|---|---|
+| ninguna comprobación falló (aunque haya pendientes) | `up` | verde |
+| al menos una `FALLA` | `down`, con el resumen corto de cada una | rojo, con `Retries=1` de gracia antes de pintarse |
+| la verificación no corrió (atlas apagado, timer sin habilitar) | nada | rojo cuando vence el intervalo — esto es lo que el monitor existe para cazar |
+
 ---
 
 ## Diagnóstico rápido
@@ -763,3 +888,6 @@ URL completa y la URL completa **es** el token— y la corrida vale lo que valí
 | El journal del lote dice "NO se mandó latido a Uptime Kuma: falta KUMA_PUSH_URL_CONTINENTAL" | El monitor no está creado o el token no está en el `.env` (D.1 y D.2). **No es una falla de la corrida** |
 | El monitor de Kuma se pone rojo todos los sábados | Es el fin de semana: el timer es `Mon-Fri`. Ver el aviso de D.3 — se silencia con una ventana de mantenimiento, no subiendo el intervalo |
 | El monitor de Kuma se ve verde y la lista no tiene precios | El lote corrió y se detuvo al tope: eso late en verde **a propósito** (D.3). El número está en el journal y arriba de la tabla de la pantalla |
+| `continental-verificar` nunca dispara, `systemctl status continental-verificar` dice `inactive (dead)` | Se habilitó el servicio en vez del timer (A.9) |
+| El journal de `continental-verificar` dice "NO se mandó latido a Uptime Kuma: falta KUMA_PUSH_URL_VERIFICAR" | El segundo monitor no está creado o el token no está en el `.env` (A.9, D.4). **No es una falla de la verificación**: la corrida vale lo que valía |
+| El monitor "Continental — verificación diaria" se pone rojo | De verdad hay algo que revisar: `journalctl -u continental-verificar -n 200` trae cada falla con su comando (igual que el paso 7/7 de `desplegar.sh`) |

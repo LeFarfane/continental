@@ -7,6 +7,16 @@ deja nada. A la mañana la lista está sin precios y eso se ve igual que una
 noche en la que Doyle no contestó. Kuma existe para exactamente eso: es lo
 único que se queja **cuando no pasa nada**.
 
+## Este módulo sirve a DOS monitores, cada uno con su variable
+
+El lote (`KUMA_PUSH_URL_CONTINENTAL`, `VARIABLE_DEL_LATIDO`) y la verificación
+diaria de los datos de producción (`KUMA_PUSH_URL_VERIFICAR`,
+`VARIABLE_DEL_LATIDO_VERIFICAR`, `python -m continental.verificar --latido`,
+`continental-verificar.timer`). El porqué de que sean dos y no uno es la MISMA
+razón que hace propio al del lote frente a los de farmacia-data y Marlowe: un
+monitor compartido confunde "los datos están rotos" con "no se trajeron
+precios", y son dos preguntas que se arreglan de maneras distintas.
+
 ## MONITOR PROPIO, y por qué eso es la casilla entera
 
 El ticket lo dice con su razón dentro: *"si compartieran monitor, una noche sin
@@ -66,6 +76,17 @@ log = logging.getLogger("continental")
 #: texto se separan el día que alguien la renombre.
 VARIABLE_DEL_LATIDO = "KUMA_PUSH_URL_CONTINENTAL"
 
+#: El monitor propio de `python -m continental.verificar --latido`, y es la
+#: MISMA casilla que `VARIABLE_DEL_LATIDO`: monitor propio, no compartido. Si
+#: `--latido` mandara por `VARIABLE_DEL_LATIDO`, una noche en la que la
+#: verificación diaria falla se vería IDÉNTICA a una noche en la que el lote
+#: falló —los dos pintarían el mismo monitor rojo— y quien mire Kuma no podría
+#: distinguir "los datos están rotos" de "no se trajeron precios". Son
+#: preguntas distintas y necesitan monitores distintos, por la misma razón por
+#: la que ADR 0006/ticket 19 le dieron uno propio al lote frente a la cadena de
+#: farmacia-data y a Marlowe.
+VARIABLE_DEL_LATIDO_VERIFICAR = "KUMA_PUSH_URL_VERIFICAR"
+
 #: Lo que Kuma entiende. `up` pinta el monitor en verde y reinicia su cuenta de
 #: gracia; `down` lo declara caído sin esperar a que venza el intervalo.
 #:
@@ -112,7 +133,7 @@ class ResultadoDelLatido:
         return not self.se_mando and self.estado == ""
 
 
-def url_del_latido() -> str | None:
+def url_del_latido(variable: str = VARIABLE_DEL_LATIDO) -> str | None:
     """La URL del *push monitor*, del entorno. `None` si no está configurada.
 
     **Se lee dentro de una función y nunca como constante de módulo**, y eso no
@@ -125,13 +146,19 @@ def url_del_latido() -> str | None:
     Por eso aquí se llama a `cargar()` primero aunque no se use su resultado:
     es lo que garantiza que el `.env` ya esté puesto en el entorno. El orden de
     precedencia es el de siempre: entorno (systemd) → `.env` → nada.
+
+    `variable` entra por argumento y no está fija en `VARIABLE_DEL_LATIDO`
+    porque este módulo ya sirve a **dos** monitores propios (el lote y
+    `continental.verificar --latido`, ver `VARIABLE_DEL_LATIDO_VERIFICAR`): la
+    función que pregunta al entorno no puede llevar el nombre de uno solo de
+    los dos escrito adentro.
     """
     import os
 
     from continental.config import cargar
 
     cargar()
-    return (os.environ.get(VARIABLE_DEL_LATIDO) or "").strip() or None
+    return (os.environ.get(variable) or "").strip() or None
 
 
 def recortar(mensaje: str) -> str:
@@ -221,6 +248,7 @@ def mandar_el_latido(
     mensaje: str,
     segundos: float = 0.0,
     url: str | None = None,
+    variable: str = VARIABLE_DEL_LATIDO,
     pedir: Callable[[str], object] | None = None,
 ) -> ResultadoDelLatido:
     """Manda el latido y **no levanta nunca**. Devuelve cómo fue.
@@ -228,32 +256,39 @@ def mandar_el_latido(
     Es la casilla *"si falla el latido, la corrida NO se aborta"* puesta donde
     no se puede cumplir a medias: el `except` es de `BaseException` y la
     función no tiene un solo `raise` hacia afuera. Quien la llama —el `finally`
-    del lote— no necesita envolverla en otro `try`, y si algún día alguien la
-    llama desde otro sitio, hereda la garantía sin acordarse.
+    del lote, o `continental.verificar --latido`— no necesita envolverla en
+    otro `try`, y si algún día alguien la llama desde otro sitio, hereda la
+    garantía sin acordarse.
 
     `url` y `pedir` entran por argumento por la misma razón que `ahora` y
     `dormir` en el lote: **ninguna prueba manda un latido de verdad**. Sin URL
     —ni por argumento ni en el entorno— no se intenta nada y se dice con todas
-    sus letras, porque un lote que cree estar latiendo y no late es la falla
-    silenciosa que este repo persigue.
+    sus letras, porque una corrida que cree estar latiendo y no late es la
+    falla silenciosa que este repo persigue.
+
+    `variable` es qué nombre de `.env` se pregunta cuando `url` no viene puesta
+    (por omisión, la del lote). `continental.verificar --latido` pasa
+    `VARIABLE_DEL_LATIDO_VERIFICAR` aquí, porque tiene su propio monitor y su
+    propio aviso: el mensaje de "no se mandó" tiene que nombrar la variable
+    que de verdad falta, no siempre la del lote.
 
     El `mensaje` lo compone quien llama y **nunca lleva el texto de una
     excepción** (regla 5 de `CLAUDE.md`): un `str(exc)` de SQLAlchemy lleva la
     cadena de conexión con contraseña, y esto acaba en la base de un Kuma que
     también sirve a Marlowe.
     """
-    destino = url if url is not None else url_del_latido()
+    destino = url if url is not None else url_del_latido(variable)
     if not destino:
         log.warning(
-            "El lote terminó y NO se mandó latido a Uptime Kuma: falta %s en "
-            "el .env. Mientras no esté, una noche sin lote no avisa nada — que "
-            "es justamente lo que el monitor existe para cazar. Ver "
-            "docs/despliegue-en-atlas.md, parte D.",
-            VARIABLE_DEL_LATIDO,
+            "NO se mandó latido a Uptime Kuma: falta %s en el .env. Mientras "
+            "no esté, una noche sin corrida no avisa nada — que es justamente "
+            "lo que el monitor existe para cazar. Ver docs/despliegue-en-atlas.md, "
+            "parte D.",
+            variable,
         )
         return ResultadoDelLatido(
             se_mando=False,
-            motivo=f"no hay {VARIABLE_DEL_LATIDO} en el entorno",
+            motivo=f"no hay {variable} en el entorno",
         )
 
     try:
