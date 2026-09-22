@@ -274,6 +274,7 @@ def al_cerrar_sin_resumen(detalle: str, que_hacer: str) -> dict:
 def reapertura(
     lista: PedidoSugeridoGuardado,
     se_puede: bool | None,
+    ancla: dt.date | None = None,
     falla: dict | None = None,
 ) -> dict | None:
     """El botón de reabrir y su frase, o `None` si la lista no está cerrada.
@@ -282,6 +283,13 @@ def reapertura(
     regla que el `WHERE`. `None` con `falla` es "no se pudo saber": no hay
     botón, y se dice qué hacer (regla 4). **Nunca se pinta un botón que
     contestaría 409**: sin la respuesta de la base, no se ofrece.
+
+    `ancla` es el último día con ventas del almacén, el mismo que se le pasó a
+    `se_puede_reabrir` (enmienda 2026-09-21 al ADR 0016). Con `se_puede`
+    falso y sin `falla`, sirve para no decir "ya se armó la lista siguiente"
+    cuando en realidad la lista es de hace más de un día y esa —no una
+    siguiente que no existe— es la razón; es opcional y `None` cae en el
+    texto de antes, que sigue siendo cierto cuando sí se armó la siguiente.
     """
     if lista.estado != CERRADO:
         return None
@@ -302,6 +310,15 @@ def reapertura(
             "frase": "No se pudo saber si esta lista se puede reabrir.",
             "detalle": falla.get("detalle"),
             "que_hacer": falla.get("que_hacer"),
+        }
+    if ancla is not None and lista.fecha_del_pedido < ancla - dt.timedelta(days=1):
+        return {
+            "se_puede": False,
+            "boton": None,
+            "frase": (
+                f"{fecha_en_palabras(lista.fecha_del_pedido).capitalize()} es "
+                "de hace más de un día: ya no se puede deshacer el cierre."
+            ),
         }
     return {
         "se_puede": False,
@@ -327,12 +344,19 @@ def frase_de_la_reapertura(quien: str | None, cuando: dt.datetime | None) -> str
     return f"Se reabrió {fecha_en_palabras(local.date())} a las {local:%H:%M}; lo firmó {quien}."
 
 
-def motivo_para_no_reabrir(lista: PedidoSugeridoGuardado | None) -> str:
+def motivo_para_no_reabrir(lista: PedidoSugeridoGuardado | None, ancla: dt.date) -> str:
     """Por qué `reabrir` no movió la lista, leída **después** de intentarlo.
 
     La lectura es posterior al `UPDATE` que contestó cero filas, así que puede
     haber cambiado en medio (otra pestaña la reabrió): lo que se dice es cómo
     quedó, que es lo que la persona va a ver al recargar.
+
+    `ancla` es el último día con ventas del almacén, el mismo que decidió si
+    `reabrir` movía la fila (enmienda 2026-09-21 al ADR 0016). Si la lista
+    sigue `cerrado` y es de hace más de un día, esa es la razón —se sabe sin
+    otra lectura, comparando las dos fechas—; si no, la única otra forma de
+    llegar aquí con la lista todavía `cerrado` es que ya se armó la
+    siguiente.
     """
     recarga = " Vuelve a cargar la página para ver cómo quedó."
     if lista is None:
@@ -343,6 +367,12 @@ def motivo_para_no_reabrir(lista: PedidoSugeridoGuardado | None) -> str:
         return (
             "Una lista vencida no se reabre: su día pasó sin que nadie la "
             "cerrara, y sus ventas ya se arrastran a la lista que siguió." + recarga
+        )
+    if lista.fecha_del_pedido < ancla - dt.timedelta(days=1):
+        return (
+            f"{fecha_en_palabras(lista.fecha_del_pedido).capitalize()} es de "
+            "hace más de un día: ya no se puede deshacer el cierre. Solo se "
+            "puede reabrir la lista de hoy o la de ayer." + recarga
         )
     return (
         "Ya no se puede reabrir: después de cerrarla ya se armó la lista "

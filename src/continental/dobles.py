@@ -740,8 +740,19 @@ class AlmacenamientoFalso:
             for otra in self.listas
         )
 
-    def _se_puede_reabrir(self, negocio: str, pedido_sugerido_id: int) -> dict | None:
-        """La lista que `_REABRIR` movería, o `None`. Las cuatro condiciones de
+    def _hasta_un_dia_atras(self, lista: dict, ancla: dt.date) -> bool:
+        """`_HASTA_UN_DIA_ATRAS`, en memoria (enmienda 2026-09-21 al ADR 0016).
+
+        `ancla` es el último día con ventas del almacén, nunca el reloj: quien
+        llama lo lee una vez y lo pasa. La usan `reabrir` y `se_puede_reabrir`,
+        igual que `_ninguna_lista_despues`.
+        """
+        return lista["fecha_del_pedido"] >= ancla - dt.timedelta(days=1)
+
+    def _se_puede_reabrir(
+        self, negocio: str, pedido_sugerido_id: int, ancla: dt.date
+    ) -> dict | None:
+        """La lista que `_REABRIR` movería, o `None`. Las cinco condiciones de
         su `WHERE`, en el mismo orden."""
         lista = self._por_id(pedido_sugerido_id)
         if (
@@ -749,16 +760,19 @@ class AlmacenamientoFalso:
             or lista["negocio"] != negocio
             or lista["estado"] != CERRADO
             or not self._ninguna_lista_despues(lista)
+            or not self._hasta_un_dia_atras(lista, ancla)
         ):
             return None
         return lista
 
-    def se_puede_reabrir(self, negocio: str, pedido_sugerido_id: int) -> bool:
+    def se_puede_reabrir(
+        self, negocio: str, pedido_sugerido_id: int, ancla: dt.date
+    ) -> bool:
         self._revisar()
-        return self._se_puede_reabrir(negocio, pedido_sugerido_id) is not None
+        return self._se_puede_reabrir(negocio, pedido_sugerido_id, ancla) is not None
 
     def reabrir(
-        self, negocio: str, pedido_sugerido_id: int, quien: str
+        self, negocio: str, pedido_sugerido_id: int, quien: str, ancla: dt.date
     ) -> PedidoSugeridoGuardado | None:
         """`_REABRIR`: `cerrado` → `abierto`, `cerrado_en` a `None` y la firma.
 
@@ -766,7 +780,7 @@ class AlmacenamientoFalso:
         `poner_estado`: el doble no puede aceptar lo que la base rechazaría.
         """
         self._revisar()
-        lista = self._se_puede_reabrir(negocio, pedido_sugerido_id)
+        lista = self._se_puede_reabrir(negocio, pedido_sugerido_id, ancla)
         if lista is None:
             return None
         propuesta = {

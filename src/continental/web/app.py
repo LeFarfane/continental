@@ -29,6 +29,7 @@ from continental.almacen import LecturaDelAlmacen
 from continental.almacenamiento import (
     ABIERTO,
     CANTIDAD_FINAL_MINIMA,
+    CERRADO,
     RENGLON_ABIERTO,
     AlmacenamientoDelPedido,
     CorridaDelLote,
@@ -657,8 +658,11 @@ def pedido_sugerido(
         con_propuesta=con_propuesta,
         aun_faltan=aun_faltan,
         # EL DESHACER (ADR 0016): solo de una lista cerrada, y solo si la base
-        # dice que ninguna lista se armó después. Sin su respuesta, no hay botón.
-        reapertura=_la_reapertura(almacenamiento, negocio, guardado),
+        # dice que ninguna lista se armó después y que no es de hace más de un
+        # día (enmienda 2026-09-21). `ultima` es el mismo ancla que ya se leyó
+        # arriba para abrir el día: no se vuelve a leer. Sin su respuesta, no
+        # hay botón.
+        reapertura=_la_reapertura(almacen, almacenamiento, negocio, guardado, ultima),
     )
     # LO QUE SOLO TRAE LA CARGA (ticket 29), igual que `en_camino`: partir,
     # enviar y tachar no lo cambian y la pantalla lo pinta una vez.
@@ -876,6 +880,7 @@ def _lo_que_viene_en_camino(
 def cerrar_pedido_sugerido(
     pedido_sugerido_id: int,
     request: Request,
+    almacen: LecturaDelAlmacen = Depends(obtener_almacen),
     almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
 ):
     """Dar la lista por cerrada: ya se pidió lo que se iba a pedir (`CONTEXT.md`).
@@ -946,27 +951,48 @@ def cerrar_pedido_sugerido(
     )
     # El botón de deshacer aparece en cuanto se cierra (ADR 0016) — si la base
     # dice que se puede: una pestaña vieja pudo cerrar una lista que ya no es
-    # la última, y ahí el botón contestaría 409.
+    # la última, o la lista ya es de hace más de un día (enmienda 2026-09-21),
+    # y ahí el botón contestaría 409. Sin `ancla` a la mano —esta ruta no lo
+    # leyó para nada más—, `_la_reapertura` lo lee ella misma.
     return _como_json(
-        cerrado, reapertura=_la_reapertura(almacenamiento, negocio, cerrado)
+        cerrado, reapertura=_la_reapertura(almacen, almacenamiento, negocio, cerrado)
     )
 
 
 def _la_reapertura(
+    almacen: LecturaDelAlmacen,
     almacenamiento: AlmacenamientoDelPedido,
     negocio: str,
     guardado: PedidoSugeridoGuardado,
+    ancla: dt.date | None = None,
 ) -> dict | None:
     """El botón de reabrir y su frase (`cierre.reapertura`). `None` si no está cerrada.
 
-    Una lectura solo con la lista cerrada. Si falla, no hay botón y se dice
-    que no se pudo saber, con qué hacer (regla 4) — y el TIPO de la falla,
-    nunca su texto (regla 5). La lista se sigue viendo.
+    `ancla` es el último día con ventas del almacén —el mismo `max(fecha)` que
+    usa `abrir_el_dia`, nunca el reloj (enmienda 2026-09-21 al ADR 0016)—. Quien
+    ya lo leyó para esta misma respuesta lo pasa aquí en vez de que se lea otra
+    vez: dos lecturas en dos momentos podrían no coincidir. Si nadie lo trae
+    (`None`), se lee aquí, dentro del mismo intento.
+
+    Una lectura solo con la lista cerrada. Si algo falla —el almacén al leer
+    el ancla, o el almacenamiento al preguntar si se puede—, no hay botón y se
+    dice que no se pudo saber, con qué hacer (regla 4) — y el TIPO de la
+    falla, nunca su texto (regla 5). La lista se sigue viendo.
     """
-    if guardado.estado != "cerrado":
+    if guardado.estado != CERRADO:
         return None
     try:
-        se_puede = almacenamiento.se_puede_reabrir(negocio, guardado.pedido_sugerido_id)
+        dia_ancla = ancla
+        if dia_ancla is None:
+            dia_ancla = almacen.ultima_fecha_con_ventas()
+        if dia_ancla is None:
+            # Una lista cerrada existe porque hubo un ancla el día que se
+            # armó (`abrir_el_dia` se niega sin ventas): que ahora no haya
+            # ninguna es un estado imposible, no una falla de red.
+            raise RuntimeError("el almacén no tiene ventas: no hay ancla")
+        se_puede = almacenamiento.se_puede_reabrir(
+            negocio, guardado.pedido_sugerido_id, dia_ancla
+        )
     except Exception as exc:  # noqa: BLE001 — sin la respuesta, no hay botón
         log.exception(
             "No se pudo saber si la lista %s se puede reabrir",
@@ -982,7 +1008,7 @@ def _la_reapertura(
                 "que_hacer": _que_hacer(AL_LEER),
             },
         )
-    return boton_de_reabrir(guardado, se_puede)
+    return boton_de_reabrir(guardado, se_puede, ancla=dia_ancla)
 
 
 @app.get("/api/pedido-sugerido/{pedido_sugerido_id}/al-cerrar")
@@ -1035,14 +1061,19 @@ def antes_de_cerrar(
 def reabrir_pedido_sugerido(
     pedido_sugerido_id: int,
     request: Request,
+    almacen: LecturaDelAlmacen = Depends(obtener_almacen),
     almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
 ):
     """Deshacer un cierre: `cerrado` → `abierto`, firmado (ADR 0016).
 
-    **Solo la última lista del negocio**, mientras ninguna se haya armado
-    después: la condición vive en el `WHERE` de `_REABRIR`, no aquí. Cero filas
-    es un 409, y la lista se lee otra vez para decir por qué —ya estaba
-    abierta, está vencida, o ya se armó la siguiente—.
+    **Solo la última lista del negocio, y solo hasta un día atrás** (enmienda
+    2026-09-21): ninguna lista se haya armado después, y su
+    `fecha_del_pedido` no sea de hace más de un día contra `ancla` —el último
+    día con ventas del almacén, el mismo `max(fecha)` que usa `abrir_el_dia`,
+    nunca el reloj—. Las dos condiciones viven en el `WHERE` de `_REABRIR`, no
+    aquí. Cero filas es un 409, y la lista se lee otra vez para decir por qué
+    —ya estaba abierta, está vencida, es de hace más de un día, o ya se armó
+    la siguiente—.
 
     **Reabrir no deshace nada más**: lo enviado sigue enviado, lo recibido
     sigue recibido. Solo vuelve a dejar la lista abierta, que es lo que deja
@@ -1057,8 +1088,15 @@ def reabrir_pedido_sugerido(
     firma = quien(request)
 
     try:
-        reabierta = almacenamiento.reabrir(negocio, pedido_sugerido_id, firma)
-    except Exception as exc:  # noqa: BLE001 — el almacenamiento caído es un hueco
+        ancla = almacen.ultima_fecha_con_ventas()
+        if ancla is None:
+            # Igual que en `_la_reapertura`: una lista cerrada solo existe si
+            # hubo un ancla cuando se armó (`abrir_el_dia` se niega sin
+            # ventas). Que ahora no haya ninguna es un estado imposible, no
+            # una falla de red.
+            raise RuntimeError("el almacén no tiene ventas: no hay ancla")
+        reabierta = almacenamiento.reabrir(negocio, pedido_sugerido_id, firma, ancla)
+    except Exception as exc:  # noqa: BLE001 — el almacén o el almacenamiento caídos son un hueco
         log.exception("No se pudo reabrir el pedido sugerido %s", pedido_sugerido_id)
         return JSONResponse(
             status_code=200,
@@ -1096,7 +1134,7 @@ def reabrir_pedido_sugerido(
         )
         return JSONResponse(
             status_code=409,
-            content={"ok": False, "detalle": motivo_para_no_reabrir(como_quedo)},
+            content={"ok": False, "detalle": motivo_para_no_reabrir(como_quedo, ancla)},
         )
 
     log.info(

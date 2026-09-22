@@ -344,6 +344,31 @@ def test_la_reapertura_que_ya_no_se_puede_no_trae_boton_y_dice_por_que():
     assert "ya se armó la lista siguiente" in reapertura["frase"]
 
 
+def test_la_reapertura_vieja_dice_hace_mas_de_un_dia_y_no_una_siguiente_inventada():
+    """Enmienda 2026-09-21 al ADR 0016: sin `ancla` no hay cómo distinguir el
+    motivo y se cae en el texto de siempre; con `ancla`, si la lista es de
+    hace más de un día esa es la razón, y no una lista siguiente que puede no
+    existir."""
+    lista = _lista(estado=CERRADO, desde=MARTES, hasta=MARTES)
+
+    reapertura = cierre.reapertura(lista, se_puede=False, ancla=JUEVES)
+
+    assert reapertura["se_puede"] is False
+    assert reapertura["boton"] is None
+    assert "hace más de un día" in reapertura["frase"]
+    assert "lista siguiente" not in reapertura["frase"]
+
+
+def test_la_reapertura_de_ayer_no_cae_en_hace_mas_de_un_dia():
+    """El borde: `ancla - 1` sigue siendo reabrible por fecha, así que si de
+    todos modos no se puede, la razón sigue siendo la de siempre."""
+    lista = _lista(estado=CERRADO, desde=MIERCOLES, hasta=MIERCOLES)
+
+    reapertura = cierre.reapertura(lista, se_puede=False, ancla=JUEVES)
+
+    assert "ya se armó la lista siguiente" in reapertura["frase"]
+
+
 @pytest.mark.parametrize("estado", [ABIERTO, VENCIDO])
 def test_solo_una_cerrada_tiene_reapertura(estado):
     assert cierre.reapertura(_lista(estado=estado), se_puede=True) is None
@@ -379,11 +404,36 @@ def test_la_firma_de_la_reapertura_va_en_la_hora_de_la_farmacia():
     ],
 )
 def test_el_motivo_para_no_reabrir_depende_de_como_quedo(estado, pista):
-    assert pista in cierre.motivo_para_no_reabrir(_lista(estado=estado))
+    """`ancla=JUEVES` con una lista del jueves: dentro de la ventana de un
+    día, así que el `CERRADO` de aquí solo puede deberse a la siguiente."""
+    assert pista in cierre.motivo_para_no_reabrir(_lista(estado=estado), JUEVES)
 
 
 def test_el_motivo_sin_lista_dice_que_no_existe():
-    assert "No hay una lista" in cierre.motivo_para_no_reabrir(None)
+    assert "No hay una lista" in cierre.motivo_para_no_reabrir(None, JUEVES)
+
+
+def test_el_motivo_para_no_reabrir_dice_hace_mas_de_un_dia_cuando_la_lista_es_vieja():
+    """Enmienda 2026-09-21 al ADR 0016: el caso nuevo, distinto de "ya se
+    armó la lista siguiente"."""
+    vieja = _lista(estado=CERRADO, desde=LUNES, hasta=LUNES)
+
+    motivo = cierre.motivo_para_no_reabrir(vieja, JUEVES)
+
+    assert "hace más de un día" in motivo
+    assert "lunes 14 de septiembre" in motivo
+    assert "lista siguiente" not in motivo
+    assert "Vuelve a cargar la página" in motivo
+
+
+def test_el_motivo_para_no_reabrir_de_ayer_no_dice_hace_mas_de_un_dia():
+    """El borde: `ancla - 1` día sigue en la ventana por fecha, así que si
+    aun así no se pudo, la razón fue que ya se armó la siguiente."""
+    ayer = _lista(estado=CERRADO, desde=MIERCOLES, hasta=MIERCOLES)
+
+    motivo = cierre.motivo_para_no_reabrir(ayer, JUEVES)
+
+    assert "ya se armó la lista siguiente" in motivo
 
 
 # ==========================================================================
@@ -419,8 +469,8 @@ def test_reabrir_la_ultima_cerrada_la_deja_abierta_y_firmada(almacenamiento):
     lista = _lista_guardada(almacenamiento, JUEVES)
     almacenamiento.cerrar(NEGOCIO, lista.pedido_sugerido_id)
 
-    assert almacenamiento.se_puede_reabrir(NEGOCIO, lista.pedido_sugerido_id) is True
-    reabierta = almacenamiento.reabrir(NEGOCIO, lista.pedido_sugerido_id, DUENO)
+    assert almacenamiento.se_puede_reabrir(NEGOCIO, lista.pedido_sugerido_id, JUEVES) is True
+    reabierta = almacenamiento.reabrir(NEGOCIO, lista.pedido_sugerido_id, DUENO, JUEVES)
 
     assert reabierta.estado == ABIERTO
     assert reabierta.cerrado_en is None, "ck_pedido_sugerido_cierre lo exige"
@@ -434,8 +484,11 @@ def test_con_una_lista_despues_ya_no_se_reabre(almacenamiento):
     almacenamiento.cerrar(NEGOCIO, jueves.pedido_sugerido_id)
     _lista_guardada(almacenamiento, VIERNES)
 
-    assert almacenamiento.se_puede_reabrir(NEGOCIO, jueves.pedido_sugerido_id) is False
-    assert almacenamiento.reabrir(NEGOCIO, jueves.pedido_sugerido_id, DUENO) is None
+    assert (
+        almacenamiento.se_puede_reabrir(NEGOCIO, jueves.pedido_sugerido_id, VIERNES)
+        is False
+    )
+    assert almacenamiento.reabrir(NEGOCIO, jueves.pedido_sugerido_id, DUENO, VIERNES) is None
     assert almacenamiento.leer(NEGOCIO, JUEVES).estado == CERRADO
 
 
@@ -445,7 +498,10 @@ def test_una_lista_despues_de_otro_negocio_no_cuenta(almacenamiento):
     almacenamiento.cerrar(NEGOCIO, jueves.pedido_sugerido_id)
     _lista_guardada(almacenamiento, VIERNES, negocio="farmacia_02")
 
-    assert almacenamiento.reabrir(NEGOCIO, jueves.pedido_sugerido_id, DUENO) is not None
+    assert (
+        almacenamiento.reabrir(NEGOCIO, jueves.pedido_sugerido_id, DUENO, JUEVES)
+        is not None
+    )
 
 
 @pytest.mark.parametrize("como_queda", ["abierta", "vencida"])
@@ -454,21 +510,62 @@ def test_solo_se_reabre_lo_cerrado(almacenamiento, como_queda):
     if como_queda == "vencida":
         almacenamiento.vencer_las_de_dias_anteriores(NEGOCIO, VIERNES)
 
-    assert almacenamiento.se_puede_reabrir(NEGOCIO, lista.pedido_sugerido_id) is False
-    assert almacenamiento.reabrir(NEGOCIO, lista.pedido_sugerido_id, DUENO) is None
+    assert almacenamiento.se_puede_reabrir(NEGOCIO, lista.pedido_sugerido_id, JUEVES) is False
+    assert almacenamiento.reabrir(NEGOCIO, lista.pedido_sugerido_id, DUENO, JUEVES) is None
+
+
+def test_se_reabre_lo_del_dia_del_ancla(almacenamiento):
+    """Enmienda 2026-09-21 al ADR 0016: el día del ancla siempre está dentro
+    de la ventana de "hasta un día atrás"."""
+    hoy = _lista_guardada(almacenamiento, JUEVES)
+    almacenamiento.cerrar(NEGOCIO, hoy.pedido_sugerido_id)
+
+    assert almacenamiento.se_puede_reabrir(NEGOCIO, hoy.pedido_sugerido_id, JUEVES) is True
+
+
+def test_se_reabre_lo_de_un_dia_antes_del_ancla():
+    """El otro borde de "hasta un día atrás": una lista sin ninguna después
+    —así que nadie armó la de hoy— sigue siendo de ayer contra el ancla, y se
+    reabre igual. Un doble aparte: si compartiera la fixture con una lista de
+    `JUEVES`, esa sería la "lista después" que la primera condición ya
+    prohíbe, y no probaría el borde del día."""
+    almacenamiento = AlmacenamientoFalso()
+    ayer = _lista_guardada(almacenamiento, MIERCOLES)
+    almacenamiento.cerrar(NEGOCIO, ayer.pedido_sugerido_id)
+
+    assert almacenamiento.se_puede_reabrir(NEGOCIO, ayer.pedido_sugerido_id, JUEVES) is True
+    assert almacenamiento.reabrir(NEGOCIO, ayer.pedido_sugerido_id, DUENO, JUEVES) is not None
+
+
+def test_no_se_reabre_lo_de_hace_mas_de_un_dia(almacenamiento):
+    """El hueco que encontró la revisión del dueño: sin una lista siguiente
+    armada, una lista de hace varios días se quedaba reabrible para
+    siempre. Desde la enmienda, ya no."""
+    lista = _lista_guardada(almacenamiento, MARTES)
+    almacenamiento.cerrar(NEGOCIO, lista.pedido_sugerido_id)
+
+    assert almacenamiento.se_puede_reabrir(NEGOCIO, lista.pedido_sugerido_id, JUEVES) is False
+    assert almacenamiento.reabrir(NEGOCIO, lista.pedido_sugerido_id, DUENO, JUEVES) is None
+    assert almacenamiento.leer(NEGOCIO, MARTES).estado == CERRADO
 
 
 def test_reabrir_mira_el_negocio_de_la_lista(almacenamiento):
     lista = _lista_guardada(almacenamiento, JUEVES)
     almacenamiento.cerrar(NEGOCIO, lista.pedido_sugerido_id)
 
-    assert almacenamiento.reabrir("farmacia_02", lista.pedido_sugerido_id, DUENO) is None
-    assert almacenamiento.se_puede_reabrir("farmacia_02", lista.pedido_sugerido_id) is False
+    assert (
+        almacenamiento.reabrir("farmacia_02", lista.pedido_sugerido_id, DUENO, JUEVES)
+        is None
+    )
+    assert (
+        almacenamiento.se_puede_reabrir("farmacia_02", lista.pedido_sugerido_id, JUEVES)
+        is False
+    )
 
 
 def test_una_lista_que_no_existe_no_se_reabre(almacenamiento):
-    assert almacenamiento.reabrir(NEGOCIO, 99, DUENO) is None
-    assert almacenamiento.se_puede_reabrir(NEGOCIO, 99) is False
+    assert almacenamiento.reabrir(NEGOCIO, 99, DUENO, JUEVES) is None
+    assert almacenamiento.se_puede_reabrir(NEGOCIO, 99, JUEVES) is False
 
 
 def test_reabrir_dos_veces_la_segunda_no_hace_nada(almacenamiento):
@@ -476,9 +573,9 @@ def test_reabrir_dos_veces_la_segunda_no_hace_nada(almacenamiento):
     toca — la firma sigue siendo la de la primera."""
     lista = _lista_guardada(almacenamiento, JUEVES)
     almacenamiento.cerrar(NEGOCIO, lista.pedido_sugerido_id)
-    almacenamiento.reabrir(NEGOCIO, lista.pedido_sugerido_id, DUENO)
+    almacenamiento.reabrir(NEGOCIO, lista.pedido_sugerido_id, DUENO, JUEVES)
 
-    assert almacenamiento.reabrir(NEGOCIO, lista.pedido_sugerido_id, CORREO) is None
+    assert almacenamiento.reabrir(NEGOCIO, lista.pedido_sugerido_id, CORREO, JUEVES) is None
     assert almacenamiento.leer(NEGOCIO, JUEVES).reabierto_por == DUENO
 
 
@@ -492,7 +589,7 @@ def test_reabrir_hace_retroceder_el_corte_y_cerrar_lo_devuelve(almacenamiento):
     almacenamiento.cerrar(NEGOCIO, jueves.pedido_sugerido_id)
     assert almacenamiento.corte_del_ultimo_cerrado(NEGOCIO, VIERNES) == JUEVES
 
-    almacenamiento.reabrir(NEGOCIO, jueves.pedido_sugerido_id, DUENO)
+    almacenamiento.reabrir(NEGOCIO, jueves.pedido_sugerido_id, DUENO, JUEVES)
     assert almacenamiento.corte_del_ultimo_cerrado(NEGOCIO, VIERNES) == MIERCOLES
 
     cerrada = almacenamiento.cerrar(NEGOCIO, jueves.pedido_sugerido_id)
@@ -564,6 +661,17 @@ def test_la_regla_esta_escrita_una_sola_vez_y_la_usan_las_dos_sentencias():
     assert "not exists" in regla
     assert "despues.negocio = s.negocio" in regla, "regla 7: el negocio en la unión"
     assert "despues.fecha_del_pedido > s.fecha_del_pedido" in regla
+    for nombre in ("_REABRIR", "_SE_PUEDE_REABRIR"):
+        assert regla in _sql(nombre), nombre
+
+
+def test_la_regla_del_dia_tambien_esta_escrita_una_sola_vez():
+    """Enmienda 2026-09-21 al ADR 0016: `_HASTA_UN_DIA_ATRAS`, el mismo texto
+    en las dos sentencias que ya comparten `_NINGUNA_LISTA_DESPUES`."""
+    from continental.almacenamiento import _HASTA_UN_DIA_ATRAS
+
+    regla = re.sub(r"\s+", " ", _HASTA_UN_DIA_ATRAS).strip()
+    assert "s.fecha_del_pedido >= :ultimo_dia_con_ventas - 1" in regla
     for nombre in ("_REABRIR", "_SE_PUEDE_REABRIR"):
         assert regla in _sql(nombre), nombre
 
@@ -880,6 +988,54 @@ def test_escenario_la_cadena_trajo_ventas_y_nadie_abrio_el_dia(
     assert _por_producto(sabado)[1]["cantidad_propuesta"] == 1, "Se propuso dos veces."
 
 
+def test_escenario_lo_de_hace_mas_de_un_dia_ya_no_se_reabre(
+    cliente, almacen, almacenamiento
+):
+    """**La enmienda 2026-09-21 al ADR 0016.** El hueco que encontró la
+    revisión del dueño: desde una pestaña vieja se podía reabrir una lista de
+    hace varios días con tal de que nadie hubiera armado otra encima —una
+    farmacia floja de movimiento puede pasar así varios días—. Lunes se cierra
+    y nadie vuelve a abrir la pantalla ni corre el lote martes, miércoles ni
+    jueves: solo llegan ventas. Para el jueves, el lunes ya es "de hace más de
+    un día" —y sigue siendo, también, la última lista: nadie armó ninguna
+    después—. Reabrirlo contesta 409 con la razón nueva, no con "ya se armó la
+    lista siguiente", que aquí sería mentira: no existe ninguna."""
+    almacen.catalogo_en_memoria = [_producto(1)]
+    almacen.ventas_en_memoria = [_venta(LUNES, 1, 3)]
+    lunes = _abrir(cliente)
+    _cerrar(cliente, lunes)
+
+    almacen.ventas_en_memoria += [
+        _venta(MARTES, 1, 1), _venta(MIERCOLES, 1, 1), _venta(JUEVES, 1, 1)
+    ]
+
+    respuesta = _reabrir(cliente, lunes)
+    cuerpo = respuesta.json()
+
+    assert respuesta.status_code == 409
+    assert cuerpo["ok"] is False
+    assert "hace más de un día" in cuerpo["detalle"]
+    assert "lista siguiente" not in cuerpo["detalle"]
+    assert almacenamiento.leer(NEGOCIO, LUNES).estado == CERRADO
+
+
+def test_escenario_lo_de_ayer_si_se_reabre_aunque_ya_no_sea_el_ancla(
+    cliente, almacen, almacenamiento
+):
+    """El borde bueno: lunes cerrado, y para el martes —un solo día después,
+    sin que nadie abriera la pantalla ni corriera el lote— sigue siendo "hasta
+    un día atrás". Se reabre."""
+    almacen.catalogo_en_memoria = [_producto(1)]
+    almacen.ventas_en_memoria = [_venta(LUNES, 1, 3)]
+    lunes = _abrir(cliente)
+    _cerrar(cliente, lunes)
+
+    almacen.ventas_en_memoria += [_venta(MARTES, 1, 1)]
+
+    assert _reabrir(cliente, lunes).status_code == 200
+    assert almacenamiento.leer(NEGOCIO, LUNES).estado == ABIERTO
+
+
 def test_reabrir_no_deshace_lo_que_se_envio(cliente, almacen, almacenamiento):
     """Se envía un pedido, se cierra, se reabre: el pedido sigue `enviado` y su
     renglón sigue `en tránsito`. Lo capturado en un portal no se descaptura."""
@@ -931,7 +1087,13 @@ def test_reabrir_lo_que_no_esta_cerrado_contesta_409_con_su_motivo(
     assert pista in respuesta.json()["detalle"]
 
 
-def test_reabrir_una_lista_que_no_existe_contesta_409(cliente):
+def test_reabrir_una_lista_que_no_existe_contesta_409(cliente, almacen):
+    """`ancla` se necesita para intentar `reabrir` aunque la lista no exista
+    —el `WHERE` la compara con `fecha_del_pedido - 1` de todos modos—, así
+    que el almacén necesita al menos una venta (regla del repo: nunca el
+    reloj) para que la ruta llegue a preguntar por la lista."""
+    almacen.ventas_en_memoria = [_venta(LUNES, 1, 1)]
+
     respuesta = cliente.post(f"{RUTA}/99/reabrir", headers=FIRMA)
 
     assert respuesta.status_code == 409
@@ -939,8 +1101,9 @@ def test_reabrir_una_lista_que_no_existe_contesta_409(cliente):
 
 
 def test_regla_5_reabrir_con_la_base_caida_no_lleva_el_error_al_navegador(
-    cliente, almacenamiento
+    cliente, almacen, almacenamiento
 ):
+    almacen.ventas_en_memoria = [_venta(LUNES, 1, 1)]
     almacenamiento.falla = RuntimeError("postgresql://usuario:secreto@atlas")
     cuerpo = cliente.post(f"{RUTA}/1/reabrir", headers=FIRMA).json()
 

@@ -260,3 +260,86 @@ esquema.
   del lote —o sea, se pide y ya no se puede—, la ventana del deshacer es
   demasiado corta para el mostrador, y lo que hace falta es la opción 3
   ("recuperar en la lista de hoy lo que se perdió"), no aflojar esta regla.
+
+## Enmienda 2026-09-21 — hasta un día atrás, no "mientras nadie arme la siguiente"
+
+**El caso que encontró la revisión del dueño, sobre el código ya aceptado
+arriba.** `_NINGUNA_LISTA_DESPUES` sola deja una pestaña vieja reabrir una
+lista de hace varios días, con tal de que nadie haya armado otra encima. En
+una farmacia con poco movimiento —o simplemente un fin de semana largo, o
+nadie que abra la pantalla un par de días— eso no es un caso raro: **la
+condición "ninguna lista después" no caduca sola con el tiempo**, solo con que
+alguien arme la siguiente. El código de este ADR, tal como se aceptó, deja esa
+lista reabrible indefinidamente.
+
+**Decisión del dueño:** además de "ninguna lista después", la lista cerrada
+solo se reabre si es de **hoy o de ayer**, contados **por el dato, nunca por
+el reloj**: el mismo `max(fecha)` del almacén que ya usan `abrir_el_dia` y
+`vencer_las_de_dias_anteriores` (`corte_del_ultimo_cerrado`), leído por quien
+llama y pasado como parámetro. "Hoy" es ese ancla, no `current_date`, por la
+misma trampa de siempre —el Postgres del contenedor corre en UTC y puede ir
+dos días adelante del último dato (`CLAUDE.md`, trampas heredadas)—.
+
+**La condición sigue viviendo en el `WHERE`, junto a la que ya estaba.**
+`_HASTA_UN_DIA_ATRAS` es una segunda cadena de SQL, con el mismo trato que
+`_NINGUNA_LISTA_DESPUES`: un solo texto, un parámetro (`:ultimo_dia_con_ventas`),
+y las mismas dos sentencias la usan las dos —`_REABRIR` con un `and` más en su
+`WHERE`, `_SE_PUEDE_REABRIR` igual—. "Un día atrás" se resta en SQL
+(`:ultimo_dia_con_ventas - 1`, aritmética de calendario sobre una columna
+`date`), no en Python: quien arma el parámetro no decide el borde, lo decide
+la comparación, igual que ya razonaba este ADR para `_NINGUNA_LISTA_DESPUES`.
+El doble (`AlmacenamientoFalso`) la repite con `_hasta_un_dia_atras`, un
+método más al lado de `_ninguna_lista_despues`, usado por los dos suyos.
+
+`reabrir` y `se_puede_reabrir` ganan un parámetro, `ancla: dt.date`, en
+`almacenamiento.py` (el `Protocol`, la implementación real y el doble) y en
+las dos rutas de `web/app.py` que los llaman: `POST
+/api/pedido-sugerido/{id}/reabrir` lo lee de `almacen.ultima_fecha_con_ventas()`
+antes de intentar `reabrir`, y `_la_reapertura` —la que pinta el botón, en la
+lectura de la lista y justo después de cerrar— lo reusa si quien llama ya lo
+leyó (`GET /api/pedido-sugerido`, que lo necesita de todos modos para abrir el
+día) o lo lee ella misma (`POST .../cerrar`, que antes no tocaba el almacén
+para nada). Si esa lectura falla, es el mismo trato que cualquier otra: no se
+pinta el botón, se dice "no se pudo saber" con qué hacer (regla 4), nunca el
+texto de la excepción (regla 5).
+
+**El motivo del 409 distingue los dos casos.** `cierre.motivo_para_no_reabrir`
+gana el mismo parámetro `ancla`: si la lista sigue `cerrado` y es de hace más
+de un día, esa es la razón —se sabe comparando dos fechas, sin otra lectura—;
+si no, la única otra forma de llegar ahí con la lista todavía `cerrado` es que
+sí se armó la siguiente, y el texto de siempre sigue siendo cierto. Antes de
+esta enmienda, un 409 por antigüedad se habría dicho igual que uno por lista
+siguiente —"ya se armó la lista siguiente"—, que en ese caso es mentira: no
+existe ninguna. `cierre.reapertura` (la que pinta el botón) gana el mismo
+parámetro, opcional, con el mismo criterio.
+
+**Por qué "un día" y no otro número, ni una ventana de minutos.** Es la misma
+pregunta que la opción 4 del cuerpo de este ADR ya contestó para "una ventana
+de tiempo": el reloj no mide lo que importa. Lo que sí acota el daño de un
+número fijo es que la única lista que de verdad hace falta poder deshacer es
+la de **hoy**, cerrada por error hace un minuto o hace ocho horas; "ayer" es
+el margen que cubre el caso del cuerpo de este ADR —la cadena de las 20:30 le
+gana a que alguien abra la pantalla— sin dejar la puerta abierta indefinida.
+Es el mismo número que ya usan `Atrasado` y otras reglas del calendario de la
+farmacia: no cero, y no sin límite.
+
+**Qué queda superado de "Por qué la regla es 'ninguna lista después' y no 'la
+de hoy'".** Esa sección seguía siendo cierta en lo que comparaba —agregar
+"la lista de hoy" como condición **única** habría hecho lo mismo que ya hacía
+"ninguna lista después" salvo por el borde que ahí se describe, y ese borde
+se sigue probando seguro—, pero razonaba sobre reemplazar una condición por
+otra, no sobre **sumar las dos**. Con las dos, "ninguna lista después" sigue
+siendo la que hace segura la reapertura frente a que alguien haya *usado* el
+corte (la razón de fondo de este ADR, que no cambia); "hasta un día atrás" es
+la que acota cuánto tiempo puede quedar abierta esa posibilidad cuando nadie
+la usa. Son dos preguntas distintas —¿alguien leyó el corte? y ¿cuánto hace
+que se cerró?—, y esta enmienda contesta la segunda, que el ADR original no
+se hacía.
+
+**Lo que no cambia.** `vencido` sigue sin reabrirse. Reabrir sigue sin tocar
+ningún renglón ni ningún pedido. La carrera de milisegundos que el ADR
+original ya medía y no cierra, sigue igual —`_HASTA_UN_DIA_ATRAS` no la
+empeora ni la resuelve, compara fechas de calendario, no instantes—. No hace
+falta una migración: no hay columna nueva, solo un `and` más en dos `WHERE`
+que ya existían y un parámetro más en dos llamadas que ya lo hacían con
+`:negocio` y `:pedido_sugerido_id`.

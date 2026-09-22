@@ -2397,27 +2397,35 @@ class AlmacenamientoDelPedido(Protocol):
         ...
 
     def reabrir(
-        self, negocio: str, pedido_sugerido_id: int, quien: str
+        self, negocio: str, pedido_sugerido_id: int, quien: str, ancla: dt.date
     ) -> PedidoSugeridoGuardado | None:
         """Deshace un cierre: `cerrado` → `abierto`, firmado (ADR 0016).
 
-        Solo si es **la última lista del negocio**: ninguna de un día posterior
-        existe. La condición vive en el `WHERE` (`_NINGUNA_LISTA_DESPUES`), no
-        en un `if`. `None` es "no se pudo": no estaba cerrada, ya hay una lista
-        después, o no es de este negocio; quien llama lee la lista para decir
-        cuál.
+        Solo si es **la última lista del negocio** —ninguna de un día
+        posterior existe— **y** es de `ancla` o del día anterior (enmienda
+        2026-09-21 al ADR 0016: "hasta un día atrás"). Las dos condiciones
+        viven en el `WHERE` (`_NINGUNA_LISTA_DESPUES` y
+        `_HASTA_UN_DIA_ATRAS`), no en un `if`. `ancla` es el último día con
+        ventas del almacén —el mismo `max(fecha)` que usan `abrir_el_dia` y
+        `vencer_las_de_dias_anteriores`—, nunca el reloj: quien llama lo lee
+        una vez y lo pasa, no lo adivina aquí. `None` es "no se pudo": no
+        estaba cerrada, ya hay una lista después, es de hace más de un día, o
+        no es de este negocio; quien llama lee la lista para decir cuál.
 
         `quien` es una firma, no un permiso (regla 3). Reabrir no toca ningún
         renglón ni ningún pedido: lo enviado sigue enviado.
         """
         ...
 
-    def se_puede_reabrir(self, negocio: str, pedido_sugerido_id: int) -> bool:
+    def se_puede_reabrir(
+        self, negocio: str, pedido_sugerido_id: int, ancla: dt.date
+    ) -> bool:
         """Si `reabrir` movería esa lista **ahora**. Solo lectura.
 
         La misma condición que el `WHERE` de `reabrir`, escrita con el mismo
-        texto. Es para decidir si se pinta el botón —un botón que siempre
-        contesta 409 es un botón muerto—, no la garantía.
+        texto —incluida la del día, desde la enmienda 2026-09-21—. Es para
+        decidir si se pinta el botón —un botón que siempre contesta 409 es un
+        botón muerto—, no la garantía.
         """
         ...
 
@@ -4289,6 +4297,25 @@ _NINGUNA_LISTA_DESPUES = """
              and despues.fecha_del_pedido > s.fecha_del_pedido)
 """
 
+# HASTA_UN_DIA_ATRAS (enmienda 2026-09-21 al ADR 0016). La revisión del dueño
+# encontró el hueco que `_NINGUNA_LISTA_DESPUES` sola deja abierto: desde una
+# pestaña vieja se podía reabrir una lista de hace varios días con tal de que
+# nadie hubiera armado otra encima —una farmacia con poco movimiento puede
+# pasar así una semana entera—. La decisión: **se reabre hasta un día
+# atrás**, y "un día" se cuenta por el dato, nunca por el reloj.
+#
+# `:ultimo_dia_con_ventas` es el mismo ancla que usan `abrir_el_dia` y
+# `vencer_las_de_dias_anteriores` —`max(fecha)` del almacén, leído una vez por
+# quien llama y pasado aquí—, no un segundo `select` sobre el almacén desde
+# esta sentencia: `pedido_sugerido` no sabe de ventas y no le hace falta
+# saberlo, solo comparar dos fechas. "Un día atrás" se resta EN SQL
+# (`:ultimo_dia_con_ventas - 1`, aritmética de calendario sobre una columna
+# `date`) y no en Python, por la misma razón que la fecha del corte: quien
+# arma el parámetro no decide el borde, lo decide la comparación.
+_HASTA_UN_DIA_ATRAS = """
+       s.fecha_del_pedido >= :ultimo_dia_con_ventas - 1
+"""
+
 # La regla en el `WHERE` y no en un `if`: dos pestañas del mostrador, o una
 # pestaña y el lote de las 22:00. `s.estado = 'cerrado'` es la transición del
 # glosario —`vencido` no se reabre, y reabrir lo abierto no mueve la firma—.
@@ -4309,6 +4336,7 @@ _REABRIR = text(
        and s.pedido_sugerido_id = :pedido_sugerido_id
        and s.estado = 'cerrado'
        and {_NINGUNA_LISTA_DESPUES}
+       and {_HASTA_UN_DIA_ATRAS}
     returning s.pedido_sugerido_id, s.negocio, s.fecha_del_pedido, s.estado,
               s.ventas_consideradas_desde, s.ventas_consideradas_hasta,
               s.armado_en, s.cerrado_en, s.reabierto_por, s.reabierto_en
@@ -4327,6 +4355,7 @@ _SE_PUEDE_REABRIR = text(
           and s.pedido_sugerido_id = :pedido_sugerido_id
           and s.estado = 'cerrado'
           and {_NINGUNA_LISTA_DESPUES}
+          and {_HASTA_UN_DIA_ATRAS}
     ) as se_puede
     """
 )
@@ -4625,7 +4654,7 @@ class AlmacenamientoPostgres:
             return None if cabecera is None else self._con_renglones(conexion, cabecera)
 
     def reabrir(
-        self, negocio: str, pedido_sugerido_id: int, quien: str
+        self, negocio: str, pedido_sugerido_id: int, quien: str, ancla: dt.date
     ) -> PedidoSugeridoGuardado | None:
         with self._motor().begin() as conexion:
             cabecera = conexion.execute(
@@ -4634,16 +4663,23 @@ class AlmacenamientoPostgres:
                     "negocio": negocio,
                     "pedido_sugerido_id": pedido_sugerido_id,
                     "quien": quien,
+                    "ultimo_dia_con_ventas": ancla,
                 },
             ).mappings().first()
             return None if cabecera is None else self._con_renglones(conexion, cabecera)
 
-    def se_puede_reabrir(self, negocio: str, pedido_sugerido_id: int) -> bool:
+    def se_puede_reabrir(
+        self, negocio: str, pedido_sugerido_id: int, ancla: dt.date
+    ) -> bool:
         with self._motor().connect() as conexion:
             return bool(
                 conexion.execute(
                     _SE_PUEDE_REABRIR,
-                    {"negocio": negocio, "pedido_sugerido_id": pedido_sugerido_id},
+                    {
+                        "negocio": negocio,
+                        "pedido_sugerido_id": pedido_sugerido_id,
+                        "ultimo_dia_con_ventas": ancla,
+                    },
                 ).scalar()
             )
 

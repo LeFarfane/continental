@@ -68,10 +68,15 @@ o descartados que traen lo que faltó de un parcial o lo vendido mientras un
 pedido venía en camino: su última oportunidad—. Avisa; no prohíbe.
 
 **Reabrir** — deshacer un cierre: `cerrado` → `abierto`, firmado —quién y
-cuándo—. **Solo la lista más reciente, y solo mientras no se haya armado la
+cuándo—. **Solo la lista más reciente, solo mientras no se haya armado la
 siguiente** (esta noche con el lote, o cuando alguien abra la pantalla con
 ventas nuevas): en cuanto se arma, empezó a contar donde la cerrada terminó y
-ya no hay vuelta. `vencido` no se reabre. Ver el ADR 0016.
+ya no hay vuelta. **Y solo hasta un día atrás** (enmienda 2026-09-21): de hoy
+o de ayer, contados por el último día con ventas del almacén —nunca por el
+reloj—, no por cuándo se cerró. Una lista de hace más de un día ya no se
+reabre aunque nadie haya armado ninguna después: sin este límite, una pestaña
+vieja podía reabrir una lista de hace varios días con tal de que nadie la
+hubiera pisado. `vencido` no se reabre. Ver el ADR 0016.
 
 > **Reabrir no deshace nada más que el cierre.** Lo que se envió sigue
 > enviado, lo recibido sigue recibido y lo descartado sigue descartado —con la
