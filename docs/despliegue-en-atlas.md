@@ -498,10 +498,14 @@ que cambie el script. Desde entonces el paso 1 compara el hash del archivo
 antes y después del pull y, si cambió, dice
 `==> desplegar.sh cambió con este pull: me vuelvo a lanzar con la versión nueva`
 y hace `exec` de la nueva. La relanzada lleva
-`CONTINENTAL_DESPLEGAR_RELANZADO=1` y **no vuelve a jalar** (dice
-`sin git pull: ...`), así que no puede relanzarse otra vez. El porqué de que
-el pull, la comparación y el `exec` vivan juntos en una función está en el
-comentario del script: bash lee el archivo por partes.
+`CONTINENTAL_DESPLEGAR_RELANZADO=<hash del archivo nuevo>` y **no vuelve a
+jalar** (dice `sin git pull: ...`), así que no puede relanzarse otra vez. Si
+esa variable queda puesta con un valor que NO es el hash de la corrida
+actual —alguien la exportó a mano, o sobró de una sesión vieja—, el script no
+se queda callado saltándose el pull para siempre: avisa
+`AVISO: ... no coincide con el hash de este archivo` y jala de todos modos. El
+porqué de que el pull, la comparación y el `exec` vivan juntos en una función
+está en el comentario del script: bash lee el archivo por partes.
 
 > **El primer despliegue que trae este arreglo todavía cae en la trampa**: lo
 > corre la versión anterior, que no sabe relanzarse. Ese, córrelo **dos
@@ -746,7 +750,7 @@ URL completa y la URL completa **es** el token— y la corrida vale lo que valí
 | La pantalla dice `sin-identificar` entrando por el túnel | Falta la aplicación de Access, o está sobre otro dominio (B.3) |
 | El despliegue se detiene en "1/7 git pull" | No hay remoto configurado (A.1) |
 | Los rótulos dicen otro total de pasos que el script que acabas de empujar | Corrió la versión vieja del script: el pull la cambió debajo de bash. Desde el 2026-09-21 se relanza sola; si no viste "me vuelvo a lanzar", la que corrió aún no sabía hacerlo: vuelve a correrlo (Parte C) |
-| El paso 1 dice "sin git pull" y no trajo nada | Tienes `CONTINENTAL_DESPLEGAR_RELANZADO` exportada en tu sesión: esa variable es solo para la corrida relanzada. `unset` y vuelve a correr |
+| El paso 1 dice "sin git pull" y no trajo nada | Tienes `CONTINENTAL_DESPLEGAR_RELANZADO` exportada en tu sesión con el hash exacto de este archivo (coincidencia real, no debería pasar sola). `unset` y vuelve a correr. Si el valor NO coincide, el script ya lo detecta solo: avisa y jala igual, no hace falta tocar nada |
 | El despliegue se detiene en "4/7 la base tiene la forma..." | Falta una migración. El servicio sigue con el código anterior. Corre con credenciales de dueño las que nombra la salida, en su orden, y vuelve a desplegar (ADR 0017) |
 | El despliegue se detiene en "7/7 invariantes" | Los datos, no el código: el servicio ya está arriba. Lee cada falla con su comando en la salida del paso 7 |
 | El lote sale con 1 sin armar lista y Kuma dice "la base no cuadra" | Se desplegó (o se hizo `pull`) código que nombra columnas que la base no tiene. El journal del lote trae la migración y su comando |

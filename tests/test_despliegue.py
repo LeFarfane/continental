@@ -867,15 +867,32 @@ def test_el_relanzamiento_usa_exec_conserva_los_argumentos_y_no_hace_bucle():
         "depender del bit de ejecución (commit 00f79e0), y `\"$@\"` para no "
         "perder los argumentos."
     )
-    guarda = cuerpo.index("CONTINENTAL_DESPLEGAR_RELANZADO:-")
-    assert guarda < cuerpo.index("pull -q"), (
+    guarda = cuerpo.index("CONTINENTAL_DESPLEGAR_RELANZADO")
+    pull_idx = cuerpo.index("pull -q")
+    assert guarda < pull_idx, (
         "La guarda contra el bucle va ANTES del pull: la versión relanzada no "
         "vuelve a jalar, así que no tiene nada que comparar ni por qué relanzarse."
     )
-    assert "return 0" in cuerpo[guarda : cuerpo.index("pull -q")]
-    assert cuerpo.index("export CONTINENTAL_DESPLEGAR_RELANZADO=1") < cuerpo.index("exec "), (
-        "Sin exportar la variable antes del exec, la versión nueva no sabe que "
-        "es la relanzada y se relanzaría otra vez."
+    assert "return 0" in cuerpo[guarda:pull_idx]
+
+    unset_idx = cuerpo.index("unset CONTINENTAL_DESPLEGAR_RELANZADO")
+    assert guarda < unset_idx < pull_idx, (
+        "La variable se lee y se borra del entorno ANTES del pull (y antes de "
+        "cualquier otra cosa): si se queda exportada, un proceso hijo del resto "
+        "del despliegue (pytest, el filtro de la forma, systemctl...) la hereda."
+    )
+
+    # La guarda ya no es un booleano ("puesta o no"): solo aplica si el valor
+    # es el hash de ESTE archivo. Un valor que sobra de otra sesión (exportado
+    # a mano, o de una corrida vieja) no debe apagar el pull en silencio.
+    assert re.search(r'\brelanzado"\s*==\s*"\$yo_hash"', cuerpo), (
+        "La guarda tiene que comparar el valor guardado contra el hash del "
+        "archivo que está corriendo AHORA, no solo mirar si está puesta."
+    )
+    exportar = cuerpo.index('export CONTINENTAL_DESPLEGAR_RELANZADO="$despues"')
+    assert exportar < cuerpo.index("exec "), (
+        "Sin exportar el HASH nuevo antes del exec, la versión relanzada no "
+        "tiene con qué comparar y no sabría que este pull ya la trajo."
     )
     assert 'rm -f "$SALIDA_PRUEBAS"' in cuerpo, (
         "`exec` no corre el trap de EXIT: el temporal quedaría tirado."
@@ -1008,16 +1025,20 @@ def test_si_el_pull_no_toca_el_script_no_se_relanza(atlas_de_juguete):
 
 @_sin_bash
 def test_con_la_guarda_puesta_no_jala_ni_se_relanza(atlas_de_juguete):
-    """La guarda contra el bucle: con la variable puesta no hay pull, así que
-    tampoco hay cambio que detectar. Una versión nueva esperando en el remoto
-    se queda ahí."""
+    """La guarda contra el bucle: con el HASH correcto puesto (el de ESTE
+    archivo, tal como lo dejaría el `exec` de un relanzamiento real) no hay
+    pull, así que tampoco hay cambio que detectar. Una versión nueva esperando
+    en el remoto se queda ahí."""
     origen, atlas = atlas_de_juguete
+    hash_actual = _git(
+        "hash-object", "--no-filters", "scripts/desplegar.sh", cwd=atlas
+    ).strip()
     (origen / "scripts" / "desplegar.sh").write_bytes(_con_marca("VERSION-NUEVA"))
     _git("commit", "-qam", "nueva", cwd=origen)
 
     codigo, salida = _correr(
         str(atlas / "scripts" / "desplegar.sh"), atlas.parent,
-        extra_env={"CONTINENTAL_DESPLEGAR_RELANZADO": "1"},
+        extra_env={"CONTINENTAL_DESPLEGAR_RELANZADO": hash_actual},
     )
 
     assert codigo == 0, salida
@@ -1025,6 +1046,91 @@ def test_con_la_guarda_puesta_no_jala_ni_se_relanza(atlas_de_juguete):
     assert "sin git pull" in salida, salida
     assert "VERSION-VIEJA" in salida and "VERSION-NUEVA" not in salida, salida
     assert _git("log", "--format=%s", "-1", cwd=atlas).strip() == "vieja"
+
+
+@_sin_bash
+def test_con_la_guarda_desactualizada_advierte_y_jala(atlas_de_juguete):
+    """Si el valor de CONTINENTAL_DESPLEGAR_RELANZADO no coincide con el hash
+    de ESTE archivo, no es el relanzamiento de esta corrida: es un sobrante
+    (exportada a mano, o de una sesión vieja cuyo `exec` no llegó a
+    terminar). Ignorarlo en silencio era exactamente el bug original -el
+    despliegue dejaba de jalar para siempre y nadie se enteraba-, así que
+    tiene que avisar fuerte Y jalar de todos modos."""
+    origen, atlas = atlas_de_juguete
+    (origen / "otro.txt").write_bytes(b"cambia otra cosa\n")
+    _git("add", ".", cwd=origen)
+    _git("commit", "-qm", "otra cosa", cwd=origen)
+
+    codigo, salida = _correr(
+        str(atlas / "scripts" / "desplegar.sh"), atlas.parent,
+        extra_env={
+            "CONTINENTAL_DESPLEGAR_RELANZADO": "0" * 40,  # hash que no existe
+        },
+    )
+
+    assert codigo == 0, salida
+    assert "sin git pull" not in salida, (
+        "Con un valor que no coincide, la guarda no aplica: tiene que jalar."
+    )
+    assert "no coincide" in salida, (
+        "Tiene que avisar EN VOZ ALTA que la guarda no aplica:\n" + salida
+    )
+    assert (atlas / "otro.txt").exists(), "El pull no corrió a pesar del aviso."
+    assert "me vuelvo a lanzar" not in salida, (
+        "El script no cambió en este pull, así que no hay por qué relanzarse:\n"
+        + salida
+    )
+
+
+@_sin_bash
+def test_la_guarda_no_se_hereda_a_procesos_hijos(tmp_path):
+    """El `unset` tiene que pasar de verdad: si la variable se quedara
+    exportada, todo lo que el resto del despliegue arranca como proceso hijo
+    -pytest, el filtro de la forma, systemctl- la heredaría. Se comprueba con
+    `env`, no leyendo la variable de bash: eso demuestra que salió del
+    entorno del PROCESO, no solo que una variable de shell cambió de valor.
+
+    No usa `atlas_de_juguete`/`_con_marca`: esos ya cortan el script en
+    "paso 2/7" con un `exit 0` propio, y agregar un segundo corte ahí
+    encadenado quedaría después de ese `exit 0` -código muerto-. Este test
+    arma su propio repo de juguete con el corte que necesita, una sola vez."""
+    origen = tmp_path / "origen"
+    (origen / "scripts").mkdir(parents=True)
+    _git("init", "-q", cwd=origen)
+
+    real = DESPLEGAR.read_bytes()
+    corte = b'paso "2/7'
+    assert real.count(corte) == 1
+    marcado = real.replace(
+        corte,
+        b"if env | grep -q '^CONTINENTAL_DESPLEGAR_RELANZADO='; then\n"
+        b'    echo "    FUGA: la variable llega a un proceso hijo"\n'
+        b"else\n"
+        b'    echo "    LIMPIO: la variable no llega a procesos hijos"\n'
+        b"fi\n"
+        b"exit 0\n" + corte,
+    )
+    (origen / "scripts" / "desplegar.sh").write_bytes(marcado)
+    _git("add", ".", cwd=origen)
+    _git("commit", "-qm", "marcada", cwd=origen)
+
+    atlas = tmp_path / "atlas"
+    _git("clone", "-q", str(origen), str(atlas), cwd=tmp_path)
+    _git("config", "core.autocrlf", "false", cwd=atlas)
+
+    hash_actual = _git(
+        "hash-object", "--no-filters", "scripts/desplegar.sh", cwd=atlas
+    ).strip()
+
+    codigo, salida = _correr(
+        str(atlas / "scripts" / "desplegar.sh"), atlas.parent,
+        extra_env={"CONTINENTAL_DESPLEGAR_RELANZADO": hash_actual},
+    )
+
+    assert codigo == 0, salida
+    assert "sin git pull" in salida, "La guarda debía aplicar (hash correcto):\n" + salida
+    assert "LIMPIO" in salida, salida
+    assert "FUGA" not in salida, salida
 
 
 # ---------------------------------------------------------------------------

@@ -133,14 +133,27 @@ paso() { printf '\n==> %s\n' "$*"; }
 # El arreglo: guardar el hash de este archivo antes del pull, compararlo
 # después y, si cambió, `exec` de la versión nueva con los mismos argumentos.
 #
-# SIN BUCLE: el relanzamiento exporta CONTINENTAL_DESPLEGAR_RELANZADO=1, y con
-# esa variable puesta el script NO vuelve a hacer `git pull` (el código ya es
-# el que trajo el pull de la versión anterior) y por tanto no tiene nada que
-# comparar ni motivo para relanzarse. Se eligió saltar el pull y no "jalar
-# otra vez pero sin relanzarse": un segundo pull podría traer OTRA versión de
-# este archivo, y se correría la vieja sin decirlo — la misma trampa, de
-# vuelta. Consecuencia: si alguien exporta esa variable a mano en su sesión,
-# el despliegue deja de jalar. El paso 1 lo dice en voz alta cuando pasa.
+# SIN BUCLE: el relanzamiento exporta CONTINENTAL_DESPLEGAR_RELANZADO con el
+# HASH del archivo nuevo (no un simple "1"), y la función solo salta el `git
+# pull` si ese hash coincide con `git hash-object` de ESTE archivo, el que
+# está corriendo ahora mismo. Coincide exactamente cuando la variable la puso
+# el `exec` de la línea de arriba en ESTA misma corrida: la versión relanzada
+# ya es la que el pull anterior trajo, así que no tiene nada que comparar ni
+# motivo para relanzarse otra vez. Se eligió saltar el pull y no "jalar otra
+# vez pero sin relanzarse": un segundo pull podría traer OTRA versión de este
+# archivo, y se correría la vieja sin decirlo — la misma trampa, de vuelta.
+#
+# Por qué el HASH y no un booleano: si fuera un simple "puesta/no puesta",
+# cualquiera que exportara la variable a mano —o una corrida vieja cuyo
+# `exec` no llegó a terminar, dejando el valor pegado al entorno de una
+# sesión de shell interactiva— apagaría el pull para SIEMPRE, en silencio.
+# Con el hash, un valor que sobra de otra sesión casi nunca coincide con el
+# archivo de ESTA corrida, así que la función lo nota, avisa fuerte que lo
+# está ignorando, y jala de todos modos: falla ruidoso, no en silencio (la
+# regla 4 del proyecto). Y la función lee la variable en una local y hace
+# `unset` de la exportada ANTES de decidir nada, así que ningún proceso hijo
+# del resto del despliegue —pytest, el filtro de la forma, systemctl— la
+# hereda ni por accidente.
 #
 # POR QUÉ UNA FUNCIÓN Y UNA SOLA LÍNEA QUE LA LLAMA — no "simplificar".
 #
@@ -166,20 +179,36 @@ paso() { printf '\n==> %s\n' "$*"; }
 # `ssh ... '~/...'`.
 
 actualizar_y_relanzarse() {
-    if [[ -n "${CONTINENTAL_DESPLEGAR_RELANZADO:-}" ]]; then
-        echo "    sin git pull: esta es la versión que trajo el pull de la corrida"
-        echo "    anterior (CONTINENTAL_DESPLEGAR_RELANZADO=$CONTINENTAL_DESPLEGAR_RELANZADO)"
-        return 0
+    # Se lee y se borra del entorno YA, antes de decidir nada: de aquí para
+    # abajo (incluido todo lo que arranca el resto del script) nadie hereda
+    # esta variable por accidente.
+    local relanzado="${CONTINENTAL_DESPLEGAR_RELANZADO:-}"
+    unset CONTINENTAL_DESPLEGAR_RELANZADO
+    local yo_hash
+    yo_hash="$(git hash-object --no-filters "$YO")"
+    if [[ -n "$relanzado" ]]; then
+        if [[ "$relanzado" == "$yo_hash" ]]; then
+            echo "    sin git pull: esta es la versión que trajo el pull de la corrida"
+            echo "    anterior (CONTINENTAL_DESPLEGAR_RELANZADO=$relanzado)"
+            return 0
+        fi
+        # No coincide: no es el relanzamiento de ESTA corrida, es un sobrante
+        # (variable exportada a mano, o de una sesión vieja). Ignorarlo en
+        # silencio era el bug: el despliegue dejaba de jalar para siempre y
+        # nadie se enteraba. Se avisa fuerte y se jala de todos modos.
+        echo "    AVISO: CONTINENTAL_DESPLEGAR_RELANZADO=$relanzado no coincide"
+        echo "    con el hash de este archivo ($yo_hash). No es el relanzamiento"
+        echo "    de esta corrida — se ignora y se jala normal."
     fi
     local antes despues
-    antes="$(git hash-object --no-filters "$YO")"
+    antes="$yo_hash"
     git -c pull.rebase=true pull -q
     despues="$(git hash-object --no-filters "$YO")"
     if [[ "$antes" != "$despues" ]]; then
         paso "desplegar.sh cambió con este pull: me vuelvo a lanzar con la versión nueva"
         # `exec` no corre el `trap ... EXIT`: el temporal se borra a mano.
         rm -f "$SALIDA_PRUEBAS"
-        export CONTINENTAL_DESPLEGAR_RELANZADO=1
+        export CONTINENTAL_DESPLEGAR_RELANZADO="$despues"
         exec bash "$YO" "$@"
     fi
 }
