@@ -47,7 +47,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from continental.almacenamiento import CorridaDelLote, RenglonGuardado
+from continental.almacenamiento import SIN_LISTA, CorridaDelLote, RenglonGuardado
 from continental.comparacion import Comparacion
 from continental.precios import (
     PORTAL_SIN_CONTESTAR,
@@ -259,9 +259,29 @@ def frase_de_la_corrida(corrida: CorridaDelLote | None) -> str:
     Cadena vacía **solo** cuando no hay corrida: ahí quien escribe es la
     pantalla, con otra frase y otro color, porque "no corrió" no es un grado de
     "corrió".
+
+    **`SIN_LISTA` se dice aparte y sale primero**, antes de tocar `orden` o
+    `no_se_pudo` (enmienda del 2026-09-21 al ADR 0007). Una corrida sin lista
+    no tiene `orden` —nunca se calculó, no hubo renglones que ordenar— y
+    `orden_cumplido` se guarda en falso por eso mismo (`lote.como_corrida`):
+    sin esta rama, la cola de abajo leería ese falso y agregaría *"no fue en
+    orden de importancia por clase ABC"* a una noche en la que no hubo nada
+    que ordenar, que es leer una falla donde no la hay (regla 4 de
+    `CLAUDE.md`). El lote **no dice por qué no hubo ventas** —solo que no las
+    hubo—: `almacen.ultima_fecha_con_ventas()` es `max(fecha)` de **toda** la
+    tabla, así que esto solo pasa con un almacén que nunca tuvo una sola
+    venta, no con "hoy no vendió". Afirmar un día concreto —domingo, feriado—
+    sería inventar un dato que esta corrida no trae.
     """
     if corrida is None:
         return ""
+
+    if corrida.final == SIN_LISTA:
+        return (
+            "El lote corrió anoche y no armó lista: el almacén no tiene "
+            "ninguna venta registrada, así que no había nada que reponer. No "
+            "es una falla de lectura."
+        )
 
     cuanto = corrida.segundos / 60.0
     if corrida.se_corto_por_tiempo:

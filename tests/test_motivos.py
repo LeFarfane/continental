@@ -515,6 +515,47 @@ def test_sin_corrida_la_frase_es_vacia_porque_escribe_la_pantalla():
     assert frase_de_la_corrida(None) == ""
 
 
+def test_la_frase_de_sin_lista_explica_y_no_se_lee_como_falla():
+    """El pedido del dueño: una corrida sin lista, con su mensaje breve.
+
+    `SIN_LISTA` nunca calcula `orden` (`lote.correr_el_lote` regresa antes de
+    llegar ahí), así que `orden_cumplido` se guarda en falso —no porque el
+    orden se haya incumplido, sino porque nunca hubo nada que ordenar. Sin la
+    rama dedicada, esta frase heredaría el "y no fue en orden de importancia
+    por clase ABC" de una corrida cualquiera, y una noche sin ventas se leería
+    como una noche con un problema.
+    """
+    frase = frase_de_la_corrida(
+        _corrida(
+            final=SIN_LISTA,
+            pedido_sugerido_id=None,
+            fecha_del_pedido=None,
+            en_la_lista=0,
+            consultados=0,
+            con_precio=0,
+            orden_cumplido=False,
+        )
+    )
+
+    assert "no armó lista" in frase
+    assert "no había nada que reponer" in frase
+    assert "clase ABC" not in frase
+    assert "SE CORTÓ" not in frase
+    assert "no fue en orden" not in frase
+
+
+def test_la_frase_de_sin_lista_no_inventa_un_dia_concreto():
+    """No hay `fecha_del_pedido` que anclar: `SIN_LISTA` es "nunca hubo una
+    venta", no "hoy no vendió" (`almacen.ultima_fecha_con_ventas` es
+    `max(fecha)` de toda la tabla). Decir "domingo" o "feriado" aquí sería
+    afirmar un dato que esta corrida no trae.
+    """
+    frase = frase_de_la_corrida(_corrida(final=SIN_LISTA, pedido_sugerido_id=None))
+
+    assert "domingo" not in frase.lower()
+    assert "feriado" not in frase.lower()
+
+
 # =========================================================================
 # CASILLA 2 — QUÉ CUENTA COMO FALTANTE. La decisión cara del ticket.
 # =========================================================================
@@ -1067,6 +1108,64 @@ def test_con_la_corrida_guardada_el_renglon_dice_que_el_tope_no_llego(
     assert porque[SIN_LECTURA_CLAVE]["seguro"] is True
     assert despues["corrida"]["se_corto_por_tiempo"] is True
     assert "1 de 4" in despues["corrida"]["frase"]
+
+
+def test_una_corrida_sin_lista_no_se_lee_como_falla_en_la_ruta(
+    cliente, almacen, doyle, almacenamiento
+):
+    """El pedido del dueño, de punta a punta: una corrida `SIN_LISTA` en la
+    lista que la pantalla tiene abierta se pinta como 'bien', con la frase
+    breve, y no arrastra el "no fue en orden" que `orden_cumplido=False`
+    dejaría si nadie la distinguiera (`lote.py`, `como_corrida`).
+    """
+    _poblar(almacen, doyle)
+    lista = cliente.get(RUTA).json()
+    almacenamiento.guardar_la_corrida(
+        NEGOCIO,
+        _corrida(
+            pedido_sugerido_id=lista["pedido_sugerido_id"],
+            final=SIN_LISTA,
+            en_la_lista=0,
+            consultados=0,
+            con_precio=0,
+            orden_cumplido=False,
+        ),
+    )
+
+    despues = cliente.get(RUTA).json()
+
+    assert despues["corrida"]["final"] == SIN_LISTA
+    assert despues["corrida"]["se_corto_por_tiempo"] is False
+    assert despues["corrida"]["se_interrumpio"] is False
+    assert "no armó lista" in despues["corrida"]["frase"]
+    assert "no fue en orden" not in despues["corrida"]["frase"]
+
+
+def test_una_corrida_interrumpida_SI_se_lee_como_falla_en_la_ruta(
+    cliente, almacen, doyle, almacenamiento
+):
+    """El contraste que prueba que lo de arriba no tapa una falla de verdad:
+    una corrida que sí se cortó sigue marcada `se_interrumpio` y mandando al
+    journal, exactamente igual que antes de esta rama.
+    """
+    _poblar(almacen, doyle)
+    lista = cliente.get(RUTA).json()
+    almacenamiento.guardar_la_corrida(
+        NEGOCIO,
+        _corrida(
+            pedido_sugerido_id=lista["pedido_sugerido_id"],
+            final=SE_INTERRUMPIO,
+            en_la_lista=4,
+            consultados=1,
+            con_precio=0,
+        ),
+    )
+
+    despues = cliente.get(RUTA).json()
+
+    assert despues["corrida"]["se_interrumpio"] is True
+    assert "SE CORTÓ" in despues["corrida"]["frase"]
+    assert "journal" in despues["corrida"]["frase"]
 
 
 def test_un_renglon_con_lecturas_no_trae_el_motivo_del_hueco(cliente, almacen, doyle):

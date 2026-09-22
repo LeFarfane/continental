@@ -205,3 +205,47 @@ dos siguen existiendo**: un `journal` no necesita que Postgres esté vivo.
   eran cuatro desde el ticket 12, así que habría salido `[MAL]` sobre una base
   correcta la primera vez que alguien la corriera. Ahora se compara contra el
   número de tablas del esquema, que es lo que de verdad se quiere afirmar.
+
+## Enmienda 2026-09-21 — `SIN_LISTA` lleva su propia frase, y no la de "sin cumplir"
+
+**Lo que pidió el dueño.** Un mensaje breve para cuando el lote corrió y no
+armó lista, para que no se lea como una falla.
+
+**El hueco que dejaba la enmienda del mismo día al ADR 0006.** Esa enmienda ya
+lo decía con todas sus letras: *"una corrida que nunca llegó a calcular el
+orden —sin lista, o cortada antes— sigue guardando `orden_cumplido` en
+falso"*. `lote.como_corrida` no tenía otra opción —de un orden que nunca se
+calculó no se puede afirmar que se cumplió—, pero `faltantes.frase_de_la_corrida`
+leía ese falso sin distinguir el porqué, y le agregaba a una corrida `SIN_LISTA`
+la misma coletilla que a una lista real que se consultó fuera de orden: *"y no
+fue en orden de importancia por clase ABC"*. Una noche sin una sola venta se
+leía como una noche con un problema de orden que nunca existió.
+
+**El arreglo, en la lectura y no en lo guardado.** `frase_de_la_corrida` ahora
+distingue `corrida.final == SIN_LISTA` **antes** de tocar `orden_cumplido` o
+cualquier otro conteo, y devuelve su propia frase corta: *"El lote corrió
+anoche y no armó lista: el almacén no tiene ninguna venta registrada, así que
+no había nada que reponer. No es una falla de lectura."* Nada se migra: el
+`detalle` que `lote.py` ya guardaba para el journal sigue igual, y lo único
+que cambió es qué frase compone la pantalla a partir de las mismas columnas —
+la lección de siempre de este ADR, que el resumen no se recalcula, se lee.
+
+**Por qué la frase no nombra un día.** `almacen.ultima_fecha_con_ventas()` es
+`max(fecha)` de **toda** la tabla de ventas, sin ventana: `SIN_LISTA` solo
+pasa con un almacén que nunca tuvo una sola venta —una instalación nueva—, no
+con "hoy no se vendió". Decir "domingo" o "feriado" aquí sería inventar un
+dato que esta corrida no trae; eso sí lo sabe decir `estado_de_las_ventas`
+(`fallas.py`, ticket 29), que mira el reloj y el calendario de la cadena y
+vive en la pantalla principal, aparte de la corrida del lote.
+
+**Duda que queda abierta, no resuelta aquí.** `almacenamiento.ultima_corrida`
+busca por `pedido_sugerido_id`, y una corrida `SIN_LISTA` se guarda con ese
+campo en `NULL` (no hay lista que enlazarla). Hoy ninguna de las cuatro rutas
+de `web/app.py` que leen la corrida de una lista puede toparse entonces con
+una fila `SIN_LISTA` real: la pantalla la sigue mostrando siempre como "el
+lote no corrió sobre esta lista" cuando la última noche fue así. Esta frase
+queda lista y probada para cuando eso se resuelva —o para cualquier otro
+lector de la tabla, como una futura bitácora por negocio—, pero **la pantalla
+de hoy no la va a mostrar en producción**: se necesitaría decidir aparte cómo
+enlazar una corrida sin lista con la lista que la pantalla sí tiene abierta, y
+eso no se decide de paso en esta enmienda.
