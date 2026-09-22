@@ -115,3 +115,31 @@ cambio, exigen ahí que lo único ejecutado sea ese `select`.
   `crear_tablas.sql`.
 - Mensajes al journal y a Kuma: sólo el tipo de la excepción y el SQLSTATE,
   nunca su texto (regla 5).
+
+## Enmienda 2026-09-21: informe.py
+
+Esta decisión dejó a `src/continental/forma.py` importando de
+`src/continental/verificar.py` lo único que las dos mitades puras necesitan
+para hablar el mismo idioma: `Informe`, `Resultado`, `OK`/`FALLA`/`PENDIENTE`
+y sus tres constructores (`_ok`, `_falla`, `_pendiente`). El préstamo era de
+lo **privado** de un módulo hacia otro —`from continental.verificar import
+_falla, _ok, ...`—, y por eso `verificar.py` nunca pudo importar `forma.py`
+arriba del archivo: `correr()` y `main()` lo traían adentro de la función, dos
+veces, sólo para no cerrar el círculo.
+
+Se saca ese vocabulario a `src/continental/informe.py`, un tercer archivo que
+no conoce ni a `forma.py` ni a `verificar.py` — hay una prueba que lo exige
+(`tests/test_informe.py`). Con eso, `forma.py` y `verificar.py` importan del
+mismo sitio en vez de importarse entre sí, y `verificar.py` ya puede traer
+`forma` arriba del archivo: nada de lo que `forma.py` hace al cargarse toca
+Postgres —el `motor()` sigue detrás de su propio `import` perezoso, adentro de
+`forma.correr()`, igual que siempre— así que la regla de este mismo ADR de
+"las importaciones que abren algo van dentro de la función" sigue firme,
+sólo que ahora `forma` no es una de las que abre algo al cargarse.
+
+De paso, el comando `cd ~/proyectos/Continental && .venv/bin/python -m
+continental.verificar --forma` —que `forma.py` y `verificar.py` traían escrito
+dos veces, a mano, con las mismas palabras— pasa a ser `COMANDO_FORMA`, una
+constante de `informe.py` que los dos citan. La conducta pública de
+`python -m continental.verificar`, con o sin `--forma`, no cambió: mismo
+texto, mismo código de salida.

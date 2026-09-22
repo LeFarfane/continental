@@ -66,14 +66,20 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from continental.verificar import (
-    _PSQL,
+# Antes esto venía de `continental.verificar` (`from continental.verificar
+# import _falla, _ok, ...`), y era lo único privado que un módulo del paquete
+# tomaba de otro. `continental.informe` es el vocabulario que los dos
+# comparten desde la enmienda del 2026-09-21 al ADR 0017: ver su docstring
+# para el porqué completo.
+from continental.informe import (
+    COMANDO_FORMA,
     FALLA,
     Informe,
-    _falla,
-    _ok,
-    _pendiente,
-    _plural,
+    PSQL as _PSQL,
+    falla as _falla,
+    ok as _ok,
+    pendiente as _pendiente,
+    plural as _plural,
 )
 
 log = logging.getLogger("continental")
@@ -600,7 +606,7 @@ def antes_del_lote(
             NOMBRE,
             f"la revisión de la forma se cayó ({type(exc).__name__})",
             f"la revisión levantó {type(exc).__name__} antes de dar un veredicto.",
-            "cd ~/proyectos/Continental && .venv/bin/python -m continental.verificar --forma",
+            COMANDO_FORMA,
         )
 
     if informe.codigo_de_salida == 0:

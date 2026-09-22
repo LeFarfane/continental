@@ -70,17 +70,45 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-# Lo único que este módulo importa del paquete, y son dos constantes: el nombre
-# de una columna y un booleano. **No abre nada** —`continental.almacen` solo
-# importa sqlalchemy al cargarse y el motor vive detrás de un `lru_cache`— así
-# que la regla de "las importaciones del almacén van dentro de las funciones"
-# sigue valiendo para lo que de verdad la motiva: `motor()`, que se sigue
-# importando dentro de `correr`. Se importan y no se copian porque una columna
-# escrita en dos lugares se separa el día que uno de los dos cambie, y entonces
-# el verificador diría que falta una columna que ya existe.
+# Hasta el ADR 0017 lo único que este módulo importaba del paquete eran dos
+# constantes de `continental.almacen`: el nombre de una columna y un booleano.
+# La enmienda del 2026-09-21 a ese mismo ADR agrega `continental.forma` y
+# `continental.informe`, los dos arriba y no dentro de una función, y por la
+# misma regla de siempre: **ninguno de los dos abre nada al cargarse.**
+#
+# `continental.informe` es el vocabulario del informe —`Informe`, `Resultado`,
+# `ok`/`falla`/`pendiente`— que antes vivía aquí mismo y `forma.py` tomaba
+# prestado con `from continental.verificar import _falla, _ok, ...`: un
+# préstamo de lo privado de un módulo hacia otro. Sacarlo a un tercer archivo
+# es lo que le permite a ESTE módulo importar `forma` arriba sin que las dos
+# importaciones se muerdan la cola.
+#
+# `continental.forma` se usaba dos veces, adentro de `correr` y adentro de
+# `main`, precisamente para no cerrar ese círculo. Ya no hace falta esconderlo:
+# `forma.py` sigue la misma regla que `continental.almacen` —importa
+# sqlalchemy al cargarse, pero `motor()` vive detrás de su propio
+# `from continental.almacen import motor`, adentro de `forma.correr()`—, así
+# que cargar el módulo no abre nada y `correr()` de aquí ya lo llama siempre.
+# Lo que sigue yendo adentro de una función es `motor()`: eso no cambió.
+from continental import forma
 from continental.almacen import (
     COLUMNA_DE_LA_CLASE_ABC,
     LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO,
+)
+from continental.informe import (
+    COMANDO_FORMA,
+    FALLA,
+    OK,
+    PENDIENTE,
+    Informe,
+    Resultado,
+    PSQL as _PSQL,
+    comando as _comando,
+    enumerar as _enumerar,
+    falla as _falla,
+    ok as _ok,
+    pendiente as _pendiente,
+    plural as _plural,
 )
 
 RAIZ = Path(__file__).resolve().parents[2]
@@ -91,197 +119,6 @@ CREAR_ROL = RAIZ / "sql" / "crear_rol.sql"
 #: busca `'en transito'` sin acento, no encuentra nada, y el invariante pasa en
 #: verde para siempre sin revisar una sola fila.
 EN_TRANSITO = "en tránsito"
-
-OK = "ok"
-FALLA = "falla"
-PENDIENTE = "pendiente"
-
-_MARCA = {OK: "ok", FALLA: "!!", PENDIENTE: "··"}
-
-_PSQL = "docker exec -i farmacia_warehouse psql -U farmacia -d farmacia"
-
-
-def _plural(cuantos: int, uno: str, varios: str) -> str:
-    """"1 renglón" y no "1 renglón(es)".
-
-    Cuesta cuatro líneas y lo lee una persona a las ocho de la mañana con el
-    despliegue rojo. Un mensaje que se lee como plantilla se lee como algo que
-    a nadie le importó revisar.
-    """
-    return f"{cuantos} {uno if cuantos == 1 else varios}"
-
-
-def _enumerar(cosas, conector: str = "ni") -> str:
-    """"estado ni enviado_por", no "estado, enviado_por"."""
-    cosas = list(cosas)
-    if len(cosas) <= 1:
-        return "".join(cosas)
-    return f"{', '.join(cosas[:-1])} {conector} {cosas[-1]}"
-
-
-def _comando(sentencia: str) -> str:
-    """Una sentencia envuelta en el `psql` con el que se corre en atlas.
-
-    `docker exec -i` y no `-f`: con `docker exec`, el `-f` de psql busca el
-    archivo DENTRO del contenedor, donde este repo no está montado. Y
-    `ON_ERROR_STOP=1` porque sin él psql sigue tras un error y termina diciendo
-    que todo salió bien.
-    """
-    return f'{_PSQL} -v ON_ERROR_STOP=1 -c "{sentencia}"'
-
-
-# ==========================================================================
-# El informe
-# ==========================================================================
-
-
-@dataclass(frozen=True, slots=True)
-class Resultado:
-    """Una comprobación con su veredicto.
-
-    Tres estados y no dos. `PENDIENTE` es el que se gana el sueldo: un
-    invariante que **todavía no se puede revisar** —porque la columna que
-    necesita llega con otro ticket— no es un `ok` (mentiría) ni una falla (no
-    hay nada roto). Se declara, se ve en la salida, y no tumba el despliegue.
-
-    `resumen` es la línea corta de la tabla; `detalle` es el párrafo que se
-    imprime debajo, solo para lo que no está en orden.
-    """
-
-    nombre: str
-    estado: str
-    resumen: str = ""
-    detalle: str = ""
-    reparacion: str = ""
-
-    def __post_init__(self) -> None:
-        if self.estado not in _MARCA:
-            raise ValueError(
-                f"Estado desconocido: {self.estado!r}. Son {sorted(_MARCA)}."
-            )
-        # LA CASILLA 2 DEL TICKET, PUESTA DONDE NO SE PUEDE CUMPLIR A MEDIAS.
-        # "Cada mensaje de falla incluye el comando de reparación" escrito como
-        # convención es cómo la tercera comprobación que alguien agregue el año
-        # que viene sale sin él, y nadie lo nota hasta las ocho de la mañana de
-        # un día malo. Aquí el olvido revienta en la corrida.
-        if self.estado == FALLA and not self.reparacion.strip():
-            raise ValueError(
-                f"La falla {self.nombre!r} no trae comando de reparación. Una "
-                f"falla sin el comando con el que se arregla obliga a quien la "
-                f"lea a inventárselo con prisa."
-            )
-
-    @property
-    def fallo(self) -> bool:
-        return self.estado == FALLA
-
-
-@dataclass(frozen=True, slots=True)
-class Informe:
-    """Lo que devuelven las funciones puras. Se suma con `+`.
-
-    Inmutable y sumable en vez de un acumulador que se pasa por parámetro —que
-    es como lo hace Marlowe—: así cada comprobación se puede llamar sola desde
-    una prueba y devolver algo que se mira, sin montar un objeto compartido
-    antes.
-    """
-
-    resultados: tuple[Resultado, ...] = ()
-
-    def __add__(self, otro: "Informe") -> "Informe":
-        return Informe(self.resultados + otro.resultados)
-
-    @property
-    def fallas(self) -> tuple[Resultado, ...]:
-        return tuple(r for r in self.resultados if r.estado == FALLA)
-
-    @property
-    def pendientes(self) -> tuple[Resultado, ...]:
-        return tuple(r for r in self.resultados if r.estado == PENDIENTE)
-
-    @property
-    def codigo_de_salida(self) -> int:
-        """1 si algo falló. Un pendiente **no** cuenta: lo que le falta es una
-        columna de un ticket que todavía no llega, no un dato roto."""
-        return 1 if self.fallas else 0
-
-    def como_texto(
-        self, titulo: str = "Continental · invariantes sobre los datos de producción"
-    ) -> str:
-        """La salida entera, tal como la lee una persona en la terminal.
-
-        Primero la tabla de una línea por comprobación —para ver de un vistazo
-        cuántas y cuáles—, y después un bloque por cada cosa que no está en
-        orden, con su párrafo y su comando. Esa es la casilla de **acumular**:
-        detenerse en la primera falla obliga a desplegar cinco veces para
-        enterarse de cinco cosas.
-        """
-        lineas = [titulo, ""]
-
-        if not self.resultados:
-            lineas.append("  ninguna comprobación se pudo correr.")
-            lineas.append("")
-            lineas.append("==> no se revisó nada. Eso no es un almacén sano.")
-            return "\n".join(lineas)
-
-        ancho = max(len(r.nombre) for r in self.resultados)
-        for r in self.resultados:
-            lineas.append(f"  {_MARCA[r.estado]}  {r.nombre:<{ancho}}  {r.resumen}")
-
-        for r in self.resultados:
-            if r.estado == OK:
-                continue
-            lineas.append("")
-            lineas.append(f"  {_MARCA[r.estado]} {r.nombre}")
-            for parrafo in (r.detalle or r.resumen).splitlines():
-                lineas.append(f"     {parrafo}")
-            if r.reparacion:
-                lineas.append("     repara con:")
-                for orden in r.reparacion.splitlines():
-                    lineas.append(f"       {orden}")
-
-        lineas.append("")
-        if self.fallas:
-            lineas.append(
-                f"==> {len(self.fallas)} de {len(self.resultados)} comprobaciones "
-                f"FALLARON. No se reparó nada: eso lo decide una persona."
-            )
-        else:
-            pendientes = (
-                f", {len(self.pendientes)} pendiente(s)" if self.pendientes else ""
-            )
-            lineas.append(
-                f"==> {len(self.resultados)} comprobaciones en orden{pendientes}."
-            )
-        return "\n".join(lineas)
-
-
-def _ok(nombre: str, resumen: str = "") -> Informe:
-    return Informe((Resultado(nombre=nombre, estado=OK, resumen=resumen),))
-
-
-def _falla(nombre: str, resumen: str, detalle: str, reparacion: str) -> Informe:
-    return Informe(
-        (
-            Resultado(
-                nombre=nombre,
-                estado=FALLA,
-                resumen=resumen,
-                detalle=detalle,
-                reparacion=reparacion,
-            ),
-        )
-    )
-
-
-def _pendiente(nombre: str, resumen: str, detalle: str) -> Informe:
-    return Informe(
-        (
-            Resultado(
-                nombre=nombre, estado=PENDIENTE, resumen=resumen, detalle=detalle
-            ),
-        )
-    )
 
 
 # ==========================================================================
@@ -616,8 +453,7 @@ def revisar_pedidos_enviados(
                     "No se crean aquí: el rol `continental` no hace DDL (ADR 0003).",
                 ]
             ),
-            "# qué migración falta, con su comando (ADR 0017):\n"
-            "cd ~/proyectos/Continental && .venv/bin/python -m continental.verificar --forma",
+            f"# qué migración falta, con su comando (ADR 0017):\n{COMANDO_FORMA}",
         )
 
     enviados = [p for p in pedidos if (p.estado or "") == "enviado"]
@@ -1034,8 +870,6 @@ def correr() -> Informe:
 
     # La forma (ADR 0017) también en la corrida completa, no solo en `--forma`:
     # así el paso final de desplegar.sh y una corrida a mano dicen lo mismo.
-    from continental import forma
-
     informe = informe + forma.revisar_con(el_motor)
 
     try:
@@ -1081,8 +915,6 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     if parseador.parse_args(argv).forma:
-        from continental import forma
-
         informe = forma.correr()
         print(informe.como_texto(forma.TITULO))
         return informe.codigo_de_salida
