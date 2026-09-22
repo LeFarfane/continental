@@ -269,3 +269,21 @@ camino que el 0009 temía: no deja editar nada.
   medir de `enviado_en` a la recepción y subir N por encima de lo que tardan
   casi todos. Si el botón de devolver se usa sobre cosas que sí llegaron, N está
   bajo.
+
+## Enmienda 2026-09-22 — el motivo de no cancelar vive en `transiciones.py`
+
+El motivo de por qué no se puede cancelar —el `NOT EXISTS` de arriba, y las
+otras dos condiciones del `WHERE` de `_CANCELAR_EL_PEDIDO`— vivía como
+`transito.motivo_para_no_cancelar`. Con el paso 2 de la revisión de
+arquitectura se movió a `continental.transiciones.motivo_para_no_cancelar`,
+junto con `motivo_para_no_enviar` (de `particion.py`) y
+`motivo_para_no_reabrir` (de `cierre.py`, ver la enmienda del mismo día en el
+ADR 0016): las tres son la misma clase de función —"el motivo real de una
+transición", puro y sin I/O— que ya empezó a vivir ahí con
+`motivo_para_no_corregir` (ADR 0015). Su helper,
+`motivo_para_no_cancelar_por_lo_recibido`, se quedó en `transito.py`: ese
+módulo lo sigue usando para la bandera de cada grupo de renglones atrasados, y
+moverlo también habría obligado a `transito.py` a importar de vuelta desde
+`transiciones.py`. El doble (`AlmacenamientoFalso.cancelar_el_pedido`) ahora
+consulta esta función en vez de repetir sus condiciones — no cambia ningún
+comportamiento, sólo deja de escribir la misma regla dos veces.

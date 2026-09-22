@@ -65,10 +65,10 @@ from continental.dobles import AlmacenamientoFalso
 from continental.particion import (
     frase_del_envio,
     frase_sin_nada_por_repartir,
-    motivo_para_no_enviar,
 )
 from continental.precios import LecturaDePrecio
 from continental.sugerido import Renglon
+from continental.transiciones import motivo_para_no_cancelar, motivo_para_no_enviar
 from continental.transito import (
     ADVERTENCIA_AL_DEVOLVER,
     ZONA_DE_LA_FARMACIA,
@@ -85,7 +85,6 @@ from continental.transito import (
     frase_del_umbral,
     frase_para_cancelar,
     memoria_de_lo_pedido,
-    motivo_para_no_cancelar,
 )
 
 RAIZ = Path(__file__).resolve().parent.parent

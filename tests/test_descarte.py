@@ -413,10 +413,19 @@ def test_la_ruta_contesta_409_al_descartar_algo_que_no_esta_abierto(
     renglon_id = cliente.get(RUTA).json()["renglones"][0]["renglon_id"]
     almacenamiento.poner_estado_del_renglon(renglon_id, "en tránsito")
 
+    # LA BANDERA Y EL CANDADO, DE ACUERDO (2026-09-22, paso 2): esta vez del
+    # lado del RENGLÓN y no de la lista —la otra mitad del `WHERE`—, y el 409
+    # dice el motivo real (`transiciones.motivo_para_no_editar`), no un texto
+    # fijo.
+    despues = cliente.get(RUTA).json()
+    renglon = next(r for r in despues["renglones"] if r["renglon_id"] == renglon_id)
+    assert renglon["se_puede_editar"] is False
+
     respuesta = _descartar(cliente, renglon_id)
 
     assert respuesta.status_code == 409
     assert respuesta.json()["ok"] is False
+    assert "ya se le pidió a un proveedor" in respuesta.json()["detalle"]
 
 
 def test_descartar_un_renglon_que_no_existe_contesta_409(cliente, almacen):
@@ -870,10 +879,19 @@ def test_con_la_lista_cerrada_ya_no_se_descarta(cliente, almacen, almacenamiento
     renglon_id = lista["renglones"][0]["renglon_id"]
     cliente.post(f"{RUTA}/{lista['pedido_sugerido_id']}/cerrar")
 
+    # LA BANDERA Y EL CANDADO, DE ACUERDO (2026-09-22, paso 2 de la revisión
+    # de arquitectura): `se_puede_editar` ya dice que no antes de apretar el
+    # botón —es lo que `transiciones.motivo_para_no_editar` calcula—, y el
+    # 409 dice el motivo real y no un texto fijo.
+    despues = cliente.get(RUTA).json()
+    renglon = next(r for r in despues["renglones"] if r["renglon_id"] == renglon_id)
+    assert renglon["se_puede_editar"] is False
+
     respuesta = _descartar(cliente, renglon_id)
 
     assert respuesta.status_code == 409
     assert respuesta.json()["ok"] is False
+    assert "lista ya no está abierta" in respuesta.json()["detalle"]
 
 
 def test_con_la_lista_cerrada_tampoco_se_devuelve_a_abierto(
@@ -890,10 +908,19 @@ def test_con_la_lista_cerrada_tampoco_se_devuelve_a_abierto(
     _descartar(cliente, renglon_id)
     cliente.post(f"{RUTA}/{lista['pedido_sugerido_id']}/cerrar")
 
+    # LA BANDERA DEL RENGLÓN DESCARTADO, apagada por la misma razón
+    # (2026-09-22, paso 2): `se_puede_devolver_a_abierto` exige lo mismo que
+    # `se_puede_editar` del lado de la lista, con la condición del renglón
+    # invertida.
+    despues = cliente.get(RUTA).json()
+    renglon = next(r for r in despues["renglones"] if r["renglon_id"] == renglon_id)
+    assert renglon["se_puede_devolver_a_abierto"] is False
+
     respuesta = _devolver(cliente, renglon_id)
 
     assert respuesta.status_code == 409
     assert respuesta.json()["ok"] is False
+    assert "lista ya no está abierta" in respuesta.json()["detalle"]
 
 
 def test_la_lista_abierta_viaja_en_el_where_del_descarte_y_de_la_devolucion():
@@ -937,22 +964,27 @@ def test_la_pantalla_no_ofrece_descartar_si_la_lista_no_esta_abierta(cliente):
     el de devolver seria lo peor de los dos mundos: prometeria rescatar un
     renglon que alguien quito por error, y el servidor lo rechazaria.
 
-    **Desde el ticket 21 lo que decide son DOS cosas y no una**, y por eso esto
-    ya no busca `acciones.editable` pegado al boton: el estado de la LISTA
-    —"mientras este abierta"— y el del RENGLON —uno `en transito` ya se le pidio
-    a un proveedor—. Los dos entran en `editable`, que se calcula una vez por
-    renglon y lo usan los tres controles: la cantidad, el proveedor y este.
+    **Desde el ticket 21 lo que decide son DOS cosas y no una**: el estado de
+    la LISTA —"mientras esté abierta"— y el del RENGLON —uno `en transito` ya
+    se le pidió a un proveedor—. Hasta el 2026-09-21 las dos se combinaban
+    aquí mismo, en `editable`; desde el paso 2 de la revisión de arquitectura
+    (2026-09-22) la combinación la hace `transiciones.motivo_para_no_editar`
+    en el servidor, y este archivo solo lee la bandera que trae cada renglón
+    —`se_puede_editar` para descartar/ajustar/elegir, `se_puede_devolver_a_abierto`
+    para el botón de deshacer, que exige lo contrario (el renglón `descartado`).
     """
     pagina = pantalla_servida(cliente)
 
-    assert "const editable = acciones.editable && !r.esta_en_transito" in pagina, (
-        "El renglon no mira las dos cosas: el estado de la lista y el suyo."
+    assert "const editable = r.se_puede_editar;" in pagina, (
+        "El renglón ya no lee la bandera resuelta por el servidor "
+        "(`se_puede_editar`, de `transiciones.motivo_para_no_editar`)."
     )
     assert "quitar.disabled = !editable" in pagina, (
         "El boton de descartar no mira el estado de la lista."
     )
-    assert "devolver.disabled = !editable" in pagina, (
-        "El boton de devolver a la lista no mira el estado de la lista."
+    assert "devolver.disabled = !r.se_puede_devolver_a_abierto" in pagina, (
+        "El boton de devolver a la lista no mira su propia bandera "
+        "(`se_puede_devolver_a_abierto`)."
     )
     assert pagina.count("La lista ya se cerró: lo que se iba a pedir ya se pidió.") == 2, (
         "Los dos botones tienen que decir POR QUE estan apagados. Un boton gris "

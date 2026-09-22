@@ -46,7 +46,6 @@ from continental.cierre import (
     al_cerrar,
     al_cerrar_sin_resumen,
     frase_de_la_reapertura,
-    motivo_para_no_reabrir,
     reapertura as boton_de_reabrir,
 )
 from continental.clasificacion import reglas_configuradas
@@ -108,7 +107,6 @@ from continental.particion import (
     frase_del_envio,
     frase_sin_nada_por_repartir,
     lo_que_hay_que_capturar,
-    motivo_para_no_enviar,
     particion_como_json,
     partir,
 )
@@ -130,7 +128,11 @@ from continental.recepcion import (
 )
 from continental.sugerido import armar_la_lista
 from continental.transiciones import (
+    motivo_para_no_cancelar,
     motivo_para_no_corregir,
+    motivo_para_no_editar,
+    motivo_para_no_enviar,
+    motivo_para_no_reabrir,
     motivo_para_no_recibir_a_mano,
 )
 from continental.transito import (
@@ -154,7 +156,6 @@ from continental.transito import (
     frase_del_transito,
     frase_para_cancelar,
     memoria_de_lo_pedido,
-    motivo_para_no_cancelar,
     vendido_desde_que_se_pidio,
 )
 from continental.vistas import VISTAS
@@ -974,7 +975,9 @@ def cerrar_pedido_sugerido(
     # y ahí el botón contestaría 409. Sin `ancla` a la mano —esta ruta no lo
     # leyó para nada más—, `_la_reapertura` lo lee ella misma.
     return _como_json(
-        cerrado, reapertura=_la_reapertura(almacen, almacenamiento, negocio, cerrado)
+        cerrado,
+        reapertura=_la_reapertura(almacen, almacenamiento, negocio, cerrado),
+        atendidos_despues=_los_atendidos_despues(almacenamiento, negocio, cerrado),
     )
 
 
@@ -1195,7 +1198,10 @@ def reabrir_pedido_sugerido(
         reabierta.fecha_del_pedido,
         reabierta.ventana.hasta,
     )
-    return _como_json(reabierta)
+    return _como_json(
+        reabierta,
+        atendidos_despues=_los_atendidos_despues(almacenamiento, negocio, reabierta),
+    )
 
 
 @app.post("/api/renglon/{renglon_id}/descartar")
@@ -1262,6 +1268,7 @@ def descartar_renglon(
             "Ese renglón ya no estaba abierto. Vuelve a cargar la página para "
             "ver cómo quedó."
         ),
+        accion="descartar",
         almacenamiento=almacenamiento,
     )
 
@@ -1300,6 +1307,7 @@ def devolver_renglon(
             "Ese renglón ya no estaba descartado. Vuelve a cargar la página "
             "para ver cómo quedó."
         ),
+        accion="devolver_a_abierto",
         almacenamiento=almacenamiento,
     )
 
@@ -1441,6 +1449,7 @@ def ajustar_la_cantidad_del_renglon(
             "abierta, o el renglón ya no está abierto. Vuelve a cargar la "
             "página para ver cómo quedó."
         ),
+        accion="ajustar_la_cantidad",
         nota=f"La cantidad a pedir queda en {cuerpo.cantidad}.",
         almacenamiento=almacenamiento,
     )
@@ -1515,6 +1524,7 @@ def elegir_el_proveedor_del_renglon(
             "abierta, o el renglón ya no está abierto. Vuelve a cargar la "
             "página para ver cómo quedó."
         ),
+        accion="elegir_proveedor",
         nota=f"Se le pide a {nombre_del_proveedor(cuerpo.proveedor)}.",
         almacenamiento=almacenamiento,
     )
@@ -1642,6 +1652,7 @@ def partir_en_pedidos(
         corrida,
         pedidos,
         corrida_fallo=corrida_fallo,
+        atendidos_despues=_los_atendidos_despues(almacenamiento, negocio, relectura),
     )
 
 
@@ -1763,6 +1774,7 @@ def enviar_el_pedido(
         corrida,
         almacenamiento.pedidos_de_la_lista(negocio, lista_id),
         corrida_fallo=corrida_fallo,
+        atendidos_despues=_los_atendidos_despues(almacenamiento, negocio, relectura),
     )
 
 
@@ -2539,6 +2551,7 @@ def marcar_el_renglon_como_capturado(
         corrida,
         almacenamiento.pedidos_de_la_lista(negocio, lista_id),
         corrida_fallo=corrida_fallo,
+        atendidos_despues=_los_atendidos_despues(almacenamiento, negocio, guardado),
     )
 
 
@@ -3213,19 +3226,87 @@ def _consulta_como_json(
     }
 
 
+def _motivo_del_409_al_editar(
+    almacenamiento: AlmacenamientoDelPedido | None,
+    negocio: str,
+    antes: RenglonGuardado | None,
+    accion: str,
+    choque: str,
+) -> dict:
+    """El motivo real del 409 de `_mover_el_renglon`, no el texto fijo de antes.
+
+    Hasta el 2026-09-22 (paso 2 de la revisión de arquitectura) `choque` era
+    lo único que el 409 decía, igual para "el renglón no existe", "ya está en
+    tránsito" y "la lista se cerró". Ahora se relee lo que
+    `transiciones.motivo_para_no_editar` necesita y que `antes` —leído justo
+    **antes** de intentar el `UPDATE`, el mismo patrón que
+    `_motivo_del_409_a_mano` usa con `recibir_a_mano`— no trae por sí solo: su
+    lista. `antes.pedido_sugerido_id` viene poblado porque `leer_renglon` usa
+    `_LEER_RENGLON_POR_ID`.
+
+    Devuelve `{"detalle": ...}`, listo para mezclarse en el `content` del 409
+    —el mismo contrato que `_motivo_del_409_a_mano`—. `choque` se queda como
+    red de seguridad —regla 4, un texto vago es mejor que ninguno— para
+    cuando `almacenamiento` es `None` o `antes` es `None` porque el renglón
+    no existe en este negocio.
+
+    **Si la relectura misma falla**, se agrega `"que_hacer"` —regla 4,
+    ningún `ok: false` se queda sin decir qué hacer (lo cazó
+    `test_fallas.test_ninguna_falla_de_ningun_borde_lleva_detalles_al_navegador`
+    al agregar esta relectura: antes de esa prueba, `choque` a secas parecía
+    inofensivo aquí también)— con el TIPO de la falla y nunca su texto (regla
+    5): la escritura ya falló, y este `try` solo intenta explicar por qué,
+    nunca reintenta nada.
+    """
+    if almacenamiento is None or antes is None:
+        return {"detalle": choque}
+    try:
+        lista = (
+            almacenamiento.leer_por_id(negocio, antes.pedido_sugerido_id)
+            if antes.pedido_sugerido_id is not None
+            else None
+        )
+        motivo = motivo_para_no_editar(antes, lista, accion)
+    except Exception as exc:  # noqa: BLE001 — sin el motivo real, se dice que no se pudo
+        log.exception(
+            "No se pudo leer por qué no se pudo %s el renglón %s", accion, antes.renglon_id
+        )
+        return {
+            "detalle": (
+                "Ese renglón no se pudo mover, y no se pudo saber por qué "
+                f"({type(exc).__name__}). Vuelve a cargar la página."
+            ),
+            "que_hacer": _que_hacer(AL_LEER),
+        }
+    if motivo is None:
+        # El `WHERE` ya dijo que no; si la relectura dice que ahora sí se
+        # podría, alguien más cambió el renglón en el instante de en medio
+        # (la misma carrera que el ADR 0016 ya mide y acepta en otras rutas).
+        return {
+            "detalle": (
+                "Ese renglón ya no se pudo mover: algo cambió en él justo "
+                "antes. Vuelve a cargar la página para ver cómo quedó."
+            )
+        }
+    return {"detalle": motivo}
+
+
 def _mover_el_renglon(
     renglon_id: int,
     request: Request,
     mover,
     verbo: str,
     choque: str,
+    accion: str,
     nota: str = "",
     almacenamiento: AlmacenamientoDelPedido | None = None,
 ):
-    """Lo que las tres rutas que mueven un renglón comparten entero.
+    """Lo que las cuatro rutas que mueven un renglón comparten entero.
 
-    `almacenamiento` entra solo para releer los **precios congelados** del
-    renglón movido (ticket 12). Es opcional por comodidad de quien llama, y no
+    `almacenamiento` entra para releer los **precios congelados** del
+    renglón movido (ticket 12) y, desde el 2026-09-22, el renglón **antes**
+    de intentar moverlo — lo que el 409 necesita para decir el motivo real en
+    vez de `choque`. Sigue siendo opcional por comodidad de quien llama y no
     por duda: sin él, el renglón que vuelve tendría la misma forma pero con la
     lista de precios vacía, y la pantalla —que sustituye el renglón entero por
     el que llega— borraría de la vista precios que siguen guardados. Un dato
@@ -3233,14 +3314,19 @@ def _mover_el_renglon(
     que nunca estuvo: nadie sabe cuál de los dos creer.
 
     Cambia la operación y cambia el texto; el resto —la firma, el `try` que
-    convierte una base caída en un hueco con su motivo, el 409 de "no había
-    nada que mover" y la respuesta con los conteos— es el mismo, y escribirlo
-    tres veces sería tres oportunidades de que una deje de cumplir la regla 5.
+    convierte una base caída en un hueco con su motivo, el 409 con el motivo
+    real y la respuesta con los conteos— es el mismo, y escribirlo cuatro
+    veces sería cuatro oportunidades de que una deje de cumplir la regla 5.
 
     `verbo` trae su propio sustantivo —"descartar el renglón", "ajustar la
     cantidad del renglón"— en vez de dejarlo en la plantilla: pegarle "el
     renglón" a "ajustar la cantidad de" daba "de el renglón", y una bitácora
     que se lee mal se deja de leer.
+
+    `accion` es una de `transiciones.ACCIONES_DE_EDICION`
+    (`"descartar"`, `"devolver_a_abierto"`, `"ajustar_la_cantidad"`,
+    `"elegir_proveedor"`): la que `transiciones.motivo_para_no_editar` va a
+    juzgar si el `mover` que se intentó no movió nada.
 
     `nota` es lo que solo esa operación sabe y la bitácora necesita. Hoy la usa
     el ajuste, para dejar escrita **cada** cantidad que alguien tecleó: la
@@ -3251,6 +3337,14 @@ def _mover_el_renglon(
     firma = quien(request)
 
     try:
+        # Se lee ANTES de intentar, en la misma línea que `recibir_a_mano`
+        # (ver `_motivo_del_409_a_mano`): si el `UPDATE` contesta cero filas,
+        # es lo único que permite decir POR QUÉ. La decisión sigue siendo del
+        # `WHERE` y no de esta lectura — el renglón pudo cambiar en el
+        # instante de en medio, y eso se dice aparte si pasa.
+        antes = (
+            None if almacenamiento is None else almacenamiento.leer_renglon(negocio, renglon_id)
+        )
         guardado = mover(negocio, firma)
     except Exception as exc:  # noqa: BLE001 — el almacenamiento caído es un hueco, no un 500
         log.exception("No se pudo %s %s", verbo, renglon_id)
@@ -3271,7 +3365,13 @@ def _mover_el_renglon(
             renglon_id,
             negocio,
         )
-        return JSONResponse(status_code=409, content={"ok": False, "detalle": choque})
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                **_motivo_del_409_al_editar(almacenamiento, negocio, antes, accion, choque),
+            },
+        )
 
     movido = next(r for r in guardado.renglones if r.renglon_id == renglon_id)
     # Una sola lectura para las dos cosas: los precios del renglón que se movió
@@ -3303,7 +3403,26 @@ def _mover_el_renglon(
     return {
         "ok": True,
         "pedido_sugerido_id": guardado.pedido_sugerido_id,
-        "renglon": _renglon_como_json(movido, precios, ventana=guardado.ventana),
+        "renglon": _renglon_como_json(
+            movido,
+            precios,
+            ventana=guardado.ventana,
+            # `lista=guardado`: la relectura de arriba, ya con el renglón en
+            # su estado nuevo — es de lo que `se_puede_editar` y
+            # `se_puede_devolver_a_abierto` necesitan saber si sigue abierta.
+            lista=guardado,
+            # `atendidos_despues=frozenset()` está bien aquí y no es el
+            # descuido que tenía `_como_json` (ver su docstring): las cuatro
+            # rutas que llaman a `_mover_el_renglon` —descartar, devolver,
+            # ajustar, elegir proveedor— solo mueven renglones `abierto` o
+            # `descartado` (el `WHERE`, ahora también en
+            # `transiciones.motivo_para_no_editar`), así que `movido` NUNCA
+            # está `recibido` y `se_puede_corregir` va a valer `False` por esa
+            # razón sola, sin que `atendidos_despues` cambie nada. Leerlo de
+            # verdad costaría una consulta más por clic para un valor que no
+            # se usa.
+            atendidos_despues=frozenset(),
+        ),
         # Los conteos salen del servidor y no de una cuenta del navegador: dos
         # pestañas abiertas en el mostrador bastan para que un número que el
         # JavaScript va sumando se separe de la verdad, y ese número es el que
@@ -3414,7 +3533,8 @@ def _como_json(
     aun_faltan: frozenset[int] | None = None,
     reapertura: dict | None = None,
     corrida_fallo: bool = False,
-    atendidos_despues: frozenset[int] = frozenset(),
+    *,
+    atendidos_despues: frozenset[int],
 ) -> dict:
     """La lista guardada, como la pantalla la lee.
 
@@ -3461,9 +3581,20 @@ def _como_json(
     leído **una vez por respuesta y no una vez por renglón recibido** —quien
     llama lo trae ya calculado, con su propio `try`/`except` (regla 4)—. De
     ahí sale `se_puede_corregir` de cada renglón, con
-    `transiciones.motivo_para_no_corregir`. Por omisión, vacío: ningún
-    renglón se da por atendido, que es la misma cosa que decir "esta lectura
-    no se hizo" en las rutas que no la necesitan.
+    `transiciones.motivo_para_no_corregir`.
+
+    **Obligatorio y sin omisión** (2026-09-22, paso 2 de la revisión de
+    arquitectura): hasta entonces el valor por omisión era `frozenset()`, y
+    cinco de las seis rutas que arman una respuesta con `_como_json` —cerrar,
+    reabrir, partir, enviar, tachar— lo dejaban puesto sin darse cuenta, así
+    que sus respuestas pintaban "Corregir" como si ninguna lista posterior
+    hubiera atendido nada. Un valor por omisión que calla en vez de avisar es
+    exactamente lo que la regla 4 de `CLAUDE.md` prohíbe —"nunca en
+    silencio"—, y aquí lo prohíbe además una prueba: quien llame sin este
+    argumento ahora revienta con un `TypeError` en vez de servir una
+    respuesta con un botón que 409ea. Quien llama lo calcula con
+    `_los_atendidos_despues`, que ya trae su propio hueco con motivo si la
+    lectura falla.
     """
     comparaciones = {
         r.renglon_id: comparar((precios or {}).get(r.renglon_id, ()), r.cantidad_a_pedir)
@@ -3520,6 +3651,7 @@ def _como_json(
                 corrida,
                 ventana=guardado.ventana,
                 pedido=por_pedido.get(r.pedido_id),
+                lista=guardado,
                 ya_en_camino=ya_en_camino,
                 ahora=ahora,
                 umbral=umbral,
@@ -3884,14 +4016,27 @@ def _renglon_como_json(
     *,
     ventana: Ventana | None = None,
     pedido: PedidoGuardado | None = None,
+    lista: PedidoSugeridoGuardado | None,
     ya_en_camino: dict | None = None,
     ahora: dt.datetime | None = None,
     umbral: int | None = None,
     con_propuesta: frozenset[int] = frozenset(),
     aun_faltan: frozenset[int] | None = None,
-    atendidos_despues: frozenset[int] = frozenset(),
+    atendidos_despues: frozenset[int],
 ) -> dict:
     """Un renglón guardado, como la pantalla lo lee.
+
+    `lista` es la lista guardada a la que pertenece este renglón
+    (`PedidoSugeridoGuardado`), y **es obligatoria y sin omisión** (2026-09-22,
+    paso 2 de la revisión de arquitectura): de ella sale `se_puede_editar` y
+    `se_puede_devolver_a_abierto`, con `transiciones.motivo_para_no_editar`.
+    Un valor por omisión de `None` habría hecho lo mismo que le pasó a
+    `atendidos_despues` antes de este paso —una bandera que calla en vez de
+    avisar que faltó pasarla— y aquí el error sería al revés y más difícil de
+    notar: los botones se apagarían siempre, en vez de ofrecerse de más.
+    Quien llama en general ya tiene la lista a la mano (`_como_json` la
+    recibió como `guardado`; las rutas de un solo renglón la releyeron para
+    devolver la respuesta).
 
     `corrida` es cómo le fue al lote sobre la lista de este renglón, y de ella
     sale `porque_no_hay_lectura` (ticket 19). Va por omisión en `None` porque
@@ -3942,6 +4087,25 @@ def _renglon_como_json(
         # YA LLEGÓ (ticket 26): resuelto aquí por lo mismo que los dos de
         # arriba. De él cuelgan la marca, los controles apagados y el conteo.
         "esta_recibido": renglon.esta_recibido,
+        # SE PUEDE DESCARTAR, AJUSTAR LA CANTIDAD O ELEGIR PROVEEDOR
+        # (2026-09-22, paso 2 de la revisión de arquitectura). Hasta este paso
+        # `continental.js` lo recalculaba solo —`!esta_en_transito &&
+        # !esta_cancelado && !esta_recibido`, combinado con el estado de la
+        # LISTA— sin que ninguna prueba de Python comprobara que esa copia
+        # seguía de acuerdo con el `WHERE` de `_DESCARTAR`,
+        # `_AJUSTAR_LA_CANTIDAD` y `_ELEGIR_PROVEEDOR`. Ahora es **la misma
+        # decisión**, con `transiciones.motivo_para_no_editar`, y el
+        # JavaScript solo lee la bandera.
+        "se_puede_editar": (
+            motivo_para_no_editar(renglon, lista, "descartar") is None
+        ),
+        # SE PUEDE DEVOLVER A LA LISTA (el renglón `descartado`), por la misma
+        # razón y con la misma función: `_DEVOLVER_A_ABIERTO` exige lo
+        # contrario que las tres de arriba —el renglón `descartado`— y por eso
+        # es una bandera aparte y no la negación de `se_puede_editar`.
+        "se_puede_devolver_a_abierto": (
+            motivo_para_no_editar(renglon, lista, "devolver_a_abierto") is None
+        ),
         "frase_de_lo_recibido": frase_de_lo_recibido(renglon),
         # CUÁNTAS LLEGARON, Y CORREGIRLO (ticket 27, ADR 0015). Hasta el
         # 2026-09-21 esta bandera era solo `renglon.esta_recibido`, sin mirar

@@ -55,11 +55,10 @@ from continental.almacenamiento import (
 from continental.particion import (
     CONTINENTAL_NO_PIDE_EN_PORTALES,
     ENVIAR_ES_UNA_DECLARACION,
-    TOTAL_ENVEJECIDO,
     frase_del_envio,
-    motivo_para_no_enviar,
 )
 from continental.precios import LecturaDePrecio, SESION_CADUCADA
+from continental.transiciones import TOTAL_ENVEJECIDO, motivo_para_no_enviar
 
 RAIZ = Path(__file__).resolve().parent.parent
 SQL = RAIZ / "sql"
@@ -839,9 +838,16 @@ def test_un_renglon_en_transito_sigue_en_la_tabla_pero_no_se_puede_tocar(
     # Sigue en la lista que la pantalla pinta, con su bandera resuelta.
     assert len(despues["renglones"]) == 1
     assert despues["renglones"][0]["esta_en_transito"] is True
+    # Y con el candado de edición apagado, ahora resuelto por
+    # `transiciones.motivo_para_no_editar` (2026-09-22, paso 2 de la revisión
+    # de arquitectura) en vez de recalculado en el JavaScript.
+    assert despues["renglones"][0]["se_puede_editar"] is False
 
     pantalla = pantalla_completa()
-    assert "const editable = acciones.editable && !r.esta_en_transito" in pantalla
+    # El JavaScript ya no recalcula `editable` a mano —la línea de abajo
+    # sustituye a la que decía `acciones.editable && !r.esta_en_transito && …`
+    # hasta el 2026-09-22—: ahora solo lee la bandera que trae el renglón.
+    assert "const editable = r.se_puede_editar;" in pantalla
     assert "Ya se pidió: en tránsito." in pantalla
 
 

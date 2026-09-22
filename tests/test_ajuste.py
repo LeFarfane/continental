@@ -109,10 +109,19 @@ def test_con_la_lista_cerrada_la_cantidad_ya_no_se_cambia(
     renglon_id = lista["renglones"][0]["renglon_id"]
     cliente.post(f"{RUTA}/{lista['pedido_sugerido_id']}/cerrar")
 
+    # LA BANDERA Y EL CANDADO, DE ACUERDO (2026-09-22, paso 2 de la revisión
+    # de arquitectura): `se_puede_editar` ya dice que no —es la misma
+    # decisión de `transiciones.motivo_para_no_editar` que apaga el campo de
+    # la cantidad en la pantalla—, y el 409 dice el motivo real.
+    despues = cliente.get(RUTA).json()
+    renglon = next(r for r in despues["renglones"] if r["renglon_id"] == renglon_id)
+    assert renglon["se_puede_editar"] is False
+
     respuesta = _ajustar(cliente, renglon_id, 10)
 
     assert respuesta.status_code == 409
     assert respuesta.json()["ok"] is False
+    assert "lista ya no está abierta" in respuesta.json()["detalle"]
     assert _renglon_guardado(almacenamiento, renglon_id).cantidad_final is None
 
 
@@ -184,6 +193,26 @@ def test_un_renglon_que_no_esta_abierto_no_cambia_de_cantidad(almacenamiento, es
 
     assert almacenamiento.ajustar_la_cantidad(NEGOCIO, renglon_id, 9, CORREO) is None
     assert almacenamiento.leer(NEGOCIO, HOY).renglones[0].cantidad_final is None
+
+
+def test_la_bandera_y_el_409_concuerdan_con_el_renglon_en_transito(
+    cliente, almacen, almacenamiento
+):
+    """La misma comprobación que arriba, del lado de la ruta y no del doble
+    (2026-09-22, paso 2): `se_puede_editar` en `False` y el 409 con el motivo
+    real de `transiciones.motivo_para_no_editar`, no un texto fijo."""
+    _poblar(almacen)
+    renglon_id = cliente.get(RUTA).json()["renglones"][0]["renglon_id"]
+    almacenamiento.poner_estado_del_renglon(renglon_id, "en tránsito")
+
+    despues = cliente.get(RUTA).json()
+    renglon = next(r for r in despues["renglones"] if r["renglon_id"] == renglon_id)
+    assert renglon["se_puede_editar"] is False
+
+    respuesta = _ajustar(cliente, renglon_id, 10)
+
+    assert respuesta.status_code == 409
+    assert "ya se le pidió a un proveedor" in respuesta.json()["detalle"]
 
 
 def test_un_renglon_de_otro_negocio_no_cambia_de_cantidad(almacenamiento):

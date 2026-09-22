@@ -35,7 +35,7 @@ from pathlib import Path
 import pytest
 
 from conftest import pantalla_completa
-from continental import cierre
+from continental import cierre, transiciones
 from continental.almacen import LineaDeVenta, Producto
 from continental.almacenamiento import (
     ABIERTO,
@@ -406,11 +406,11 @@ def test_la_firma_de_la_reapertura_va_en_la_hora_de_la_farmacia():
 def test_el_motivo_para_no_reabrir_depende_de_como_quedo(estado, pista):
     """`ancla=JUEVES` con una lista del jueves: dentro de la ventana de un
     día, así que el `CERRADO` de aquí solo puede deberse a la siguiente."""
-    assert pista in cierre.motivo_para_no_reabrir(_lista(estado=estado), JUEVES)
+    assert pista in transiciones.motivo_para_no_reabrir(_lista(estado=estado), JUEVES)
 
 
 def test_el_motivo_sin_lista_dice_que_no_existe():
-    assert "No hay una lista" in cierre.motivo_para_no_reabrir(None, JUEVES)
+    assert "No hay una lista" in transiciones.motivo_para_no_reabrir(None, JUEVES)
 
 
 def test_el_motivo_para_no_reabrir_dice_hace_mas_de_un_dia_cuando_la_lista_es_vieja():
@@ -418,7 +418,7 @@ def test_el_motivo_para_no_reabrir_dice_hace_mas_de_un_dia_cuando_la_lista_es_vi
     armó la lista siguiente"."""
     vieja = _lista(estado=CERRADO, desde=LUNES, hasta=LUNES)
 
-    motivo = cierre.motivo_para_no_reabrir(vieja, JUEVES)
+    motivo = transiciones.motivo_para_no_reabrir(vieja, JUEVES)
 
     assert "hace más de un día" in motivo
     assert "lunes 14 de septiembre" in motivo
@@ -431,7 +431,7 @@ def test_el_motivo_para_no_reabrir_de_ayer_no_dice_hace_mas_de_un_dia():
     aun así no se pudo, la razón fue que ya se armó la siguiente."""
     ayer = _lista(estado=CERRADO, desde=MIERCOLES, hasta=MIERCOLES)
 
-    motivo = cierre.motivo_para_no_reabrir(ayer, JUEVES)
+    motivo = transiciones.motivo_para_no_reabrir(ayer, JUEVES)
 
     assert "ya se armó la lista siguiente" in motivo
 

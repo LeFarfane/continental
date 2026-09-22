@@ -77,6 +77,12 @@ from continental.doyle import (
     SesionDeProveedor,
 )
 from continental.precios import LecturaDePrecio
+from continental.transiciones import (
+    motivo_para_no_cancelar,
+    motivo_para_no_corregir,
+    motivo_para_no_editar,
+    motivo_para_no_enviar,
+)
 
 
 @dataclass
@@ -753,7 +759,24 @@ class AlmacenamientoFalso:
         self, negocio: str, pedido_sugerido_id: int, ancla: dt.date
     ) -> dict | None:
         """La lista que `_REABRIR` movería, o `None`. Las cinco condiciones de
-        su `WHERE`, en el mismo orden."""
+        su `WHERE`, en el mismo orden.
+
+        **No delega en `transiciones.motivo_para_no_reabrir`** (revisado
+        2026-09-22, paso 3 de la revisión de arquitectura): esa función NO
+        es equivalente a este `WHERE`. `motivo_para_no_reabrir` recibe **una**
+        lista y su `ancla`, y cuando llega a la última rama —`estado ==
+        CERRADO`, no vencida, dentro de la ventana de un día— **asume** que la
+        razón es "ya se armó la siguiente", porque para entonces ya sabe que
+        el `UPDATE` contestó cero filas y solo le queda explicar por qué. No
+        comprueba esa condición por sí misma: no tiene con qué, porque no
+        recibe las demás listas del negocio. `_ninguna_lista_despues` de aquí
+        SÍ la comprueba —recorre `self.listas`—, y es justo el "conteo que el
+        doble calcula distinto" que la propuesta 1 anticipó como motivo
+        legítimo para no delegar. Unificar aquí obligaría a
+        `motivo_para_no_reabrir` a recibir la lista completa de listas del
+        negocio, lo que la sacaría de la familia de funciones puras "una
+        lista, su ancla" que hoy mantiene.
+        """
         lista = self._por_id(pedido_sugerido_id)
         if (
             lista is None
@@ -878,12 +901,26 @@ class AlmacenamientoFalso:
         # cuarta, una lista cerrada se seguiría dejando modificar y dejaría de
         # significar "ya se pidió lo que se iba a pedir" (pendiente 4, decidido
         # el 2026-09-20).
+        #
+        # Las DOS últimas —el renglón abierto y su lista abierta— ya no se
+        # repiten aquí: las juzga `transiciones.motivo_para_no_editar`
+        # (2026-09-22, paso 3 de la revisión de arquitectura), la misma
+        # función que decide la bandera `se_puede_editar` de la pantalla y el
+        # motivo del 409. El negocio y la existencia del renglón siguen siendo
+        # la unión, no la regla, y se quedan aquí.
         if encontrado is None:
             return None
         fila, lista = encontrado
-        if fila["negocio"] != negocio or fila["estado"] != RENGLON_ABIERTO:
+        if fila["negocio"] != negocio:
             return None
-        if lista["estado"] != ABIERTO:
+        if (
+            motivo_para_no_editar(
+                renglon_guardado_desde_columnas(fila),
+                armar_guardado(lista, lista["renglones"]),
+                "descartar",
+            )
+            is not None
+        ):
             return None
         # El instante real con zona que en la tabla pone `now()`. Es un
         # INSTANTE y no una fecha: lo que se ancla en `max(fecha)` son las
@@ -947,9 +984,19 @@ class AlmacenamientoFalso:
         # mismo orden: el negocio, el renglón abierto, y **la lista abierta**,
         # que es lo que el ticket 11 pide con todas sus letras. Sin la última,
         # una cantidad nueva entraría en una lista que ya se pidió.
-        if fila["negocio"] != negocio or fila["estado"] != RENGLON_ABIERTO:
+        #
+        # Las DOS últimas las juzga `transiciones.motivo_para_no_editar`, la
+        # misma función que `descartar` (2026-09-22, paso 3).
+        if fila["negocio"] != negocio:
             return None
-        if lista["estado"] != ABIERTO:
+        if (
+            motivo_para_no_editar(
+                renglon_guardado_desde_columnas(fila),
+                armar_guardado(lista, lista["renglones"]),
+                "ajustar_la_cantidad",
+            )
+            is not None
+        ):
             return None
         # El instante real con zona que en la tabla pone `now()`. Es un INSTANTE
         # y no una fecha: lo que se ancla en `max(fecha)` son las fechas de
@@ -1014,9 +1061,20 @@ class AlmacenamientoFalso:
         # mismo orden y las mismas que el ajuste: el negocio, el renglón
         # abierto y **la lista abierta**. Sin la última, se armaría un pedido
         # dentro de una lista que ya se pidió.
-        if fila["negocio"] != negocio or fila["estado"] != RENGLON_ABIERTO:
+        #
+        # Las DOS últimas, otra vez por `transiciones.motivo_para_no_editar`
+        # (2026-09-22, paso 3): descartar, ajustar y elegir comparten la
+        # misma regla exacta, y ahora comparten la misma función.
+        if fila["negocio"] != negocio:
             return None
-        if lista["estado"] != ABIERTO:
+        if (
+            motivo_para_no_editar(
+                renglon_guardado_desde_columnas(fila),
+                armar_guardado(lista, lista["renglones"]),
+                "elegir_proveedor",
+            )
+            is not None
+        ):
             return None
         # El instante real con zona que en la tabla pone `now()`.
         return self.poner_el_proveedor(
@@ -1220,6 +1278,12 @@ class AlmacenamientoFalso:
         `AlmacenamientoDelPedido.enviar_el_pedido`; en corto: enviar es decir
         que sí se pidió, y bloquearlo dejaría renglones `abierto` atrapados
         dentro de una lista cerrada.
+
+        Las tres condiciones de estado —borrador, con renglones dentro, sin
+        total viejo— las juzga `transiciones.motivo_para_no_enviar`
+        (2026-09-22, paso 3 de la revisión de arquitectura), la misma función
+        que decide el motivo del 409 real. El negocio y la existencia del
+        pedido son la unión, no la regla, y se quedan aquí.
         """
         self._revisar()
         fila = None
@@ -1227,7 +1291,7 @@ class AlmacenamientoFalso:
             if candidato["pedido_id"] == pedido_id:
                 fila = candidato
                 break
-        if fila is None or fila["negocio"] != negocio or fila["estado"] != BORRADOR:
+        if fila is None or fila["negocio"] != negocio:
             return None
 
         lista = self._por_id(fila["pedido_sugerido_id"])
@@ -1236,15 +1300,16 @@ class AlmacenamientoFalso:
             for r in (lista["renglones"] if lista else [])
             if r.get("pedido_id") == pedido_id and r["negocio"] == negocio
         ]
-        # El `EXISTS` de `_ENVIAR_EL_PEDIDO`: un pedido vacío no se envía.
-        if not dentro:
-            return None
-        # Y su `NOT EXISTS`: el total no se envía viejo. `total_sin_iva` solo se
-        # reescribe al partir, así que una cantidad corregida después de armar
-        # el pedido lo deja enseñando lo que costaba hace un rato.
-        if any(
+        # El total no se envía viejo: `total_sin_iva` solo se reescribe al
+        # partir, así que una cantidad corregida después de armar el pedido lo
+        # deja enseñando lo que costaba hace un rato.
+        total_envejecido = any(
             r.get("ajustada_en") is not None and r["ajustada_en"] > fila["armado_en"]
             for r in dentro
+        )
+        if (
+            motivo_para_no_enviar(pedido_desde_columnas(fila), len(dentro), total_envejecido)
+            is not None
         ):
             return None
 
@@ -1280,10 +1345,17 @@ class AlmacenamientoFalso:
         `revisar_el_renglon`, así que un `cancelado` sin firma rebota aquí
         igual que en atlas. Pedido y renglones con el MISMO instante: es el
         `now()` de una sola transacción.
+
+        Las dos condiciones de estado —enviado, nada recibido— las juzga
+        `transiciones.motivo_para_no_cancelar` (2026-09-22, paso 3), la misma
+        función que decide el motivo del 409 real y la bandera
+        `motivo_para_no_cancelar`/`se_puede_cancelar` de la pantalla de
+        atrasados. El negocio y la existencia del pedido son la unión, no la
+        regla, y se quedan aquí.
         """
         self._revisar()
         fila = next((p for p in self.pedidos if p["pedido_id"] == pedido_id), None)
-        if fila is None or fila["negocio"] != negocio or fila["estado"] != ENVIADO:
+        if fila is None or fila["negocio"] != negocio:
             return None
         lista = self._por_id(fila["pedido_sugerido_id"])
         dentro = [
@@ -1292,7 +1364,8 @@ class AlmacenamientoFalso:
             if r.get("pedido_id") == pedido_id and r["negocio"] == negocio
         ]
         # El `NOT EXISTS` sobre lo recibido: si algo llegó, sí se capturó.
-        if any(r["estado"] in ESTADOS_QUE_CIERRAN_EL_TRANSITO for r in dentro):
+        recibidos = sum(1 for r in dentro if r["estado"] in ESTADOS_QUE_CIERRAN_EL_TRANSITO)
+        if motivo_para_no_cancelar(pedido_desde_columnas(fila), recibidos) is not None:
             return None
 
         cuando = dt.datetime.now(dt.UTC)
@@ -1492,6 +1565,15 @@ class AlmacenamientoFalso:
         Las mismas condiciones, en el mismo orden, y el estado sale de las
         piezas con la misma comparación del `case`. Lo que la corrección
         conserva —las compras de la evidencia, si las había— se conserva aquí.
+
+        La rama de corrección —el renglón que ya estaba `recibido` o
+        `recibido parcial`— juzga sus dos condiciones (atendido después, la
+        misma cifra) con `transiciones.motivo_para_no_corregir` (2026-09-22,
+        paso 3): es la misma función que decide el motivo del 409 real y la
+        bandera `se_puede_corregir` de la pantalla. Lo de arriba —recibido,
+        pedido enviado, piezas positivas— ya está garantizado en este punto
+        por las líneas de arriba, así que las ramas de esa función que los
+        vuelven a comprobar no se disparan.
         """
         self._revisar()
         encontrado = self._renglon_por_id(renglon_id)
@@ -1506,9 +1588,16 @@ class AlmacenamientoFalso:
         if fila["estado"] == RENGLON_EN_TRANSITO:
             compras = None
         elif fila["estado"] in ESTADOS_QUE_CIERRAN_EL_TRANSITO:
-            if fila.get("piezas_recibidas") == piezas:
-                return None
-            if self._ya_se_atendio(negocio, fila["producto_id"], lista["fecha_del_pedido"]):
+            atendido_despues = self._ya_se_atendio(
+                negocio, fila["producto_id"], lista["fecha_del_pedido"]
+            )
+            motivo = motivo_para_no_corregir(
+                renglon_guardado_desde_columnas(fila),
+                pedido_desde_columnas(pedido),
+                atendido_despues,
+                piezas,
+            )
+            if motivo is not None:
                 return None
             compras = fila.get("recibido_con_compras")
         else:
@@ -1669,12 +1758,24 @@ class AlmacenamientoFalso:
         if encontrado is None:
             return None
         fila, lista = encontrado
-        if fila["negocio"] != negocio or fila["estado"] != RENGLON_DESCARTADO:
+        if fila["negocio"] != negocio:
             return None
         # La lista abierta también: deshacer es modificar. Ponerlo solo del lado
         # del descarte dejaría renglones `descartado` dentro de una lista
         # cerrada sin manera de volver.
-        if lista["estado"] != ABIERTO:
+        #
+        # Las dos, otra vez por `transiciones.motivo_para_no_editar`
+        # (2026-09-22, paso 3), con `"devolver_a_abierto"`: la única de las
+        # cuatro acciones que exige lo contrario que las otras tres —el
+        # renglón `descartado`, no `abierto`.
+        if (
+            motivo_para_no_editar(
+                renglon_guardado_desde_columnas(fila),
+                armar_guardado(lista, lista["renglones"]),
+                "devolver_a_abierto",
+            )
+            is not None
+        ):
             return None
         # Las dos columnas se van a `None` juntas: lo exige ck_renglon_descarte
         # y lo comprueba `poner_estado_del_renglon`.

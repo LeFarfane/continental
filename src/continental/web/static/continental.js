@@ -806,17 +806,14 @@ const renglon = (r, acciones) => {
       r.dias_de_cobertura === 1 ? ' día' : ' días');
   }
 
-  // LO QUE SE PUEDE TOCAR SALE DE DOS COSAS Y NO DE UNA (ticket 21): del estado
-  // de la LISTA —"se puede corregir mientras la lista esté abierta"— y del
-  // estado del RENGLÓN. Un renglón `en tránsito` ya se le pidió a un proveedor,
-  // y las tres rutas que lo tocan exigen `abierto` en su `WHERE`, así que
-  // dejarlo editable sería ofrecer tres botones que contestan 409. Eso enseña a
-  // ignorar los avisos, que es lo mismo que el campo de la cantidad ya decidió
-  // para la lista cerrada.
-  //
-  // La garantía sigue siendo del `WHERE`, no de esto.
-  const editable = acciones.editable && !r.esta_en_transito && !r.esta_cancelado
-    && !r.esta_recibido;
+  // LO QUE SE PUEDE TOCAR ya no lo calcula este archivo (2026-09-22, paso 2 de
+  // la revisión de arquitectura). Hasta entonces salía de dos cosas combinadas
+  // aquí —el estado de la LISTA y el del RENGLÓN— sin que ninguna prueba de
+  // Python comprobara que esa combinación seguía de acuerdo con el `WHERE` de
+  // `_DESCARTAR`, `_AJUSTAR_LA_CANTIDAD` y `_ELEGIR_PROVEEDOR`. Ahora
+  // `se_puede_editar` ya viene resuelto de `transiciones.motivo_para_no_editar`
+  // —la misma decisión, probada— y este archivo solo la lee.
+  const editable = r.se_puede_editar;
 
   const cantidad = celdaDeCantidad(r, editable, acciones.ajustar);
 
@@ -952,7 +949,7 @@ const celdaDeProveedor = (r, editable, alElegir) => {
 // a propósito: de un renglón que no se va a pedir lo único que importa es cuál
 // era, quién lo quitó y poder devolverlo. Repetir las cinco columnas daría el
 // mismo peso visual a lo atendido que a lo pendiente.
-const renglonDescartado = (r, alDevolver, editable) => {
+const renglonDescartado = (r, alDevolver) => {
   const li = document.createElement('li');
 
   const nombre = document.createElement('span');
@@ -964,8 +961,15 @@ const renglonDescartado = (r, alDevolver, editable) => {
   // Apagarlo solo de un lado sería lo peor de los dos mundos: un renglón que
   // alguien quitó por error se quedaría fuera de una lista cerrada sin manera
   // de volver, y el botón estaría ahí prometiendo que sí.
-  devolver.disabled = !editable;
-  devolver.title = editable
+  //
+  // `r.se_puede_devolver_a_abierto` ya viene resuelto de
+  // `transiciones.motivo_para_no_editar` (2026-09-22, paso 2): antes este
+  // archivo recibía un solo `editable` de nivel de LISTA para todo el bloque
+  // de descartados, que valía lo mismo que esto porque aquí solo llegan
+  // renglones ya `descartado` — la bandera por renglón no cambia lo que se ve,
+  // pero deja de recalcularlo sin prueba.
+  devolver.disabled = !r.se_puede_devolver_a_abierto;
+  devolver.title = r.se_puede_devolver_a_abierto
     ? 'Vuelve a la lista como estaba.'
     : 'La lista ya se cerró: lo que se iba a pedir ya se pidió.';
 
@@ -1500,8 +1504,7 @@ async function cargarPedido() {
     pintarDescartados(
       datos.renglones.filter(r => r.estado === DESCARTADO),
       datos.descartados,
-      devolver,
-      acciones.editable);
+      devolver);
     // El conteo de huecos, arriba y en cada repintado: descartar, devolver y
     // consultar un precio lo cambian, y un número que envejece en la pantalla
     // se lee como verdad igual que uno al día.
@@ -3232,13 +3235,13 @@ const pintarParticion = (particion, pedidos, editable, alPartir, alEnviar, alTac
 // lo mismo: es el número que el ADR 0002 va a mirar después de un mes, y un
 // conteo que el navegador lleve a mano se separa de la verdad en cuanto hay
 // dos pestañas abiertas en el mostrador.
-const pintarDescartados = (renglones, cuantos, alDevolver, editable) => {
+const pintarDescartados = (renglones, cuantos, alDevolver) => {
   const caja = document.getElementById('descartados');
   document.getElementById('descartados-resumen').textContent =
     plural(cuantos, 'renglón descartado', 'renglones descartados') +
     ' de esta lista. Queda guardado quién y cuándo.';
   document.getElementById('descartados-lista').replaceChildren(
-    ...renglones.map(r => renglonDescartado(r, alDevolver, editable)));
+    ...renglones.map(r => renglonDescartado(r, alDevolver)));
   caja.hidden = !cuantos;
 };
 

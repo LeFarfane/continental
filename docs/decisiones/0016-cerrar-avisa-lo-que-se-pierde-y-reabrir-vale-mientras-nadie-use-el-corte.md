@@ -343,3 +343,26 @@ empeora ni la resuelve, compara fechas de calendario, no instantes—. No hace
 falta una migración: no hay columna nueva, solo un `and` más en dos `WHERE`
 que ya existían y un parámetro más en dos llamadas que ya lo hacían con
 `:negocio` y `:pedido_sugerido_id`.
+
+## Enmienda 2026-09-22 — `motivo_para_no_reabrir` vive en `transiciones.py`
+
+**Solo de dónde vive, no de qué dice.** El motivo de arriba —"El motivo del
+409 distingue los dos casos"— seguía nombrando `cierre.motivo_para_no_reabrir`.
+Con el paso 2 de la revisión de arquitectura del 2026-09-21/22
+(`transiciones.py`), esa función se movió a `continental.transiciones` junto
+con `motivo_para_no_cancelar` (de `transito.py`) y `motivo_para_no_enviar` (de
+`particion.py`): las tres son "el motivo real de una transición", la misma
+familia que ya vivía ahí desde el primer paso (corregir lo recibido, recibir a
+mano). `cierre.py` conserva `fecha_en_palabras` y `ZONA_DE_LA_FARMACIA` —los
+sigue usando para lo que no se movió— y los presta a `transiciones.py` para
+esta función; no hay import de vuelta, así que no hay ciclo.
+
+**El doble (`AlmacenamientoFalso`) no delega en ella**, y quedó anotado en su
+propio código por qué: `motivo_para_no_reabrir` recibe una lista y su `ancla`,
+y en su última rama **asume** —no comprueba— que "ya se armó la siguiente" es
+la razón, porque para cuando se llama el `WHERE` ya contestó que no. El doble
+sí comprueba esa condición, recorriendo sus listas
+(`_ninguna_lista_despues`), y unificar las dos habría sacado a la función pura
+de la familia "una lista, su ancla" que hoy mantiene, a cambio de tener que
+recibir la lista completa de listas del negocio. Es el caso que la propuesta 1
+anticipó: "donde no son exactamente equivalentes, se deja y se anota".

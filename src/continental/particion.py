@@ -159,43 +159,11 @@ CONTINENTAL_NO_PIDE_EN_PORTALES = (
     "Continental no entra a los portales y no le manda el pedido a nadie"
 )
 
-#: El segundo clic de un botón que ya viajó, o dos pestañas abiertas en el
-#: mostrador. No es un error de nadie y por eso se dice con palabras.
-YA_ESTA_ENVIADO = "ese pedido ya está enviado: no se vuelve a enviar"
-
-#: Un pedido cancelado (ticket 25, ADR 0013) no vuelve a enviarse: cancelar es
-#: un final, no una vuelta a `borrador`. Lo que no llegó vuelve a proponerse en
-#: la siguiente lista, y ahí se pide otra vez si hace falta.
-YA_ESTA_CANCELADO = (
-    "ese pedido se canceló: no se vuelve a enviar, y lo suyo vuelve a "
-    "proponerse en la siguiente lista"
-)
-
-#: El pedido que se quedó sin renglones al volver a partir (ticket 20). Sigue
-#: existiendo —el rol no tiene `DELETE`— con su total en `NULL`. Enviarlo diría
-#: "capturé esto en el portal" sobre nada, y sus renglones ya se fueron a otro
-#: pedido, así que ni siquiera hay qué pasar a `en tránsito`.
-SIN_RENGLONES_QUE_ENVIAR = (
-    "ese pedido se quedó sin renglones: no hay nada que capturar"
-)
-
-#: El total envejeció: alguien corrigió la cantidad de un renglón **después** de
-#: armar el pedido, y `pedido.total_sin_iva` solo se reescribe al partir (hilo
-#: abierto 13 de `HANDOVER.md`, que le dejó este caso a este ticket).
-#:
-#: Se NIEGA el envío en vez de recalcular en silencio, y las dos cosas se
-#: consideraron. Recalcular cambiaría el número **después** de que el encargado
-#: leyó el del botón: enviaría un total que nadie vio, que es peor que enseñar
-#: uno viejo. Negarse manda a apretar "Volver a partir", que es un botón que ya
-#: existe, cuesta un clic y deja el total y la hora de armado coherentes.
-#:
-#: Un total viejo importa porque es la cifra contra la que alguien va a comparar
-#: la factura del proveedor: si no cuadra, nadie sabe si falta mercancía o si el
-#: número estaba rancio.
-TOTAL_ENVEJECIDO = (
-    "alguien corrigió una cantidad después de armar este pedido, así que su "
-    "total es de antes: vuelve a partir y se pone al día"
-)
+# `motivo_para_no_enviar` y sus cuatro frases (`YA_ESTA_ENVIADO`,
+# `YA_ESTA_CANCELADO`, `SIN_RENGLONES_QUE_ENVIAR`, `TOTAL_ENVEJECIDO`) se
+# movieron a `transiciones.py` el 2026-09-22 (paso 2 de la revisión de
+# arquitectura): nada más en este módulo las usaba. Quien las necesite, las
+# importa de `continental.transiciones`.
 
 
 # --------------------------------------------- capturar en el portal (22)
@@ -745,50 +713,6 @@ def frase_sin_nada_por_repartir(
         # serían falsas mientras falte elegir.
         return f"{'; '.join(partes)}. {quedan}: elige a quién se le pide."
     return f"No queda nada por repartir: {'; '.join(partes)}. Ya se puede cerrar."
-
-
-def motivo_para_no_enviar(
-    pedido: PedidoGuardado,
-    renglones_dentro: int,
-    total_envejecido: bool = False,
-) -> str | None:
-    """Por qué no se puede enviar este pedido, o `None` si sí se puede.
-
-    Es la **misma decisión** que el `WHERE` de `almacenamiento._ENVIAR_EL_PEDIDO`
-    y no la garantía: la garantía vive en la sentencia, porque comprobar en
-    Python y escribir después tiene una carrera en medio. Lo que esto hace es
-    poder **decirlo antes** —un botón apagado con su motivo al lado, en vez de
-    un 409 que llega cuando ya se apretó—, y decirlo con las mismas dos
-    condiciones para que las dos respuestas no se separen.
-
-    **Que el total sea `None` no está en la lista, y es deliberado.** Un pedido
-    con una línea sin precio se envía igual: la quinta casilla del ticket 20 dice
-    que ese renglón se pide igual, y el precio de verdad lo ve el encargado en el
-    portal mientras lo captura. Negarlo aquí volvería el precio de Doyle un
-    requisito para operar la farmacia, que es lo contrario de la regla 4 —"sin
-    dato" nunca es un cero, y tampoco es un bloqueo—. Lo que la pantalla sí hace
-    es escribir "total sin saber" en vez de una cifra.
-
-    **Que el total esté VIEJO sí lo está, y no es lo mismo.** `None` es "no se
-    puede saber" y es honesto; una cifra con dos decimales calculada antes de
-    que alguien corrigiera una cantidad es una mentira con formato de dato, y
-    además la que alguien va a comparar contra la factura. Es el hilo abierto 13
-    de `HANDOVER.md`, que le dejó este caso a este ticket. `total_envejecido` lo
-    decide quien llama comparando `armado_en` con el `ajustada_en` de los
-    renglones de dentro; la garantía vive en el `WHERE` de
-    `almacenamiento._ENVIAR_EL_PEDIDO`, que lleva la misma condición.
-    """
-    if pedido.fue_enviado:
-        return YA_ESTA_ENVIADO
-    # Antes del conteo: un cancelado conserva sus renglones dentro —son su
-    # historia— y sin esta línea saldría "se puede enviar".
-    if pedido.fue_cancelado:
-        return YA_ESTA_CANCELADO
-    if renglones_dentro <= 0:
-        return SIN_RENGLONES_QUE_ENVIAR
-    if total_envejecido:
-        return TOTAL_ENVEJECIDO
-    return None
 
 
 # ------------------------------------------------ capturar en el portal (22)

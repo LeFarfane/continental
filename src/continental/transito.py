@@ -734,28 +734,18 @@ def frase_para_cancelar(nombre_del_proveedor: str, renglones_en_camino: int) -> 
     )
 
 
-def motivo_para_no_cancelar(pedido, recibidos: int = 0) -> str | None:
-    """Por qué no se puede cancelar, o `None` si sí se puede.
-
-    La misma decisión que el `WHERE` de `_CANCELAR_EL_PEDIDO`, y **no la
-    garantía**: sirve para no pintar un botón que contestaría 409. Desde el
-    ticket 26 lo recibido sí existe, y quien llama dice cuántos renglones de ese
-    pedido llegaron: si algo llegó, el pedido sí se capturó.
-    """
-    if pedido.fue_cancelado:
-        return "ese pedido ya está cancelado"
-    if pedido.es_borrador:
-        return (
-            "un borrador todavía no se le pidió a nadie: no hay nada que "
-            "cancelar, se vuelve a partir"
-        )
-    if recibidos:
-        return motivo_para_no_cancelar_por_lo_recibido()
-    return None
-
-
 def motivo_para_no_cancelar_por_lo_recibido() -> str:
-    """El motivo de `motivo_para_no_cancelar` cuando algo del pedido llegó."""
+    """El motivo de `transiciones.motivo_para_no_cancelar` cuando algo del
+    pedido llegó.
+
+    Se quedó aquí cuando `motivo_para_no_cancelar` se movió a
+    `transiciones.py` (2026-09-22, paso 2 de la revisión de arquitectura):
+    este módulo lo sigue usando abajo para la bandera `motivo_para_no_cancelar`
+    de cada grupo de renglones en tránsito, y moverlo también habría obligado
+    a este archivo a importar de vuelta desde `transiciones.py` —la única
+    carrera real de import de esa ronda—. `transiciones.motivo_para_no_cancelar`
+    lo importa de aquí en vez de copiarlo.
+    """
     return (
         "algo de este pedido ya se recibió: sí se capturó en el portal, y "
         "cancelarlo diría lo contrario"

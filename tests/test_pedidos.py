@@ -323,7 +323,16 @@ def test_con_la_lista_cerrada_ya_no_se_elige_proveedor(
     renglon_id = lista["renglones"][0]["renglon_id"]
     cliente.post(f"{RUTA}/{lista['pedido_sugerido_id']}/cerrar")
 
-    assert _elegir(cliente, renglon_id, "nadro").status_code == 409
+    # LA BANDERA Y EL CANDADO, DE ACUERDO (2026-09-22, paso 2 de la revisión
+    # de arquitectura): `se_puede_editar` ya dice que no, y el 409 dice el
+    # motivo real de `transiciones.motivo_para_no_editar`.
+    despues = cliente.get(RUTA).json()
+    renglon = next(r for r in despues["renglones"] if r["renglon_id"] == renglon_id)
+    assert renglon["se_puede_editar"] is False
+
+    respuesta = _elegir(cliente, renglon_id, "nadro")
+    assert respuesta.status_code == 409
+    assert "lista ya no está abierta" in respuesta.json()["detalle"]
     assert _renglon_guardado(almacenamiento, renglon_id).proveedor_elegido is None
 
 
@@ -334,6 +343,12 @@ def test_un_renglon_descartado_no_cambia_de_proveedor(
     _poblar(almacen, 1)
     renglon_id = cliente.get(RUTA).json()["renglones"][0]["renglon_id"]
     cliente.post(f"/api/renglon/{renglon_id}/descartar")
+
+    # También la bandera: un renglón `descartado` no ofrece elegir proveedor
+    # (2026-09-22, paso 2).
+    despues = cliente.get(RUTA).json()
+    renglon = next(r for r in despues["renglones"] if r["renglon_id"] == renglon_id)
+    assert renglon["se_puede_editar"] is False
 
     assert _elegir(cliente, renglon_id, "nadro").status_code == 409
     assert _renglon_guardado(almacenamiento, renglon_id).proveedor_elegido is None
