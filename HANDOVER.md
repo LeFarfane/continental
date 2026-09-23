@@ -1203,11 +1203,21 @@ más barato y se le pidió a otro.**
      portal real es una fila con precio**, porque no hubo ninguna.
 
    Abrirlas es un acto manual con navegador visible y las credenciales del
-   dueño (ADR 0001 de Doyle): `python -m doyle.sesion --proveedor <clave>`, o
-   el botón "Iniciar sesión" de la pestaña Inicio de su web. **Hasta que se
-   abran, el módulo de Pedido no puede traer un solo precio**, y los tickets 13
-   y 14 no se pueden cerrar contra datos reales. Es lo primero que hay que
-   hacer antes de seguir.
+   dueño (ADR 0001 de Doyle). **Se hace desde Continental**, con «Abrir
+   sesión» y luego «Ya entré»: el botón abre el visor
+   —`https://doyle.farfanlab.uk/vnc.html`, con Access delante— y ahí se teclea.
+   De una en una: mientras un portal esté esperando, los otros no abren
+   (ADR 0018). **Hasta que se abran, el módulo de Pedido no puede traer un solo
+   precio**, y los tickets 13 y 14 no se pueden cerrar contra datos reales. Es
+   lo primero que hay que hacer antes de seguir.
+
+   > **Esto decía otra cosa hasta el 2026-09-22**, y lo que decía ya no existe:
+   > mandaba al *"botón «Iniciar sesión» de la pestaña Inicio de su web"*, una
+   > pantalla que el ADR 0008 de Doyle eliminó al dejarlo sin interfaz propia.
+   > El `python -m doyle.sesion --proveedor <clave>` que también nombraba exige
+   > estar sentado frente a atlas, que no tiene monitor. **El `/vnc.html` no es
+   > opcional**: la raíz de noVNC sirve un listado de archivos y ya costó dos
+   > veces, el 21 a las 19:39 y el 22 a las 09:59.
 
    **Qué queda sin demostrar del ticket 14, dicho con precisión (2026-09-19).**
    Las reglas —quién gana, el ahorro, las tres categorías de existencia— están
