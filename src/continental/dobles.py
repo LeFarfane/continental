@@ -222,7 +222,18 @@ class DoyleFalso:
             SesionDeProveedor(
                 proveedor=s["proveedor"],
                 nombre=s.get("nombre", s["proveedor"]),
-                estado=s.get("estado", "sin_sesion"),
+                # `abriendo` GANA sobre lo que diga la fila, porque así es el
+                # Doyle real: su `listar()` saca ese estado del mismo
+                # diccionario en memoria que `abrir()` acaba de poblar, no de
+                # un marcador en disco. Sin esto el doble podía contestar
+                # `sin_sesion` de un proveedor cuya ventana el propio doble
+                # tenía abierta, y una prueba de la regla de una-ventana-a-la-
+                # vez (ADR 0018) habría pasado en verde sin ejercitarla.
+                estado=(
+                    "abriendo"
+                    if s["proveedor"] in self.sesiones_abriendose
+                    else s.get("estado", "sin_sesion")
+                ),
                 guardada_en=s.get("guardada_en"),
             )
             for s in self.sesiones_en_memoria

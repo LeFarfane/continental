@@ -82,6 +82,27 @@ const nota = (id, texto, clase) => {
   p.hidden = !texto;
 };
 
+// Lo mismo, con un enlace pegado al final. Existe por el visor de Doyle: el
+// popup es la ruta buena, pero un bloqueador de ventanas lo puede impedir sin
+// avisar, y entonces la pantalla volvería a no decir a dónde ir. El enlace es
+// el seguro, y se pone SIEMPRE: cuesta un renglón y evita el único caso en
+// que la persona se queda otra vez sin saber qué hacer.
+//
+// Con `createElement` y no con `innerHTML` por lo mismo que el resto del
+// archivo: el texto viene del servidor y no hay razón para interpretarlo.
+const notaConEnlace = (id, texto, url, etiqueta, clase) => {
+  const p = document.getElementById(id);
+  p.className = 'nota' + (clase ? ' ' + clase : '');
+  p.textContent = texto + ' ';
+  const a = document.createElement('a');
+  a.href = url;
+  a.target = 'visor-doyle';
+  a.rel = 'noopener';
+  a.textContent = etiqueta;
+  p.append(a);
+  p.hidden = false;
+};
+
 // ------------------------------------------ cuando no hay respuesta (ticket 29)
 
 // LAS ÚNICAS FRASES DE FALLA QUE ESCRIBE ESTE ARCHIVO, y viven aquí juntas. Todas
@@ -1854,7 +1875,35 @@ async function cargarPedido() {
     // LO QUE FALTA, DICHO, y por eso no se escribe "listo": lo que hay es una
     // ventana esperando. Un botón que contesta "listo" sobre una sesión que
     // sigue caducada es la falla silenciosa que la regla 4 prohíbe.
-    nota('pedido-accion', respuesta.detalle + ' ' + respuesta.siguiente, 'aviso');
+    const texto = respuesta.detalle + ' ' + respuesta.siguiente;
+
+    // SIN VISOR CONFIGURADO no se inventa a dónde mandar a nadie. El texto
+    // que arma el servidor ya dice qué falta en el YAML.
+    if (!respuesta.visor) {
+      nota('pedido-accion', texto, 'aviso');
+      return;
+    }
+
+    // EL POPUP, y el enlace detrás como seguro. `window.open` desde el
+    // manejador de un clic es gesto de usuario legítimo, así que ningún
+    // bloqueador razonable lo estorba; si aun así devuelve null —bloqueado, o
+    // un navegador endurecido—, el enlace sigue ahí y la persona llega igual.
+    //
+    // Ventana aparte y no un iframe, a propósito: el visor vive en otro
+    // origen y detrás de Cloudflare Access, que manda encabezados que impiden
+    // embeberlo, y noVNC necesita el teclado en exclusiva —dentro de un
+    // iframe se lo pelea con esta página, que es justo donde una contraseña
+    // se escribe a medias en el lugar equivocado.
+    //
+    // El nombre de ventana es fijo: darle otra vez al botón reusa la misma
+    // pestaña del visor en vez de sembrar copias.
+    const ventana = window.open(respuesta.visor, 'visor-doyle');
+    notaConEnlace(
+      'pedido-accion',
+      ventana ? texto : texto + ' El navegador bloqueó la ventana del visor.',
+      respuesta.visor,
+      ventana ? 'Volver a abrir el visor' : 'Abrir el visor',
+      'aviso');
   }
 
   async function confirmarSesion(sesion, boton) {
@@ -2691,15 +2740,17 @@ const pintarCompletar = (faltantes, sesiones, acciones) => {
       ': ' + caducadas.map(s => s.nombre).join(', ') +
       '. Mientras siga así, volver a consultar su precio va a dar el mismo ' +
       'hueco. Se abre en dos pasos, y en medio hay que teclear la contraseña ' +
-      'EN LA VENTANA que Doyle abre, en la máquina donde Doyle corre.');
+      'EN LA VENTANA DEL VISOR que se abre sola al darle a «Abrir sesión». ' +
+      'De una en una: mientras un portal esté esperando, los otros no abren.');
     caducadas.forEach(s => {
       const fila = document.createElement('div');
       fila.className = 'fila';
       const nombre = document.createElement('span');
       nombre.textContent = s.nombre;
       const abrir = botonDeAccion('Abrir sesión', (b) => acciones.abrirSesion(s, b));
-      abrir.title = 'Le pide a Doyle que abra el navegador del portal. '
-        + 'Continental no abre navegadores: se lo pide a Doyle.';
+      abrir.title = 'Le pide a Doyle que abra el navegador del portal y te '
+        + 'abre el visor para que lo veas. Continental no abre navegadores: '
+        + 'se lo pide a Doyle.';
       const confirmar = botonDeAccion('Ya entré', (b) => acciones.confirmarSesion(s, b));
       confirmar.title = 'Dile a Doyle que ya tecleaste la contraseña, para que '
         + 'guarde las cookies antes de cerrar el navegador.';

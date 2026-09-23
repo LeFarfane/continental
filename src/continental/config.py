@@ -38,6 +38,12 @@ class Ajustes:
     #: nombre: "a quien administra atlas". Con valor por omisión para que un
     #: YAML sin la llave no deje ninguna falla sin su "a quién avisarle".
     a_quien_avisar: str = "a quien administra atlas"
+    #: A dónde mandar el NAVEGADOR de la persona para que vea la ventana que
+    #: Doyle abrió en su pantalla Xvfb. No es un módulo —Continental no le
+    #: pregunta nada— y por eso no vive en `modulos`. `None` cuando el YAML no
+    #: la trae, y entonces el botón de abrir sesión lo dice en vez de mandar a
+    #: nadie a una ventana que no puede ver.
+    visor_de_doyle: str | None = None
 
 
 @lru_cache(maxsize=1)
@@ -77,4 +83,8 @@ def cargar() -> Ajustes:
         # falla que termina en "avísale ." no dice a quién.
         a_quien_avisar=str(crudo.get("a_quien_avisar") or "").strip()
         or "a quien administra atlas",
+        # Vacía o ausente es `None` y no una cadena vacía: la pantalla
+        # distingue "no hay visor configurado" de una dirección rota, y son
+        # dos arreglos distintos.
+        visor_de_doyle=str(crudo.get("visor_de_doyle") or "").strip() or None,
     )

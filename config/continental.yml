@@ -30,6 +30,22 @@ modulos:
     url: "http://172.19.0.1:8484"
     timeout_seg: 10
 
+# EL VISOR DE DOYLE. No es un módulo y por eso no va arriba: Continental nunca
+# le pregunta nada. Es la dirección que se le entrega al NAVEGADOR de la
+# persona para que vea la ventana que Doyle abrió en la pantalla Xvfb de
+# atlas. No es secreta —es un hostname— y lleva Cloudflare Access delante.
+#
+# EL `/vnc.html` NO ES OPCIONAL, y costó una tarde el 2026-09-22: websockify
+# sirve `/usr/share/novnc`, que no tiene `index.html`. Entrar a la raíz
+# devuelve un listado de archivos crudo, y quien lo ve no tiene forma de saber
+# que de esa lista hay que darle clic a `vnc.html`. Con la ruta completa se
+# entra directo a la ventana.
+#
+# Si esta llave falta, el botón de abrir sesión lo DICE en vez de callarse:
+# una ventana que se abre donde nadie puede verla es exactamente la falla
+# silenciosa que prohíbe la regla 4.
+visor_de_doyle: "https://doyle.farfanlab.uk/vnc.html"
+
 # A QUIÉN AVISARLE cuando algo falla y desde la pantalla no hay nada más que
 # hacer (ticket 29): "Si sigue igual, avísale <esto>." Es una FRASE, con su
 # "a" por delante, y no un nombre ni un teléfono escritos en el código: el día

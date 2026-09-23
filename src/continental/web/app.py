@@ -2913,11 +2913,21 @@ def precio_del_renglon(
 #   Doyle)— y deja el marcador.
 #
 # Así que desde Continental se aprietan los dos botones sin cambiar de
-# aplicación, **y aun así hace falta estar frente a la máquina de Doyle** para
-# la parte de en medio. Hoy Doyle corre en la torre y Continental va a atlas:
-# hasta que Doyle se mude con su visor remoto sobre Xvfb (su ADR 0008, sin
-# hacer), la ventana se abriría en una máquina donde no hay nadie sentado. Eso
-# no lo arregla esta ruta y no se disimula: la pantalla lo dice.
+# aplicación, **y aun así alguien tiene que teclear la contraseña** en la parte
+# de en medio.
+#
+# ESTE COMENTARIO DECÍA OTRA COSA HASTA EL 2026-09-22, y lo que decía ya era
+# falso: que Doyle corría en la torre y que su ADR 0008 —el visor remoto sobre
+# Xvfb— estaba "sin hacer". Doyle se mudó a atlas el 2026-09-21 y el visor
+# corre. Lo que quedó sin mover fue el texto que esta ruta le devuelve a la
+# pantalla, que seguía mandando a la persona a "la máquina donde corre Doyle"
+# —un servidor sin monitor— sin decirle a qué dirección asomarse.
+#
+# El costo, medido en los dos journals: el dueño le dio al botón, no vio nada,
+# se metió a la raíz del visor, recibió un listado de archivos que no explica
+# nada, y volvió a darle ocho veces en once segundos. El botón funcionaba las
+# nueve. Por eso ahora la respuesta trae la dirección del visor y la pantalla
+# abre la ventana sola: ver el resultado es parte de que el botón funcione.
 
 
 @app.post("/api/sesion/{proveedor}/abrir")
@@ -2946,6 +2956,70 @@ def abrir_la_sesion(
     nunca su texto (regla 5).
     """
     firma = quien(request)
+
+    # UNA VENTANA A LA VEZ, y la decisión vive aquí y no en Doyle (ADR 0018).
+    #
+    # El visor muestra la PANTALLA ENTERA de atlas, no la ventana de un
+    # proveedor. Doyle no serializa: `abrir` solo evita reabrir el mismo
+    # proveedor, así que cuatro Chromium pueden quedar encimados en `:98` y
+    # nada dice cuál es cuál. Quien teclea la contraseña de LEVIC dentro del
+    # portal de NADRO acaba de entregarle una credencial real a un tercero, y
+    # eso no se deshace: se cambia la contraseña.
+    #
+    # Aquí `GET /api/sesiones` SÍ se le cree, al revés de lo que dice el
+    # docstring sobre `guardada`. No es contradicción: `guardada` es un
+    # marcador en disco que sobrevive a que la sesión caduque, y `abriendo`
+    # sale del diccionario en memoria que `abrir` acaba de poblar. Uno afirma
+    # algo del pasado, el otro describe el presente.
+    # NO PODER PREGUNTAR NO ES "NO HAY NADIE ESPERANDO", y la diferencia se
+    # dice. Tragarse esta excepción en silencio degradaba el candado sin que
+    # nadie se enterara: exactamente la falla muda de la regla 4. Si Doyle
+    # está caído, el `abrir_sesion` de abajo falla también y gana ese motivo,
+    # que es el bueno; si solo se cayó esta llamada, la ventana se abre y la
+    # pantalla dice que el candado no se pudo verificar.
+    sin_verificar = False
+    try:
+        otro = next(
+            (
+                s
+                for s in doyle.sesiones()
+                if s.estado == "abriendo" and s.proveedor != proveedor
+            ),
+            None,
+        )
+    except Exception:  # noqa: BLE001 — Doyle caído es un hueco, no un 500
+        log.exception(
+            "No se pudo saber si otro portal seguía esperando antes de abrir %s",
+            proveedor,
+        )
+        otro, sin_verificar = None, True
+
+    if otro is not None:
+        log.info(
+            "%s pidió abrir la sesión de %s, pero la de %s sigue esperando.",
+            firma,
+            proveedor,
+            otro.proveedor,
+        )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "detalle": (
+                    f"Primero termina con {otro.nombre}: su ventana sigue "
+                    f"esperando a que alguien teclee. El visor muestra la "
+                    f"pantalla entera, así que con dos abiertas no se sabe "
+                    f"cuál es cuál y la contraseña puede acabar en el portal "
+                    f"equivocado."
+                ),
+                "que_hacer": (
+                    f"Entra en la ventana de {otro.nombre}, vuelve aquí y dale "
+                    f"a «Ya entré». Después abre la de "
+                    f"{nombre_del_proveedor(proveedor)}."
+                ),
+            },
+        )
+
     try:
         abriendose = doyle.abrir_sesion(proveedor)
     except Exception as exc:  # noqa: BLE001 — Doyle caído es un hueco, no un 500
@@ -2975,17 +3049,36 @@ def abrir_la_sesion(
         "nombre": nombre_del_proveedor(proveedor),
         "ya_abierta": abriendose.ya_abierta,
         "detalle": (
-            "Ya había una ventana de ese portal esperando: es la misma, no se "
-            "abrió otra."
-            if abriendose.ya_abierta
-            else "Doyle abrió el navegador del portal."
+            (
+                "Ya había una ventana de ese portal esperando: es la misma, no "
+                "se abrió otra."
+                if abriendose.ya_abierta
+                else "Doyle abrió el navegador del portal."
+            )
+            + (
+                " No se pudo comprobar si otro portal seguía esperando, así que "
+                "revisa que en el visor haya una sola ventana antes de teclear."
+                if sin_verificar
+                else ""
+            )
         ),
+        # A DÓNDE ASOMARSE. Sin esto la ventana se abre donde nadie la ve, que
+        # es lo que pasó del 2026-09-21 al 22. `None` cuando el YAML no trae
+        # la llave, y entonces la pantalla lo dice: mandar a la persona a
+        # buscarla por su cuenta sería la misma falla con otro disfraz.
+        "visor": cargar().visor_de_doyle,
         # LO QUE FALTA, DICHO. Sin esto el botón parecería haber terminado el
         # trabajo, y lo que hizo fue empezarlo.
         "siguiente": (
-            "Entra con el usuario y la contraseña EN LA VENTANA QUE SE ABRIÓ, "
-            "en la máquina donde corre Doyle, y vuelve aquí a darle a «Ya "
-            "entré». Hasta entonces la sesión sigue caducada."
+            "Entra con el usuario y la contraseña EN LA VENTANA DEL VISOR que "
+            "se acaba de abrir, y vuelve aquí a darle a «Ya entré». Hasta "
+            "entonces la sesión sigue caducada."
+            if cargar().visor_de_doyle
+            else (
+                "Falta configurar «visor_de_doyle» en config/continental.yml: "
+                "la ventana se abrió en la pantalla de atlas y desde aquí no "
+                "hay a dónde mandarte a verla."
+            )
         ),
     }
 

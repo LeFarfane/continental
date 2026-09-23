@@ -1868,16 +1868,17 @@ def test_la_pantalla_saca_el_numero_del_boton_del_servidor():
 def test_la_pantalla_ofrece_los_dos_pasos_de_la_sesion():
     """Abrir y confirmar, porque en medio hay un humano tecleando.
 
-    Y dice dónde: *en la ventana que Doyle abre, en la máquina donde Doyle
-    corre*. Esconderlo haría creer que el botón abre la sesión solo.
+    Y dice dónde. **La frase cambió el 2026-09-22 y el cambio es el arreglo**:
+    decía *"en la máquina donde Doyle corre"*, escrita cuando Doyle vivía en la
+    torre, y desde la mudanza del 21 esa máquina es un servidor sin monitor.
+    Ahora manda al visor, que es donde de verdad se puede teclear. El resto de
+    esa falla vive en `test_visor.py`.
     """
     portada = _pantalla()
 
     assert "/abrir" in portada and "/confirmar" in portada
     assert "Abrir sesión" in portada and "Ya entré" in portada
-    assert "en la máquina donde Doyle corre" in portada.replace(
-        "EN LA VENTANA que Doyle abre, en la máquina donde Doyle corre", "en la máquina donde Doyle corre"
-    )
+    assert "EN LA VENTANA DEL VISOR" in portada
 
 
 def test_la_pantalla_no_abre_un_navegador_ni_le_habla_a_doyle():
