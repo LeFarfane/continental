@@ -340,15 +340,16 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
      AND con.contype = 'u'),
  NULL),
 
--- Los ocho motivos de `precios.MOTIVOS`, leídos DE VUELTA desde el catálogo.
+-- Los nueve motivos de `precios.MOTIVOS`, leídos DE VUELTA desde el catálogo.
 -- Se compara contra el texto entero y con sus acentos: si psql mandó el DDL
 -- como latin1, el CHECK guardó 'el portal no contestÃ³' y el primer INSERT con
 -- motivo rebotaría con una violación de restricción que nadie sabría explicar.
 -- Es la misma trampa que la comprobación 15 caza para 'en tránsito', y aquí
--- son ocho textos en vez de uno.
+-- son nueve textos en vez de uno. El noveno, 'quedó una ventana de sesión
+-- abierta', se agregó el 2026-09-23 (migración 0013).
 (19,
- 'Los ocho motivos del precio sobrevivieron al CHECK, con sus acentos',
- 'están los ocho',
+ 'Los nueve motivos del precio sobrevivieron al CHECK, con sus acentos',
+ 'están los nueve',
  coalesce(
    (SELECT CASE
              WHEN pg_get_constraintdef(con.oid) LIKE '%sin resultados%'
@@ -356,10 +357,11 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
               AND pg_get_constraintdef(con.oid) LIKE '%no empareja%'
               AND pg_get_constraintdef(con.oid) LIKE '%el portal no contestó%'
               AND pg_get_constraintdef(con.oid) LIKE '%la sesión caducó%'
+              AND pg_get_constraintdef(con.oid) LIKE '%quedó una ventana de sesión abierta%'
               AND pg_get_constraintdef(con.oid) LIKE '%no se sabe leer la página%'
               AND pg_get_constraintdef(con.oid) LIKE '%no alcanzó el tiempo%'
               AND pg_get_constraintdef(con.oid) LIKE '%precio ilegible%'
-                  THEN 'están los ocho'
+                  THEN 'están los nueve'
              ELSE pg_get_constraintdef(con.oid)
            END
       FROM pg_constraint con
@@ -393,7 +395,7 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
 
 -- LOS CUATRO FINALES, LEÍDOS DE VUELTA DESDE EL CATÁLOGO, CON SUS ACENTOS. Es
 -- la misma trampa que las comprobaciones 15 y 19 cazan para 'en tránsito' y
--- para los ocho motivos del precio, y aquí muerde más fuerte: quien escribe en
+-- para los nueve motivos del precio, y aquí muerde más fuerte: quien escribe en
 -- esta tabla es el LOTE, a las 22:00 y sin nadie mirando. Si psql mandó el DDL
 -- como latin1, el CHECK guardó 'terminÃ³' y el primer INSERT rebota con una
 -- violación de restricción que nadie va a ver hasta la mañana -- y la pantalla

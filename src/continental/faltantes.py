@@ -527,7 +527,7 @@ def corrida_ausente_como_json(
 #: - `no alcanzó el tiempo` — se acabó el tope con ese proveedor todavía
 #:   buscando; volver a preguntarle es exactamente lo que falta.
 #:
-#: Los otros cinco NO están, y cada ausencia es una decisión:
+#: Los otros seis NO están, y cada ausencia es una decisión:
 #:
 #: - `sin resultados` y `no empareja` — el portal ya contestó y ese producto no
 #:   está en ese catálogo con ese EAN. Volver a preguntar da lo mismo y cuesta
@@ -540,6 +540,17 @@ def corrida_ausente_como_json(
 #:   arregla mirando `precio_como_llego`, no repitiendo la búsqueda.
 #: - `no se sabe leer la página` — Doyle está en `reconocimiento` para ese
 #:   portal. Se arregla escribiendo selectores en Doyle.
+#: - `quedó una ventana de sesión abierta` (2026-09-23) — **a propósito, y no
+#:   por descuido**, aunque se parece a `la sesión caducó` en que también es
+#:   "nuestro problema, se arregla en unos clics". La diferencia es que abrir
+#:   sesión tiene su propio botón y su propia lista
+#:   (`proveedores_con_sesion_caducada`, más abajo); cerrar una ventana
+#:   abandonada no la tiene — el ADR 0018 solo construyó el candado que evita
+#:   abrir una segunda, no un botón para cerrar la primera desde aquí. Meter
+#:   este motivo en el reintento automático quemaría ~9 s por proveedor, una
+#:   vez por cada clic en "completar", contra un navegador que sigue
+#:   exactamente igual de bloqueado hasta que alguien entre al visor. Si algún
+#:   día existe ese botón, esta ausencia se revisa junto con él.
 MOTIVOS_QUE_SE_ARREGLAN_REINTENTANDO: tuple[str, ...] = (
     PORTAL_SIN_CONTESTAR,
     SESION_CADUCADA,

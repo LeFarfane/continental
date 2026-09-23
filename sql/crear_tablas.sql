@@ -1204,15 +1204,22 @@ CREATE TABLE IF NOT EXISTS pedidos.precio_de_proveedor (
     -- ahorró lo que costaba agregarlo después: una migración del CHECK y una
     -- visita a atlas con credenciales de dueño (ADR 0003).
     --
-    -- LOS ACENTOS DE ESTOS OCHO TEXTOS VIAJAN DENTRO DEL CHECK, igual que el
+    -- `quedó una ventana de sesión abierta` se agregó el 2026-09-23
+    -- (migración 0013): Doyle no pudo abrir el navegador de ese proveedor
+    -- porque una ventana suya ya estaba reteniendo el perfil de Chromium.
+    -- Nuestro problema y no del portal -- se arregla cerrando esa ventana,
+    -- no reintentando la búsqueda.
+    --
+    -- LOS ACENTOS DE ESTOS NUEVE TEXTOS VIAJAN DENTRO DEL CHECK, igual que el
     -- de 'en tránsito' en `ck_renglon_estado`: si psql manda este archivo como
     -- latin1, el primer INSERT con motivo rebota con una violación de
     -- restricción que nadie sabría explicar. Ver el SET client_encoding de la
-    -- cabecera y la comprobación 15 de verificar_rol.sql.
+    -- cabecera y la comprobación 19 de verificar_rol.sql.
     CONSTRAINT ck_precio_motivo_conocido
         CHECK (motivo IS NULL OR motivo IN (
             'sin resultados', 'varios resultados', 'no empareja',
             'el portal no contestó', 'la sesión caducó',
+            'quedó una ventana de sesión abierta',
             'no se sabe leer la página', 'no alcanzó el tiempo',
             'precio ilegible')),
 
@@ -1408,7 +1415,7 @@ CREATE TABLE IF NOT EXISTS pedidos.corrida_del_lote (
     -- migración no se vería como un error: se leería como "el lote no corrió".
     --
     -- LOS ACENTOS VIAJAN DENTRO DEL CHECK, igual que el de 'en tránsito' y los
-    -- ocho motivos del precio: si psql manda este archivo como latin1, el
+    -- nueve motivos del precio: si psql manda este archivo como latin1, el
     -- primer INSERT del lote rebota a las 22:00 con una violación de
     -- restricción que nadie sabría explicar -y el lote es justamente lo que
     -- corre sin nadie mirando-. Ver el SET client_encoding de la cabecera.

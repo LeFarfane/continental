@@ -103,6 +103,17 @@ from continental.doyle import (
 
 #: El portal buscó y no encontró nada: ese producto no está en ese catálogo.
 #: No hay nada que hacer, y el hueco es la respuesta correcta.
+#:
+#: **Desde el 2026-09-23 también lo escribe el estado `error`**, cuando el
+#: mensaje de Doyle es el que QuePharma y VICMA devuelven para "no encontré
+#: nada" —medido con el mismo EAN contra los dos: `No se encontraron
+#: artículos. Si este error continúa, notifíquelo al administrador.`—. Antes
+#: de esto cualquier `error` sin la palabra "sesión" caía en
+#: `PORTAL_SIN_CONTESTAR`, que es **falso**: el portal sí contestó, y
+#: reintentar cuesta 9 s por nada. No es un fallo de Doyle que haya que
+#: corregir allá (regla del ticket: no se toca su repo) — es Doyle avisando
+#: con `estado: error` de algo que, leído aquí, es en realidad un catálogo
+#: sin ese artículo.
 SIN_RESULTADOS = "sin resultados"
 
 #: La clave devolvió más de un resultado y ninguno se puede elegir sin
@@ -129,6 +140,22 @@ PORTAL_SIN_CONTESTAR = "el portal no contestó"
 #: y por eso no puede verse igual que "el portal no contestó" (historia 33).
 SESION_CADUCADA = "la sesión caducó"
 
+#: Nuestro lado y no el portal: Playwright no pudo abrir el contexto de ESE
+#: proveedor porque ya hay una ventana suya reteniendo el perfil de Chromium
+#: —típicamente una sesión que alguien empezó a abrir y no cerró ni
+#: confirmó—. Medido contra VICMA el 2026-09-23:
+#: `BrowserType.launch_persistent_context: Opening in existing browser
+#: session. This usually means that the profile is already in use by another
+#: instance of Chromium.`
+#:
+#: **No puede verse igual que "el portal no contestó"**: reintentar la
+#: búsqueda no cambia nada mientras esa ventana siga abierta —el portal ni
+#: siquiera llegó a recibir la consulta—, y confundirlo con un timeout manda
+#: al encargado a esperar en vez de ir a cerrar la ventana (ADR 0018: solo un
+#: portal puede estar esperando a la vez, así que basta con UNA ventana
+#: abandonada para bloquear ese proveedor indefinidamente).
+VENTANA_DE_SESION_ABIERTA = "quedó una ventana de sesión abierta"
+
 #: Doyle todavía no sabe leer esa página (su `modo: reconocimiento`). No es un
 #: fallo del portal: lo primero se arregla escribiendo selectores y lo segundo
 #: volviendo a intentar.
@@ -144,14 +171,19 @@ SIN_TIEMPO = "no alcanzó el tiempo"
 #: texto original se guarda al lado para poder mirarlo.
 PRECIO_ILEGIBLE = "precio ilegible"
 
-#: Los ocho, en el orden en que se leen de mejor a peor noticia. El DDL los
+#: Los nueve, en el orden en que se leen de mejor a peor noticia. El DDL los
 #: repite en `ck_precio_motivo_conocido`.
+#:
+#: `VENTANA_DE_SESION_ABIERTA` se agregó el 2026-09-23 y va junto a
+#: `SESION_CADUCADA`, no al final: las dos son "nuestro problema, se arregla en
+#: unos clics", al revés de los cinco definitivos que la siguen.
 MOTIVOS: tuple[str, ...] = (
     SIN_RESULTADOS,
     VARIOS_RESULTADOS,
     NO_EMPAREJA,
     PORTAL_SIN_CONTESTAR,
     SESION_CADUCADA,
+    VENTANA_DE_SESION_ABIERTA,
     SIN_SELECTORES,
     SIN_TIEMPO,
     PRECIO_ILEGIBLE,
@@ -161,8 +193,8 @@ MOTIVOS: tuple[str, ...] = (
 #
 # El ticket 15 pide que **cada precio faltante diga su motivo**, y lo pide con
 # estas palabras: *el producto no está en ese catálogo, el EAN dio varios
-# resultados, el portal no contestó, la sesión caducó*. Dos de los ocho ya se
-# llaman así con todas sus letras; los otros seis se llaman en corto porque lo
+# resultados, el portal no contestó, la sesión caducó*. Dos de los nueve ya se
+# llaman así con todas sus letras; los otros siete se llaman en corto porque lo
 # que se **guarda** tiene que ser corto, estable y contable —el `CHECK` del DDL
 # los repite y el conteo se hace sobre ellos—.
 #
@@ -193,6 +225,14 @@ EXPLICACION_DEL_MOTIVO: dict[str, str] = {
     PORTAL_SIN_CONTESTAR: "el portal no contestó; se vuelve a intentar",
     SESION_CADUCADA: (
         "la sesión de ese proveedor caducó: ábrela y vuelve a consultar"
+    ),
+    # Nuestro lado y no el portal (docstring de `VENTANA_DE_SESION_ABIERTA`):
+    # la acción no es "espera" ni "reintenta", es "ve y ciérrala" — la misma
+    # ventana del visor que abre el botón "Abrir sesión" (ADR 0018).
+    VENTANA_DE_SESION_ABIERTA: (
+        "problema nuestro, no del portal: quedó una ventana de sesión de ese "
+        "proveedor abierta y bloquea el navegador; ciérrala en el visor (o "
+        "confírmala con «Ya entré») y vuelve a consultar"
     ),
     SIN_SELECTORES: "Doyle todavía no sabe leer esa página",
     SIN_TIEMPO: "se acabó el tiempo con ese proveedor todavía buscando",
@@ -416,6 +456,24 @@ def _recortar(mensaje: str) -> str:
 #: garantía de que llegue acentuado; y `\bsesion` para no cazar otra palabra.
 _HUELE_A_SESION = re.compile(r"sesi[oó]n", re.IGNORECASE)
 
+#: Cómo se reconoce que el portal SÍ contestó y dijo "no encontré nada",
+#: dentro de un `estado: error` de Doyle. Es el texto EXACTO que QuePharma y
+#: VICMA devolvieron el 2026-09-23 al buscar el mismo EAN
+#: (7501300420541) — medido, no supuesto. No choca con `_HUELE_A_SESION`:
+#: ningún texto de este caso menciona una sesión.
+_HUELE_A_SIN_RESULTADOS = re.compile(r"no se encontraron art[ií]culos", re.IGNORECASE)
+
+#: Cómo se reconoce que Playwright no pudo abrir el navegador porque el
+#: perfil de ESE proveedor ya estaba en uso —una ventana de sesión que quedó
+#: abierta—. Es el texto EXACTO que Doyle devolvió contra VICMA el
+#: 2026-09-23: `BrowserType.launch_persistent_context: Opening in existing
+#: browser session. This usually means that the profile is already in use by
+#: another instance of Chromium.` En inglés y sin la palabra española
+#: "sesión", así que tampoco choca con `_HUELE_A_SESION`.
+_HUELE_A_VENTANA_OCUPADA = re.compile(
+    r"already in use|existing browser session", re.IGNORECASE
+)
+
 
 # ------------------------------------------- el emparejamiento (ticket 13)
 #
@@ -525,6 +583,44 @@ class Emparejamiento:
         return self.fila is not None
 
 
+def _motivo_del_error(mensaje: str) -> str:
+    """El `estado: error` de Doyle → uno de tres motivos, y no siempre el mismo uno.
+
+    Hasta el 2026-09-22 todo `error` sin la palabra "sesión" se leía como
+    `PORTAL_SIN_CONTESTAR`, y eso mezclaba tres situaciones que se arreglan de
+    tres maneras distintas —medido el 2026-09-23 con los cuatro portales
+    reales abiertos—:
+
+    1. **El portal SÍ contestó y dijo que no encontró nada** (QuePharma y
+       VICMA, mismo EAN): permanente, reintentar no cambia la respuesta. Sale
+       `SIN_RESULTADOS`, el mismo motivo que ya usa el camino de `estado:
+       listo` con `total <= 0` — es la misma noticia, solo que Doyle la
+       empaquetó como error en vez de como una búsqueda vacía.
+    2. **Nuestro lado, no el portal** (VICMA, perfil de Chromium ya en uso
+       por una ventana de sesión abierta): se arregla cerrando esa ventana,
+       no reintentando la búsqueda ni abriendo una sesión nueva. Sale
+       `VENTANA_DE_SESION_ABIERTA`.
+    3. **Cualquier otra cosa** —de verdad no contestó, o algo que este código
+       todavía no sabe leer—: reintentable de buena fe. Sale
+       `PORTAL_SIN_CONTESTAR`, que sigue siendo el motivo por omisión y no
+       uno más entre iguales: es el que se usa cuando NINGÚN patrón conocido
+       aplica, a propósito (regla 4 de `CLAUDE.md` — un mensaje nuevo que
+       Doyle estrene mañana cae aquí y no se pierde silencioso).
+
+    La sesión caducada se revisa primero y le gana a los otros dos: ninguno
+    de los mensajes reales de los otros dos casos menciona una sesión, pero si
+    algún día uno lo hiciera, "se puede arreglar en dos clics abriendo sesión"
+    es la lectura más útil de las cuatro.
+    """
+    if _HUELE_A_SESION.search(mensaje):
+        return SESION_CADUCADA
+    if _HUELE_A_SIN_RESULTADOS.search(mensaje):
+        return SIN_RESULTADOS
+    if _HUELE_A_VENTANA_OCUPADA.search(mensaje):
+        return VENTANA_DE_SESION_ABIERTA
+    return PORTAL_SIN_CONTESTAR
+
+
 def emparejar(respuesta: RespuestaDeProveedor, clave: str) -> Emparejamiento:
     """Lo que devolvió un proveedor + la clave buscada → fila aceptada o motivo.
 
@@ -550,13 +646,7 @@ def emparejar(respuesta: RespuestaDeProveedor, clave: str) -> Emparejamiento:
         return Emparejamiento(motivo=SIN_TIEMPO)
 
     if respuesta.estado == "error":
-        return Emparejamiento(
-            motivo=(
-                SESION_CADUCADA
-                if _HUELE_A_SESION.search(respuesta.mensaje or "")
-                else PORTAL_SIN_CONTESTAR
-            )
-        )
+        return Emparejamiento(motivo=_motivo_del_error(respuesta.mensaje or ""))
 
     if respuesta.estado == "reconocimiento":
         return Emparejamiento(motivo=SIN_SELECTORES)
