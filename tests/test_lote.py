@@ -1079,6 +1079,64 @@ def test_proveedores_con_sesion_caida_es_pura_y_ordena_alfabetico():
     assert proveedores_con_sesion_caida(lecturas) == ("levic", "vicma")
 
 
+# =========================================================================
+# EL HUECO DEL TICKET 30 — el proveedor caído solo vivía en el journal y en
+# `corrida_del_lote.detalle`, y la pantalla no lo leía de ninguno de los dos.
+# =========================================================================
+#
+# Medido el 2026-09-26 (mismo incidente que la sonda de arriba): cuando el
+# lote se negaba a correr, la pantalla mostraba la frase genérica de
+# `EL_LOTE_SE_INTERRUMPIO` -"la corrida del lote se cortó... mira el
+# journal"- sobre una noche en la que el motivo YA se conocía con nombre y
+# todo. `faltantes.proveedores_de_sesion_caida` es la mitad que le faltaba:
+# recupera del `detalle` guardado exactamente lo que `SesionesNoSirven` ya
+# sabía, sin volver a levantar la excepción -que para cuando la pantalla lee
+# esto, horas o días después, ya no existe-.
+#
+# Esta prueba vive en `test_lote.py` y no en `test_precio.py` -donde están las
+# demás pruebas de `faltantes.py`- a propósito: es la que ENFORCE el acople
+# entre el mensaje que `SesionesNoSirven.__init__` redacta aquí y el parser
+# que `faltantes.py` aplica sobre él. Un cambio de redacción en cualquiera de
+# los dos lados que rompiera el otro se ve en rojo aquí, junto a la excepción
+# misma, no adivinando en un archivo aparte.
+def test_proveedores_de_sesion_caida_recupera_del_detalle_guardado():
+    from continental.faltantes import proveedores_de_sesion_caida
+
+    detalle = str(SesionesNoSirven(("levic", "vicma"), CLAVE_DE_SONDA))
+
+    assert proveedores_de_sesion_caida(detalle) == ("levic", "vicma")
+
+
+def test_proveedores_de_sesion_caida_con_uno_solo():
+    from continental.faltantes import proveedores_de_sesion_caida
+
+    detalle = str(SesionesNoSirven(("levic",), CLAVE_DE_SONDA))
+
+    assert proveedores_de_sesion_caida(detalle) == ("levic",)
+
+
+@pytest.mark.parametrize(
+    "detalle",
+    [
+        "",
+        "la corrida se cortó (RuntimeError) después de 3 renglón(es). Lo que "
+        "ya estaba guardado sigue guardado.",
+    ],
+)
+def test_proveedores_de_sesion_caida_vacio_si_la_corrida_se_interrumpio_por_otra_cosa(
+    detalle,
+):
+    """Un `Ctrl-C` o Doyle caído a medio lote NO tienen proveedor que nombrar.
+
+    Sin esta rama, un `detalle` de cualquier otra `SE_INTERRUMPIO` se leería
+    con una lista de proveedores inventada -o el parser reventaría-, y las dos
+    son peores que devolver `()`.
+    """
+    from continental.faltantes import proveedores_de_sesion_caida
+
+    assert proveedores_de_sesion_caida(detalle) == ()
+
+
 class _DoyleQueFallaEnUnaClave:
     """Doyle que truena al pedir la búsqueda de una clave y contesta el resto.
 

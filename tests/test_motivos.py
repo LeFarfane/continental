@@ -80,6 +80,7 @@ from continental.faltantes import (
     EL_LOTE_NO_PUDO,
     EL_LOTE_SE_CORTO_POR_TIEMPO,
     EL_LOTE_SE_INTERRUMPIO,
+    EL_LOTE_SE_NEGO_POR_SESION,
     FRASE_EL_LOTE_NO_CORRIO,
     FRASE_NO_SE_PUDO_LEER_SI_CORRIO,
     HORA_DEL_LOTE,
@@ -104,6 +105,7 @@ from continental.faltantes import (
     siguiente_corrida_programada,
     ultima_corrida_programada,
 )
+from continental.lote import SesionesNoSirven
 from continental.precios import (
     MOTIVOS,
     NO_EMPAREJA,
@@ -186,6 +188,18 @@ def _corrida(**cambios) -> CorridaDelLote:
     )
     base.update(cambios)
     return CorridaDelLote(**base)
+
+
+def _detalle_de_sesion_caida(*proveedores: str) -> str:
+    """El `detalle` tal como `SesionesNoSirven` lo redacta, para las pruebas.
+
+    No se escribe el texto a mano: se construye la excepción de verdad y se
+    guarda su `str(...)`, exactamente lo que `lote.correr_el_lote` guarda en
+    `corrida.detalle` (ADR 0007) cuando la sonda de sesiones se niega a
+    correr (ADR 0019). Escribirlo a mano aquí probaría que el parser lee lo
+    que alguien tecleó en la prueba, no lo que la excepción de verdad produce.
+    """
+    return str(SesionesNoSirven(proveedores, "7509999999999"))
 
 
 def _lectura(proveedor: str, precio: str | None = None, motivo: str | None = None):
@@ -359,6 +373,73 @@ def test_una_corrida_cortada_no_se_confunde_con_el_tope():
     assert "journalctl -u continental-lote" in porque.explicacion
 
 
+# =========================================================================
+# EL HUECO DEL TICKET 30 — el lote SE NEGÓ A CORRER (ADR 0019), y hasta ahora
+# se veía idéntico a cualquier otra corrida cortada: "mira el journal", sin
+# nombrar al proveedor que ya se conocía. Medido el 2026-09-26: LEVIC caída
+# 9h35m, y el nombre solo vivía en el journal y en `corrida.detalle`.
+# =========================================================================
+
+
+def test_la_sonda_de_sesion_caida_se_distingue_de_una_corrida_cortada_por_otra_cosa():
+    """Distinto de `EL_LOTE_SE_INTERRUMPIO`: aquí SÍ se sabe el porqué.
+
+    No manda al journal a investigar — nombra al proveedor y dice qué hacer,
+    porque de éste no hay ambigüedad posible: la sonda corre ANTES del bucle
+    (ADR 0019), así que si se negó a correr, NINGÚN renglón de la lista tiene
+    lectura. `seguro=True` sin necesidad de mirar `no_se_pudo`.
+    """
+    porque = por_que_no_hay_lectura(
+        tiene_clave=True,
+        corrida=_corrida(
+            final=SE_INTERRUMPIO,
+            consultados=0,
+            detalle=_detalle_de_sesion_caida("levic"),
+        ),
+    )
+
+    assert porque.motivo == EL_LOTE_SE_NEGO_POR_SESION
+    assert porque.motivo != EL_LOTE_SE_INTERRUMPIO
+    assert porque.seguro is True
+    assert "LEVIC" in porque.explicacion
+    assert "journal" not in porque.explicacion
+
+
+def test_la_sonda_con_varios_proveedores_los_nombra_a_todos_en_plural():
+    porque = por_que_no_hay_lectura(
+        tiene_clave=True,
+        corrida=_corrida(
+            final=SE_INTERRUMPIO,
+            consultados=0,
+            detalle=_detalle_de_sesion_caida("nadro", "vicma"),
+        ),
+    )
+
+    assert porque.motivo == EL_LOTE_SE_NEGO_POR_SESION
+    assert "NADRO y VICMA" in porque.explicacion
+    assert "servían" in porque.explicacion
+
+
+def test_una_corrida_cortada_por_otra_cosa_no_se_confunde_con_la_sonda():
+    """`Ctrl-C` o Doyle caído a media noche: sin proveedor que nombrar.
+
+    Sin este candado, cualquier `SE_INTERRUMPIO` con un `detalle` que por
+    casualidad empezara distinto seguiría cayendo en la rama genérica -que es
+    justo lo que se quiere-, pero la prueba lo deja escrito con todas sus
+    letras en vez de confiar en que nadie lo rompa.
+    """
+    porque = por_que_no_hay_lectura(
+        tiene_clave=True,
+        corrida=_corrida(
+            final=SE_INTERRUMPIO,
+            consultados=7,
+            detalle="la corrida se cortó (RuntimeError) después de 7 renglón(es).",
+        ),
+    )
+
+    assert porque.motivo == EL_LOTE_SE_INTERRUMPIO
+
+
 def test_una_corrida_entera_con_fallas_dice_que_lo_intento_y_no_pudo():
     """Doyle caído a media corrida. Se arregla levantándolo y reintentando."""
     porque = por_que_no_hay_lectura(
@@ -417,17 +498,23 @@ def test_con_tope_Y_fallas_la_misma_noche_no_se_afirma_cual_le_toco():
     assert "no se puede afirmar" in porque.explicacion
 
 
-def test_los_seis_motivos_del_hueco_son_alcanzables_y_ninguno_sobra():
+def test_los_siete_motivos_del_hueco_son_alcanzables_y_ninguno_sobra():
     """Un motivo que nada produce es vocabulario muerto: se cuenta y nunca sale.
 
     Al revés también importa: un motivo que saliera sin estar en la tupla no se
-    podría contar ni traducir. Los seis, y ninguno más.
+    podría contar ni traducir. Los siete, y ninguno más.
     """
     salidos = {
         por_que_no_hay_lectura(tiene_clave=False, corrida=None).motivo,
         por_que_no_hay_lectura(tiene_clave=True, corrida=None).motivo,
         por_que_no_hay_lectura(
             tiene_clave=True, corrida=_corrida(final=SE_ACABO_EL_TIEMPO)
+        ).motivo,
+        por_que_no_hay_lectura(
+            tiene_clave=True,
+            corrida=_corrida(
+                final=SE_INTERRUMPIO, detalle=_detalle_de_sesion_caida("levic")
+            ),
         ).motivo,
         por_que_no_hay_lectura(
             tiene_clave=True, corrida=_corrida(final=SE_INTERRUMPIO)
@@ -500,6 +587,40 @@ def test_la_frase_de_una_corrida_cortada_manda_al_journal():
 
     assert "SE CORTÓ" in frase
     assert "journal" in frase
+
+
+def test_la_frase_de_una_sonda_de_sesion_caida_nombra_al_proveedor():
+    """El ticket 30: no manda al journal, nombra a quién hay que abrirle.
+
+    Medido el 2026-09-26: LEVIC llevaba nueve horas y media caída y la
+    pantalla decía lo mismo que diría por un `Ctrl-C` a media noche. Este es
+    el titular que va arriba de la tabla, y el mismo dato que
+    `por_que_no_hay_lectura` ya nombra por renglón.
+    """
+    frase = frase_de_la_corrida(
+        _corrida(
+            final=SE_INTERRUMPIO,
+            consultados=0,
+            detalle=_detalle_de_sesion_caida("levic"),
+        )
+    )
+
+    assert "SE NEGÓ A CORRER" in frase
+    assert "LEVIC" in frase
+    assert "journal" not in frase
+
+
+def test_la_frase_de_la_sonda_con_varios_proveedores_va_en_plural():
+    frase = frase_de_la_corrida(
+        _corrida(
+            final=SE_INTERRUMPIO,
+            consultados=0,
+            detalle=_detalle_de_sesion_caida("nadro", "vicma"),
+        )
+    )
+
+    assert "sesiones de" in frase
+    assert "NADRO y VICMA" in frase
 
 
 def test_la_frase_suma_lo_que_paso_ademas_y_solo_si_paso():
@@ -867,6 +988,47 @@ def test_la_ruta_no_confunde_una_lectura_caida_con_una_corrida_interrumpida(
 
     assert despues["corrida"] is not None
     assert despues["corrida_ausente"] is None
+
+
+def test_la_ruta_junta_las_dos_fuentes_de_sesiones_caducadas(
+    cliente, almacen, doyle, almacenamiento, monkeypatch
+):
+    """El ticket 30: sin esto, la sonda del ADR 0019 dejaba a la pantalla sin
+    botón de «Abrir sesión» justo la noche que más lo necesitaba.
+
+    Medido el 2026-09-26: LEVIC caída, CERO renglones consultados, CERO filas
+    en `precio_de_proveedor` -así que `sesiones_caducadas` de las lecturas
+    congeladas salía vacía-. El proveedor solo se podía nombrar leyendo
+    `corrida.detalle`, y hasta este ticket nadie lo leía.
+    """
+    almacen.catalogo_en_memoria = [_producto(1, SIN_LECTURA_CLAVE)]
+    almacen.ventas_en_memoria = [_venta(1)]
+    _fijar_la_hora(monkeypatch, _en_la_farmacia(MARTES_15, 10, 0))
+    lista = cliente.get(RUTA).json()
+    almacenamiento.guardar_la_corrida(
+        NEGOCIO,
+        _corrida(
+            pedido_sugerido_id=lista["pedido_sugerido_id"],
+            final=SE_INTERRUMPIO,
+            consultados=0,
+            con_precio=0,
+            detalle=_detalle_de_sesion_caida("levic"),
+        ),
+    )
+
+    datos = cliente.get(RUTA).json()
+
+    claves = {s["proveedor"] for s in datos["sesiones_caducadas"]}
+    assert claves == {"levic"}
+    assert datos["sesiones_caducadas"][0]["nombre"] == "LEVIC"
+    assert "SE NEGÓ A CORRER" in datos["corrida"]["frase"]
+    assert "LEVIC" in datos["corrida"]["frase"]
+    assert "journal" not in datos["corrida"]["frase"]
+    # Y el renglón sin lectura lo cuenta igual, con el motivo del ticket 30 y
+    # no el genérico "la corrida del lote se cortó" (ADR 0019).
+    renglon = _por_clave(cliente)[SIN_LECTURA_CLAVE]
+    assert renglon["porque_no_hay_lectura"]["motivo"] == EL_LOTE_SE_NEGO_POR_SESION
+    assert "LEVIC" in renglon["porque_no_hay_lectura"]["explicacion"]
 
 
 # =========================================================================

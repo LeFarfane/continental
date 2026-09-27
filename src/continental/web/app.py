@@ -98,6 +98,7 @@ from continental.faltantes import (
     huecos_que_se_pueden_reintentar,
     por_que_no_hay_lectura,
     proveedores_con_sesion_caducada,
+    proveedores_de_sesion_caida,
 )
 from continental.particion import (
     Captura,
@@ -3816,15 +3817,35 @@ def _como_json(
         "faltantes": faltantes_como_json(
             elegir_los_faltantes(guardado.por_repartir, comparaciones)
         ),
-        # A QUIÉN LE CADUCÓ LA SESIÓN, para el botón que la abre. Sale de las
-        # lecturas congeladas y NO de `GET /api/sesiones` de Doyle: el
-        # `guardada` de Doyle no quiere decir que la sesión sirva —el
-        # 2026-09-19 los cuatro decían `guardada` con las cuatro caducadas—, y
-        # lo que sí lo demuestra es un portal que mandó al login.
+        # A QUIÉN LE CADUCÓ LA SESIÓN, para el botón que la abre. DOS FUENTES,
+        # fundidas en una sola lista (ticket 30, medido el 2026-09-26):
+        #
+        # 1. Las LECTURAS CONGELADAS de esta lista —`precio_de_proveedor`—, y
+        #    NO `GET /api/sesiones` de Doyle: el `guardada` de Doyle no quiere
+        #    decir que la sesión sirva —el 2026-09-19 los cuatro decían
+        #    `guardada` con las cuatro caducadas—, y lo que sí lo demuestra es
+        #    un portal que mandó al login.
+        # 2. La SONDA PREVIA DEL LOTE (ADR 0019), cuando se negó a correr:
+        #    ahí NO hay ni una lectura congelada —cero renglones consultados,
+        #    cero filas escritas— así que la fuente 1 sola se queda ciega
+        #    justo la noche que más importa. El nombre del proveedor sale de
+        #    `corrida.detalle`, que es lo único que sobrevivió hasta hoy.
+        #
+        # Fundidas y no en dos bloques: es el MISMO botón «Abrir sesión» para
+        # las dos, y la pantalla no tiene que saber de cuál de las dos vino.
         "sesiones_caducadas": [
             {"proveedor": clave, "nombre": nombre_del_proveedor(clave)}
-            for clave in proveedores_con_sesion_caducada(
-                [comparaciones[r.renglon_id] for r in guardado.por_repartir]
+            for clave in sorted(
+                set(
+                    proveedores_con_sesion_caducada(
+                        [comparaciones[r.renglon_id] for r in guardado.por_repartir]
+                    )
+                )
+                | set(
+                    proveedores_de_sesion_caida(corrida.detalle)
+                    if corrida is not None
+                    else ()
+                )
             )
         ],
         # EN QUÉ SE PARTIRÍA LA LISTA SI SE PARTIERA AHORA (ticket 20), y en

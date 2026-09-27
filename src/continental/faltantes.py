@@ -55,6 +55,7 @@ from continental.precios import (
     SESION_CADUCADA,
     SIN_TIEMPO,
     explicacion_del_motivo,
+    nombre_del_proveedor,
 )
 from continental.transito import ZONA_DE_LA_FARMACIA
 
@@ -93,6 +94,19 @@ EL_LOTE_SE_CORTO_POR_TIEMPO = "al lote se le acabó el tiempo"
 #: aquí, el journal de esa noche.
 EL_LOTE_SE_INTERRUMPIO = "la corrida del lote se cortó"
 
+#: El lote se negó a correr porque la verificación previa (ADR 0019) encontró
+#: al menos una sesión de proveedor caída: la sonda contestó `la sesión
+#: caducó` antes de tocar el primer renglón, así que NINGÚN renglón de la
+#: lista tiene lectura —éste tampoco—. **Un `EL_LOTE_SE_INTERRUMPIO` más no
+#: alcanza** (medido el 2026-09-26, LEVIC caída 9h35m): ese motivo manda a
+#: revisar el journal de una falla que no se conoce, y aquí SÍ se conoce —está
+#: en `corrida.detalle`, con el nombre del proveedor— y ya hay un arreglo de
+#: dos clics: abrir su sesión, el mismo botón que la pantalla ya ofrece para
+#: `sesiones_caducadas`. Cada motivo existe porque lleva a una acción
+#: distinta, y "mira el journal" y "abre esa sesión de ahí abajo" son dos
+#: acciones distintas para la misma noche.
+EL_LOTE_SE_NEGO_POR_SESION = "el lote se negó a correr: falta abrir una sesión"
+
 #: El lote lo intentó y no dejó ni una fila: Doyle no contestó al pedir la
 #: búsqueda. Es el hilo abierto 3 de `HANDOVER.md` visto desde la pantalla. Se
 #: arregla levantando Doyle y volviendo a consultar.
@@ -108,11 +122,12 @@ EL_LOTE_NO_PUDO = "el lote lo intentó y no pudo"
 #: que el tope nunca vio.
 EL_LOTE_NO_LO_MIRO = "el lote no lo miró"
 
-#: Los seis, del que no se arregla aquí al que casi no pasa.
+#: Los siete, del que no se arregla aquí al que casi no pasa.
 MOTIVOS_DEL_HUECO: tuple[str, ...] = (
     SIN_CLAVE_QUE_BUSCAR,
     EL_LOTE_NO_CORRIO,
     EL_LOTE_SE_CORTO_POR_TIEMPO,
+    EL_LOTE_SE_NEGO_POR_SESION,
     EL_LOTE_SE_INTERRUMPIO,
     EL_LOTE_NO_PUDO,
     EL_LOTE_NO_LO_MIRO,
@@ -135,6 +150,57 @@ class PorQueNoHayLectura:
     motivo: str
     explicacion: str
     seguro: bool = True
+
+
+def proveedores_de_sesion_caida(detalle: str) -> tuple[str, ...]:
+    """De un `detalle` de corrida, qué proveedores hicieron que la sonda se
+    negara a correr —o `()` si no fue por eso.
+
+    Medido el 2026-09-26: el nombre del proveedor caído —LEVIC esa noche—
+    **solo existía en el journal y en `pedidos.corrida_del_lote.detalle`**.
+    Esta función es lo que le faltaba a la pantalla para leerlo de ahí: no
+    vuelve a levantar `lote.SesionesNoSirven` —que para cuando esto se
+    ejecuta ya no existe, lo único que sobrevivió hasta la mañana es este
+    texto (ADR 0007)— sino que reconoce el mensaje que esa excepción redactó.
+
+    **Acoplada a propósito al formato exacto de `lote.SesionesNoSirven`**, y
+    no a una expresión regular sobre prosa libre: el prefijo y el separador
+    de abajo son literales que copian ese mensaje, palabra por palabra. Los
+    dos viven en módulos distintos porque le tocan a módulos distintos —quien
+    redacta el mensaje es la orquestación que sondea; quien lo vuelve a leer
+    es la pantalla, sin Postgres y sin la excepción a la mano—, pero
+    `tests/test_lote.py` construye una `SesionesNoSirven` de verdad y prueba
+    el viaje completo: `str(excepción)` → esta función → los mismos
+    proveedores. Un cambio de redacción que rompiera el acople se vería ahí,
+    en rojo, no en producción silenciada.
+
+    Vacío si `detalle` no tiene esa forma: una corrida interrumpida por
+    cualquier otra causa —`Ctrl-C`, Doyle caído a media noche— no la tiene, y
+    ahí no hay nada que extraer. `detalle` puede venir en cadena vacía —una
+    corrida sin ese campo— y también da `()`.
+    """
+    prefijo = "la sesión de "
+    separador = f" no sirve: contestó «{SESION_CADUCADA}»"
+    if not detalle.startswith(prefijo):
+        return ()
+    resto = detalle[len(prefijo) :]
+    corte = resto.find(separador)
+    if corte == -1:
+        return ()
+    return tuple(p.strip() for p in resto[:corte].split(",") if p.strip())
+
+
+def _lista_de_proveedores(claves: Sequence[str]) -> str:
+    """`"LEVIC"` · `"LEVIC y VICMA"` · `"LEVIC, NADRO y VICMA"`, para una frase.
+
+    Nombres de presentación y no claves crudas: es lo que una persona
+    reconoce, y es la misma conversión que ya hace `sesiones_caducadas` en la
+    pantalla (`nombre_del_proveedor`).
+    """
+    nombres = [nombre_del_proveedor(c) for c in claves]
+    if len(nombres) == 1:
+        return nombres[0]
+    return ", ".join(nombres[:-1]) + " y " + nombres[-1]
 
 
 def por_que_no_hay_lectura(
@@ -215,6 +281,32 @@ def por_que_no_hay_lectura(
         )
 
     if corrida.se_interrumpio:
+        caidas = proveedores_de_sesion_caida(corrida.detalle)
+        if caidas:
+            # EL CASO DEL TICKET 30, medido el 2026-09-26: `EL_LOTE_SE_INTERRUMPIO`
+            # manda a "mira el journal" sobre una falla que aquí SÍ se conoce
+            # —viene con nombre y todo, en `corrida.detalle`—, y con un
+            # arreglo de dos clics en vez de una investigación. `seguro=True`
+            # porque esto no es una deducción entre dos causas posibles: la
+            # sonda corre ANTES del bucle, así que si se negó a correr,
+            # NINGÚN renglón de la lista tiene lectura —éste incluido, sin
+            # ambigüedad con `no_se_pudo`.
+            plural = len(caidas) > 1
+            return PorQueNoHayLectura(
+                motivo=EL_LOTE_SE_NEGO_POR_SESION,
+                explicacion=(
+                    f"el lote se negó a correr anoche: "
+                    + ("las sesiones de " if plural else "la sesión de ")
+                    + f"{_lista_de_proveedores(caidas)} ya no "
+                    + ("servían" if plural else "servía")
+                    + " —contestó «la sesión caducó» a una búsqueda de prueba "
+                    "antes de tocar el primer renglón, para no congelar "
+                    "precios sin ese proveedor (ADR 0019)—. Cero renglones "
+                    "consultados esa noche, éste incluido. Se arregla abriendo "
+                    "su sesión, más abajo en esta misma pantalla."
+                ),
+                seguro=True,
+            )
         return PorQueNoHayLectura(
             motivo=EL_LOTE_SE_INTERRUMPIO,
             explicacion=(
@@ -291,6 +383,26 @@ def frase_de_la_corrida(corrida: CorridaDelLote | None) -> str:
             f"El lote consultó {corrida.consultados} de {corrida.en_la_lista} "
             f"renglones y se detuvo al tope de {corrida.tope_minutos:.0f} "
             "minutos. No es un error: detenerse es lo que se le pide."
+        )
+    elif corrida.se_interrumpio and (
+        caidas := proveedores_de_sesion_caida(corrida.detalle)
+    ):
+        # EL CASO DEL TICKET 30: la corrida no se cortó a medias por una falla
+        # desconocida, se NEGÓ A CORRER porque la sonda encontró una sesión
+        # caída (ADR 0019) — y a diferencia de la rama de abajo, aquí sí se
+        # sabe el porqué y a quién hay que abrirle la sesión. Repetir la
+        # frase genérica "mira el journal" sobre una noche que ya trae el
+        # nombre del proveedor sería decir menos de lo que se sabe (regla 4
+        # de CLAUDE.md).
+        plural = len(caidas) > 1
+        cabeza = (
+            "El lote SE NEGÓ A CORRER anoche: "
+            + ("las sesiones de " if plural else "la sesión de ")
+            + f"{_lista_de_proveedores(caidas)} ya no "
+            + ("servían" if plural else "servía")
+            + ". Cero renglones consultados, ninguno con precio nuevo. Ábrela"
+            + (" (o ábrelas)" if plural else "")
+            + " más abajo y espera al lote de esta noche."
         )
     elif corrida.se_interrumpio:
         cabeza = (

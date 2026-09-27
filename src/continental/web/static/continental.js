@@ -485,8 +485,16 @@ const celdaDePrecios = (r, acciones) => {
   const porque = r.porque_no_hay_lectura;
   if (porque && !casillas.length) {
     const caja = document.createElement('span');
+    // ÁMBAR y no ROJO para «el lote se negó a correr»: es la sonda de
+    // sesiones (ADR 0019) haciendo justo lo que se le pide -negarse antes de
+    // escribir precios tuertos-, no una falla desconocida que manda al
+    // journal. Mismo trato que «se acabó el tiempo»: se sabe qué pasó y se
+    // arregla en un par de clics, con el botón de «Abrir sesión» de más
+    // abajo en esta misma pantalla.
     caja.className = 'hueco-motivo'
-      + (porque.motivo === 'al lote se le acabó el tiempo' ? ' tope' : '')
+      + (porque.motivo === 'al lote se le acabó el tiempo'
+         || porque.motivo === 'el lote se negó a correr: falta abrir una sesión'
+           ? ' tope' : '')
       + (porque.motivo === 'la corrida del lote se cortó'
          || porque.motivo === 'el lote lo intentó y no pudo' ? ' falla' : '');
     const titular = document.createElement('b');
