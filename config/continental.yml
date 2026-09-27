@@ -127,6 +127,30 @@ pedido:
   # atrasado, y dice por qué. Ver `dias_en_transito_para_atrasado_configurados`.
   dias_en_transito_para_atrasado: 7
 
+  # LA SONDA DE SESIONES (ticket 30, ADR pendiente de aprobar). Antes de tocar
+  # el primer renglón, el lote nocturno hace UNA búsqueda real con este EAN
+  # para comprobar que las cuatro sesiones de proveedor sirven de verdad -y se
+  # niega a correr el lote entero si alguna contesta "la sesión caducó"-.
+  # `GET /api/sesiones` no sirve para esto: es un marcador de disco que ya dijo
+  # "guardada" con las cuatro caídas dos veces (2026-09-19 y 2026-09-26).
+  #
+  # UN EAN FIJO AQUÍ Y NO EL PRIMER RENGLÓN DE LA LISTA DE HOY, a propósito:
+  # le da a la sonda una identidad estable -la misma noche tras noche, fácil de
+  # repetir a mano en el visor si algo se ve raro- y evita buscarle dos veces
+  # el mismo producto a los cuatro portales -la sonda, y el renglón real un
+  # paso después-. Ponle el EAN de un producto de rotación alta que la
+  # farmacia venda de verdad: no hace falta que el portal lo tenga en su
+  # catálogo -el discriminante no es "lo encontró", es "no contestó `la sesión
+  # caducó`" (ver `continental.lote.proveedores_con_sesion_caida`)-, solo que
+  # sea estable para no tener que perseguirlo si el producto se deja de vender.
+  #
+  # SIN CONFIGURAR TODAVÍA. Mientras falte, el lote cae de respaldo a la clave
+  # del primer renglón con EAN de la lista de hoy y lo avisa en el journal: la
+  # sonda sigue activa -nunca se salta en silencio-, solo que con una
+  # identidad que cambia cada noche y repitiendo esa búsqueda dos veces. Ver
+  # `continental.lote._clave_de_sonda`.
+  # clave_de_sonda: "7501234567890"
+
   # El botón "completar lo que falta" (ticket 19). Vuelve a consultar SOLO los
   # renglones a los que volver a preguntar puede cambiarles algo -sin lectura,
   # o con huecos de los tres que se arreglan reintentando- y nunca los que ya

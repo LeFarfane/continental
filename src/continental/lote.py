@@ -48,6 +48,18 @@ mide es cuánto tiempo ha pasado, y `datetime.now()` puede saltar hacia atrás s
 el servidor ajusta su hora — con un salto de un minuto, el tope se cumpliría
 solo o no se cumpliría nunca.
 
+## La sonda de sesiones, antes de tocar el primer renglón
+
+Medido el 2026-09-26: `GET /api/sesiones` decía `guardada` para las cuatro
+mientras LEVIC llevaba nueve horas y media caída, y el lote consultó 19
+renglones sin un solo precio de LEVIC antes de que alguien lo notara a mano.
+Ya había pasado igual el 2026-09-19. Por eso, antes de arrancar el bucle,
+`_sondear_las_sesiones` lanza **una** búsqueda real —con la clave del primer
+renglón con EAN de la lista de hoy— y se niega a correr (`SesionesNoSirven`)
+si algún proveedor contesta `la sesión caducó`: `sin resultados` o `no
+empareja` bastan para decir que ese portal sí sirve. Ver el docstring de esa
+función y el de `SesionesNoSirven` para el porqué de cada decisión.
+
 ## Lo que NO hace este módulo, dicho para que nadie lo busque aquí
 
 **No abre un navegador ni sabe qué es un portal** (regla 1 de `CLAUDE.md`). Le
@@ -115,11 +127,17 @@ from continental.consultas import (
     GUARDADA,
     RegistroDeConsultas,
     ajustes_de_la_consulta,
+    consultar_a_doyle,
     consultar_y_congelar,
 )
 from continental.doyle import ClienteDeDoyle
 from continental.latido import ABAJO, ARRIBA, ResultadoDelLatido, mandar_el_latido
-from continental.precios import SIN_TIEMPO, explicacion_del_motivo
+from continental.precios import (
+    LecturaDePrecio,
+    SESION_CADUCADA,
+    SIN_TIEMPO,
+    explicacion_del_motivo,
+)
 from continental.sugerido import armar_la_lista
 from continental.transito import memoria_de_lo_pedido
 
@@ -395,6 +413,200 @@ def ordenar_por_importancia(
 
 
 # =========================================================================
+# PURO — LA SONDA DE SESIONES, ANTES DE ARRANCAR
+# =========================================================================
+#
+# La falla medida el 2026-09-26: la sesión de LEVIC se abrió a las 10:23,
+# `GET /api/sesiones` decía `guardada` para las cuatro toda la noche, y el
+# lote arrancó a las 19:58 igual — LEVIC llevaba nueve horas y media caída sin
+# que nada lo dijera. Se consultaron 19 renglones sin un solo precio de LEVIC
+# antes de que alguien lo notara a mano y detuviera el lote con 86 renglones
+# ya congelados sin ese proveedor. Ya había pasado igual el 2026-09-19, con
+# las cuatro sesiones muertas y las cuatro diciendo `guardada`.
+#
+# Por qué duele y no es un hueco más: LEVIC es el único proveedor que le ha
+# ganado a NADRO en precio (ALIREN `7501300420541`, $122.50 contra $126.25 el
+# 2026-09-23), y los precios se congelan en una tabla que solo crece (ADR
+# 0004) — un lote tuerto no se corrige, se queda escrito. Un renglón sin
+# LEVIC no es "un proveedor menos": es la comparación completa perdiendo la
+# única vez que le ha importado.
+
+#: `GET /api/sesiones` **no sirve para esto** (decisión del ticket, no de
+#: aquí): ese marcador es de disco y solo dice que alguien confirmó una vez,
+#: sin comprobar que el portal la siga aceptando — y ya mintió dos veces,
+#: 2026-09-19 y 2026-09-26, con las cuatro `guardada` y caídas. Lo único que
+#: demuestra que una sesión sirve **de verdad** es una búsqueda real que no
+#: vuelva con `la sesión caducó` (`precios.SESION_CADUCADA`): `sin resultados`
+#: y `no empareja` dicen que el portal SÍ contestó, igual que un portal que no
+#: contesta o una ventana de sesión abierta — esos se arreglan reintentando o
+#: yendo al visor, no repitiendo el login.
+def proveedores_con_sesion_caida(
+    lecturas: Sequence[LecturaDePrecio],
+) -> tuple[str, ...]:
+    """De una sonda ya corrida, qué proveedores contestaron `la sesión caducó`.
+
+    Función pura sobre lo que `precios.congelar` ya emparejó para la sonda: no
+    vuelve a llamar a Doyle, no mira el reloj y no lee un archivo.
+
+    Ordenado alfabéticamente y no por el orden en que llegó cada proveedor:
+    la misma razón que `contar_los_motivos` — un mensaje que cambia de orden
+    entre dos noches con los mismos proveedores caídos es un mensaje que nadie
+    compara.
+    """
+    return tuple(sorted(l.proveedor for l in lecturas if l.motivo == SESION_CADUCADA))
+
+
+class SesionesNoSirven(RuntimeError):
+    """El lote se niega a correr: la sonda encontró al menos una sesión caída.
+
+    **No hereda de nada que el `except BaseException` genérico del lote trate
+    como "una excepción nuestra con datos sensibles adentro"** (regla 5 de
+    `CLAUDE.md`): este mensaje lo redacta este mismo módulo, con nombres de
+    proveedor —`config/proveedores.yml` de Doyle— y el EAN con el que se
+    sondeó. Nunca lleva la cadena de conexión de Postgres ni la URL del
+    monitor de Kuma, así que `correr_el_lote` lo trata aparte y sí deja su
+    texto en la bitácora — al revés que cualquier otra excepción.
+    """
+
+    def __init__(self, proveedores: Sequence[str], clave_de_sonda: str):
+        self.proveedores: tuple[str, ...] = tuple(proveedores)
+        self.clave_de_sonda = clave_de_sonda
+        cuales = ", ".join(self.proveedores)
+        super().__init__(
+            f"la sesión de {cuales} no sirve: contestó «{SESION_CADUCADA}» a "
+            f"una búsqueda de prueba de verdad (clave {clave_de_sonda!r}). El "
+            "lote se niega a correr: un lote parcial escribiría precios sin "
+            "ese proveedor en pedidos.precio_de_proveedor, que solo crece y "
+            "no se corrige (ADR 0004) -- abre esa sesión en el visor y "
+            "vuelve a correr el lote."
+        )
+
+
+def _clave_de_sonda(orden: Orden, configurada: str | None) -> str | None:
+    """Con qué se va a sondear hoy: la de `config/continental.yml`, o su respaldo.
+
+    **Con qué buscar la sonda, las dos opciones y por qué quedan las dos:**
+
+    1. **Un EAN fijo en `config/continental.yml`** (`pedido.clave_de_sonda`).
+       Le da a la sonda una **identidad estable**: la misma noche tras noche,
+       fácil de repetir a mano en el visor cuando algo se ve raro, y **no
+       repite la búsqueda de un producto que el lote ya va a consultar de
+       verdad** un renglón después —evita gastarle a los cuatro portales una
+       segunda visita al mismo EAN, una por la sonda y otra por el renglón—.
+       Es la preferida, y por eso manda cuando está.
+    2. **La clave del primer renglón con EAN de la lista de hoy.** Es el
+       respaldo, no la primera opción, y la razón es la de arriba al revés:
+       cuesta una consulta doble sobre ese renglón, y su identidad cambia cada
+       noche según qué se vendió, que es peor para reproducir un problema a
+       mano. Pero **no depende de que alguien haya llenado el YAML**, y
+       mientras `pedido.clave_de_sonda` siga sin configurarse (ver el
+       comentario ahí) es lo único que hay: la alternativa sería no sondear
+       nada, que es exactamente la falla silenciosa que este ticket existe
+       para cerrar.
+
+    **Un EAN fijo escrito en el código y no en YAML** se descartó aparte: el
+    número es una decisión de operación —qué producto usar de sonda—, no una
+    constante de programa, y el mismo criterio que ya separa
+    `tope_lote_minutos` del código aplica aquí.
+
+    Devuelve `None` solo cuando NINGUNA de las dos existe: la lista no trae
+    EAN en ningún renglón y tampoco hay configurada. Ahí no hay con qué
+    sondear, y tampoco hay nada que consultar de verdad —todo va a salir
+    `sin clave`, sin tocar un portal—, así que no sondear no deja nada a
+    medias.
+    """
+    configurada = (configurada or "").strip()
+    if configurada:
+        return configurada
+
+    de_la_lista = next(
+        (r.propuesto.clave for r in orden.renglones if r.propuesto.clave), None
+    )
+    if de_la_lista:
+        log.warning(
+            "Lote nocturno: no hay `pedido.clave_de_sonda` en "
+            "config/continental.yml. Se sondea con la clave del primer "
+            "renglón con EAN de la lista de hoy (%s) -sirve igual, solo que "
+            "con una identidad que cambia cada noche y que repite la "
+            "búsqueda de ese renglón dos veces-. Configura esa llave para una "
+            "sonda estable.",
+            de_la_lista,
+        )
+        return de_la_lista
+
+    return None
+
+
+def _sondear_las_sesiones(
+    orden: Orden,
+    *,
+    doyle: ClienteDeDoyle,
+    clave_de_sonda: str | None,
+    tope_por_consulta_seg: float,
+    cada_seg: float,
+    dormir: Callable[[float], object],
+    ahora: Callable[[], float],
+) -> None:
+    """La verificación previa. Truena `SesionesNoSirven` si alguna no sirve.
+
+    `clave_de_sonda` es la de `config/continental.yml`, o `None` si no está
+    configurada: `_clave_de_sonda` decide con qué se sondea de verdad, con su
+    respaldo si hace falta.
+
+    **Una sola sonda para los cuatro, no una por proveedor**: `pedir_busqueda`
+    reparte un único término entre los cuatro proveedores en el mismo trabajo
+    —Doyle arranca sus cuatro hilos de una vez (ADR 0006, hecho 7)— y
+    `estado_de_busqueda` devuelve la respuesta de cada uno por separado. Pedir
+    cuatro búsquedas sueltas, una por proveedor, sería lanzarle a Doyle cuatro
+    trabajos donde uno ya contesta por los cuatro, y el lote es estrictamente
+    secuencial (regla 1 de `CLAUDE.md`; ver el encabezado del módulo): eso
+    cuadruplicaría la espera sin comprobar nada más.
+
+    **No pasa por `consultar_y_congelar` ni escribe una sola fila.** Reutiliza
+    `consultar_a_doyle` —el mismo que arma cada consulta real— pero se detiene
+    ahí: si la sonda muriera a medio guardar algo, negarse a correr dejaría
+    escrita justo la fila tuerta que todo esto existe para evitar. Que la
+    sonda no persista nada es lo que permite negarse a correr **sin** dejar
+    ningún rastro parcial.
+    """
+    clave = _clave_de_sonda(orden, clave_de_sonda)
+    if clave is None:
+        log.info(
+            "Lote nocturno: ningún renglón de la lista trae EAN y no hay "
+            "`pedido.clave_de_sonda` configurada, así que no hay con qué "
+            "sondear las sesiones. Tampoco hay nada que consultar -todo va a "
+            "salir `sin clave`-, así que saltarse la sonda no deja nada a "
+            "medias."
+        )
+        return
+
+    log.info(
+        "Lote nocturno: sondeando las sesiones con una búsqueda real (clave "
+        "%s) antes de tocar el primer renglón. `GET /api/sesiones` no sirve "
+        "para esto: dijo `guardada` con las cuatro caídas el 2026-09-19 y "
+        "otra vez el 2026-09-26.",
+        clave,
+    )
+    resultado = consultar_a_doyle(
+        doyle,
+        clave,
+        tope_seg=tope_por_consulta_seg,
+        cada_seg=cada_seg,
+        dormir=dormir,
+        ahora=ahora,
+    )
+    caidas = proveedores_con_sesion_caida(resultado.lecturas)
+    if caidas:
+        raise SesionesNoSirven(caidas, clave)
+
+    log.info(
+        "Lote nocturno: la sonda no encontró ninguna sesión caída (%d "
+        "proveedor(es) contestaron). Arranca el lote.",
+        len(resultado.lecturas),
+    )
+
+
+# =========================================================================
 # PURO — EL TOPE
 # =========================================================================
 
@@ -477,6 +689,23 @@ def tope_del_lote_segundos() -> float:
         minutos = TOPE_POR_OMISION_MIN
 
     return minutos * 60.0
+
+
+def clave_de_sonda_configurada() -> str | None:
+    """El EAN fijo para sondear las sesiones, de `config/continental.yml`.
+
+    La misma capa delgada que `tope_del_lote_segundos`, con una diferencia a
+    propósito: aquí **no hay un valor de omisión que inventar** —no existe un
+    EAN "razonable por default"—, así que sin la llave esto devuelve `None` y
+    `_clave_de_sonda` decide el respaldo (la clave del primer renglón con EAN
+    de la lista de hoy). Tronar aquí, o inventar un EAN cualquiera, dejaría a
+    la farmacia sin lote nocturno -o sondeando algo sin sentido- por una línea
+    que falta en el YAML, y eso es peor que caer al respaldo con un aviso.
+    """
+    from continental.config import cargar
+
+    crudo = cargar().pedido.get("clave_de_sonda")
+    return str(crudo).strip() if crudo else None
 
 
 # =========================================================================
@@ -1006,6 +1235,7 @@ def correr_el_lote(
     tope_seg: float,
     tope_por_consulta_seg: float,
     cada_seg: float,
+    clave_de_sonda: str | None = None,
     registro: RegistroDeConsultas | None = None,
     reglas=None,
     dormir: Callable[[float], object] = time.sleep,
@@ -1164,6 +1394,28 @@ def correr_el_lote(
             orden=orden,
         )
 
+        # LA VERIFICACIÓN PREVIA: antes de tocar el primer renglón, y no
+        # renglón por renglón — se sondea una vez y se corre entero o no se
+        # corre nada. Si truena `SesionesNoSirven`, la excepción sube hasta el
+        # `except` de aquí abajo, que la trata aparte del resto.
+        #
+        # **Sujeta al mismo tope que un renglón**: con `cronometro.se_acabo`
+        # ya en verdadero -tope en cero, o uno que ya se venció- la sonda NO
+        # se manda. `Cronometro.se_acabo` promete que "con el tope en cero el
+        # lote no consulta ni uno", y la sonda es una consulta más: sin este
+        # candado, un tope en cero seguiría gastando una búsqueda real contra
+        # los cuatro portales antes de rendirse.
+        if not cronometro.se_acabo:
+            _sondear_las_sesiones(
+                orden,
+                doyle=doyle,
+                clave_de_sonda=clave_de_sonda,
+                tope_por_consulta_seg=tope_por_consulta_seg,
+                cada_seg=cada_seg,
+                dormir=dormir,
+                ahora=ahora,
+            )
+
         for posicion, renglon in enumerate(orden.renglones):
             if cronometro.se_acabo:
                 # Se acabó el tiempo: TODO lo que queda —éste incluido— es
@@ -1227,6 +1479,21 @@ def correr_el_lote(
 
         return sellar(renglones=tuple(anotados))
 
+    except SesionesNoSirven as exc:
+        # Aparte del genérico de abajo, y a propósito: el detalle SÍ lleva el
+        # texto de ÉSTA excepción, porque lo redactó `_sondear_las_sesiones` —
+        # nombres de proveedor y un EAN, nunca una cadena de conexión ni la
+        # URL de un monitor—. La regla 5 de `CLAUDE.md` prohíbe el texto de una
+        # excepción AJENA (httpx, SQLAlchemy); ésta es nuestra y no dice nada
+        # que no debiera verse en el journal de atlas.
+        sellar(
+            final=SE_INTERRUMPIO,
+            # Ninguno: la sonda corre antes del bucle, así que nada se llegó a
+            # consultar todavía.
+            renglones=tuple(anotados),
+            detalle=str(exc),
+        )
+        raise
     except BaseException as exc:  # noqa: BLE001 — hasta un Ctrl-C deja bitácora
         # Se atrapa TODO, incluido `KeyboardInterrupt` y `SystemExit`, y
         # **se vuelve a levantar**: lo único que se hace aquí es dejar dicho en
@@ -1397,6 +1664,7 @@ def main(argv: list[str] | None = None) -> int:
         tope_seg=tope_seg,
         tope_por_consulta_seg=tope_por_consulta_seg,
         cada_seg=cada_seg,
+        clave_de_sonda=clave_de_sonda_configurada(),
         reglas=reglas_configuradas(),
     )
     # El resumen ya fue a la bitácora desde dentro; esto es para quien corra el

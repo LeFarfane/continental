@@ -33,6 +33,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import re
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -61,13 +62,16 @@ from continental.lote import (
     Cronometro,
     RenglonDelLote,
     ResumenDeLaCorrida,
+    SesionesNoSirven,
     clases_del_catalogo,
     contar_los_motivos,
     correr_el_lote,
     ordenar_por_importancia,
+    proveedores_con_sesion_caida,
     tope_del_lote_segundos,
 )
 from continental.precios import (
+    LecturaDePrecio,
     PORTAL_SIN_CONTESTAR,
     SESION_CADUCADA,
     SIN_RESULTADOS,
@@ -84,6 +88,12 @@ TIMER = RAIZ / "scripts" / "systemd" / "continental-lote.timer"
 
 #: Los cuatro del glosario, con la clave que usa Doyle.
 LOS_CUATRO = ("levic", "nadro", "quepharma", "vicma")
+
+#: Un EAN de sonda para las pruebas que necesitan que la sonda del ticket 30
+#: NO comparta reloj ni `vueltas_por_termino` con el renglón que están
+#: cronometrando -distinto de cualquier `_clave(n)` de este archivo, así que
+#: una prueba que la configure aparte no cruza estado con el renglón 1-.
+CLAVE_DE_SONDA = "7509999999999"
 
 
 # ------------------------------------------------------------- utilidades
@@ -660,7 +670,9 @@ def test_el_lote_consulta_todos_los_renglones_y_los_congela():
     assert resumen.final == TERMINO
     assert resumen.consultados == 3
     assert resumen.con_precio == 3
-    assert len(doyle.pedidos) == 3
+    # Cuatro y no tres: la sonda del ticket 30 -de respaldo, con la clave del
+    # primer renglón- le agrega una búsqueda más a las tres reales.
+    assert len(doyle.pedidos) == 4
     # Cuatro filas congeladas por renglón: una por proveedor, siempre.
     assert len(almacenamiento.precios) == 12
 
@@ -706,8 +718,12 @@ def test_se_detiene_al_tope_de_sesenta_minutos():
     assert resumen.consultados == 6
     assert resumen.sin_alcanzar == 4
     assert ahora() == pytest.approx(3600.0)
-    # Solo se molestó a los portales seis veces, no diez.
-    assert len(doyle.pedidos) == 6
+    # Siete y no seis: la sonda del ticket 30 -de respaldo, con la clave del
+    # primer renglón- consume la primera vuelta de "buscando" que antes le
+    # tocaba a ese renglón, así que el total de segundos no cambia -la sonda
+    # se queda con lo que habría costado el renglón 1, y éste sale gratis-,
+    # pero sí hay una búsqueda más contada.
+    assert len(doyle.pedidos) == 7
 
 
 def test_lo_que_no_alcanzo_queda_como_faltante_por_tope_y_no_como_error():
@@ -758,13 +774,29 @@ def test_el_tope_no_corta_una_consulta_a_la_mitad():
     se pasa del tope por lo que tarde el renglón en curso, y es a propósito:
     aquí el tope son 1 s simulado y el renglón cuesta 600, así que termina en
     600 con el primero **guardado entero**.
+
+    **La sonda del ticket 30 necesita su propia clave, aparte.** Si se dejara
+    de respaldo -la del renglón 1- compartiría reloj y `vueltas_por_termino`
+    con la consulta que esta prueba está cronometrando, y se comería ella sola
+    el segundo de tope antes de que el bucle real llegara a arrancar. Con
+    `clave_de_sonda` apuntando a un EAN aparte que contesta de una vez -sin
+    vueltas pendientes-, la sonda cuesta 0 s simulados y el segundo entero
+    sigue siendo del renglón 1, que es lo que esta prueba mide.
     """
     almacen = _mundo(3)
     almacenamiento = AlmacenamientoFalso()
     doyle = _doyle_que_contesta(3, vueltas_pendientes=1)
+    doyle.resultados_por_termino[CLAVE_DE_SONDA] = {
+        p: respuesta_lista(p, [(CLAVE_DE_SONDA, "1.00", "1")]) for p in LOS_CUATRO
+    }
 
     resumen, ahora = _correr(
-        almacen, almacenamiento, doyle, tope_seg=1.0, cada_seg=600.0
+        almacen,
+        almacenamiento,
+        doyle,
+        tope_seg=1.0,
+        cada_seg=600.0,
+        clave_de_sonda=CLAVE_DE_SONDA,
     )
 
     assert resumen.consultados == 1
@@ -802,6 +834,14 @@ def test_un_proveedor_que_falla_no_tumba_el_renglon():
     Lo garantiza `precios.congelar`, que devuelve una lectura **por cada**
     proveedor del acuse, y aquí se comprueba de punta a punta: cuatro filas
     guardadas, tres con precio y una con su motivo.
+
+    **No es `SESION_CADUCADA`** a propósito, y desde el ticket 30 no puede
+    serlo: la sonda previa usa la clave de este mismo -y único- renglón, así
+    que un `nadro` con la sesión caída aquí haría que el lote se negara a
+    correr entero (`test_se_niega_a_correr_si_una_sesion_no_sirve`), y no
+    llegaría a consultarse ni un renglón. Lo que sí sigue pasando igual que
+    antes es que un motivo *reintentable* -el portal no contestó, aquí- deja
+    un hueco en su columna sin tumbar nada más.
     """
     almacen = _mundo(1)
     almacenamiento = AlmacenamientoFalso()
@@ -809,7 +849,7 @@ def test_un_proveedor_que_falla_no_tumba_el_renglon():
     doyle = DoyleFalso(
         resultados_por_termino={
             clave: {
-                "nadro": respuesta_con_sesion_caducada("nadro"),
+                "nadro": respuesta_con_error("nadro", "el portal no contestó"),
                 "levic": respuesta_lista("levic", [(clave, "86.05", "40")]),
                 "vicma": respuesta_lista("vicma", [(clave, "90.00", "10")]),
                 "quepharma": respuesta_lista("quepharma", [(clave, "95.00", "2")]),
@@ -819,11 +859,12 @@ def test_un_proveedor_que_falla_no_tumba_el_renglon():
 
     resumen, _ = _correr(almacen, almacenamiento, doyle)
 
+    assert resumen.final == TERMINO
     assert resumen.consultados == 1
     anotado = resumen.renglones[0]
     assert anotado.con_precio == 3
     assert anotado.sin_precio == 1
-    assert anotado.motivos == (SESION_CADUCADA,)
+    assert anotado.motivos == (PORTAL_SIN_CONTESTAR,)
     assert len(almacenamiento.precios) == 4
 
 
@@ -847,6 +888,195 @@ def test_un_proveedor_que_falla_no_tumba_los_demas_renglones():
     assert resumen.consultados == 3
     assert resumen.con_precio == 3
     assert dict(resumen.motivos)[PORTAL_SIN_CONTESTAR] == 3
+
+
+# =========================================================================
+# LA SONDA DE SESIONES — se niega a correr si una no sirve (ticket 30)
+# =========================================================================
+#
+# La falla medida el 2026-09-26: `GET /api/sesiones` decía `guardada` para
+# las cuatro mientras LEVIC llevaba nueve horas y media caída, y el lote
+# consultó 19 renglones sin un solo precio de LEVIC antes de que alguien lo
+# detuviera a mano con 86 renglones ya congelados sin ese proveedor. Ya había
+# pasado igual el 2026-09-19, con las cuatro sesiones muertas.
+
+
+def test_se_niega_a_correr_si_una_sesion_no_sirve():
+    """La casilla central: `la sesión caducó` en la sonda para todo el lote.
+
+    Ni un renglón se consulta y ni una fila se guarda -"negarse a correr, no
+    correr a medias"-, la excepción sube (systemd sale distinto de cero) y la
+    bitácora sigue quedando escrita en el `finally` con lo que SÍ se supo:
+    cero renglones, y por qué.
+    """
+    almacen = _mundo(3)
+    almacenamiento = AlmacenamientoFalso()
+    doyle = _doyle_que_contesta(3)
+    doyle.resultados_por_termino[CLAVE_DE_SONDA] = {
+        "levic": respuesta_con_sesion_caducada("levic"),
+        "nadro": respuesta_lista("nadro", [(CLAVE_DE_SONDA, "10.00", "5")]),
+        "vicma": respuesta_lista("vicma", [(CLAVE_DE_SONDA, "10.00", "5")]),
+        "quepharma": respuesta_lista("quepharma", [(CLAVE_DE_SONDA, "10.00", "5")]),
+    }
+
+    with pytest.raises(SesionesNoSirven) as excinfo:
+        _correr(
+            almacen, almacenamiento, doyle, clave_de_sonda=CLAVE_DE_SONDA
+        )
+
+    assert excinfo.value.proveedores == ("levic",)
+    assert "la sesión caducó" in str(excinfo.value)
+    assert "levic" in str(excinfo.value)
+    # Nada se consultó y ni un precio se guardó: la sonda corre antes del
+    # bucle, así que la única llamada a Doyle es la suya.
+    assert doyle.pedidos == [CLAVE_DE_SONDA]
+    assert almacenamiento.precios == []
+    # La lista del día SÍ queda armada -eso pasa antes de la sonda, y es
+    # trabajo sin red que no hay razón para deshacer-; lo único que se evita
+    # es escribirle precios a medias.
+    guardado = almacenamiento.leer(NEGOCIO, HOY)
+    assert guardado is not None
+    assert len(guardado.renglones) == 3
+
+
+def test_la_bitacora_queda_escrita_aunque_se_niegue_a_correr(caplog):
+    """El `finally` sigue corriendo: journal, `corrida_del_lote` y latido.
+
+    Es la misma garantía que ya tienen `SE_INTERRUMPIO` por un `Ctrl-C`
+    (`test_un_lote_muerto_a_la_mitad_deja_bitacora`): una noche que se negó a
+    correr no puede desaparecer sin dejar rastro.
+    """
+    almacen = _mundo(2)
+    almacenamiento = AlmacenamientoFalso()
+    doyle = _doyle_que_contesta(2)
+    doyle.resultados_por_termino[CLAVE_DE_SONDA] = {
+        "nadro": respuesta_con_sesion_caducada("nadro"),
+        "levic": respuesta_lista("levic", [(CLAVE_DE_SONDA, "10.00", "5")]),
+        "vicma": respuesta_lista("vicma", [(CLAVE_DE_SONDA, "10.00", "5")]),
+        "quepharma": respuesta_lista("quepharma", [(CLAVE_DE_SONDA, "10.00", "5")]),
+    }
+
+    with caplog.at_level(logging.INFO, logger="continental"):
+        with pytest.raises(SesionesNoSirven):
+            _correr(
+                almacen, almacenamiento, doyle, clave_de_sonda=CLAVE_DE_SONDA
+            )
+
+    assert SE_INTERRUMPIO in caplog.text
+    assert "nadro" in caplog.text
+    guardada = almacenamiento.corridas[-1]
+    assert guardada["final"] == SE_INTERRUMPIO
+    assert guardada["consultados"] == 0
+    assert "nadro" in guardada["detalle"]
+
+
+def test_varios_proveedores_caidos_se_listan_todos_y_en_orden():
+    """El mensaje nombra a TODOS los que fallaron, alfabético y no por llegada.
+
+    Igual que `contar_los_motivos`: un mensaje que cambia de orden entre dos
+    noches con los mismos proveedores caídos es un mensaje que nadie compara.
+    """
+    almacen = _mundo(1)
+    almacenamiento = AlmacenamientoFalso()
+    doyle = DoyleFalso(
+        resultados_por_termino={
+            CLAVE_DE_SONDA: {
+                "vicma": respuesta_con_sesion_caducada("vicma"),
+                "nadro": respuesta_con_sesion_caducada("nadro"),
+                "levic": respuesta_lista(
+                    "levic", [(CLAVE_DE_SONDA, "10.00", "5")]
+                ),
+                "quepharma": respuesta_lista(
+                    "quepharma", [(CLAVE_DE_SONDA, "10.00", "5")]
+                ),
+            }
+        }
+    )
+
+    with pytest.raises(SesionesNoSirven) as excinfo:
+        _correr(
+            almacen, almacenamiento, doyle, clave_de_sonda=CLAVE_DE_SONDA
+        )
+
+    assert excinfo.value.proveedores == ("nadro", "vicma")
+
+
+@pytest.mark.parametrize(
+    "motivo_de_la_respuesta",
+    ["sin_resultados", "no_empareja", "portal_sin_contestar"],
+)
+def test_sin_resultados_o_no_empareja_dicen_que_la_sesion_sirve(
+    motivo_de_la_respuesta,
+):
+    """El discriminante es EXACTO: solo `la sesión caducó` descalifica.
+
+    Decisión ya tomada del ticket, no se revisita: "sin resultados" o "no
+    empareja" dicen que el portal SÍ contestó -la sesión sirve-, igual que un
+    portal que de plano no contesta. Ninguno de los tres frena el lote.
+    """
+    respuestas_por_motivo = {
+        # El portal contestó y no encontró nada: `total=0`.
+        "sin_resultados": respuesta_lista("nadro", []),
+        # Contestó con filas y ninguna es el EAN buscado.
+        "no_empareja": respuesta_lista(
+            "nadro", [("9999999999999", "10.00", "5")]
+        ),
+        "portal_sin_contestar": respuesta_con_error(
+            "nadro", "el portal no contestó"
+        ),
+    }
+
+    almacen = _mundo(2)
+    almacenamiento = AlmacenamientoFalso()
+    doyle = _doyle_que_contesta(2)
+    doyle.resultados_por_termino[CLAVE_DE_SONDA] = {
+        "nadro": respuestas_por_motivo[motivo_de_la_respuesta],
+        "levic": respuesta_lista("levic", [(CLAVE_DE_SONDA, "10.00", "5")]),
+        "vicma": respuesta_lista("vicma", [(CLAVE_DE_SONDA, "10.00", "5")]),
+        "quepharma": respuesta_lista(
+            "quepharma", [(CLAVE_DE_SONDA, "10.00", "5")]
+        ),
+    }
+
+    resumen, _ = _correr(
+        almacen, almacenamiento, doyle, clave_de_sonda=CLAVE_DE_SONDA
+    )
+
+    # El lote corrió entero: la sonda no lo frenó.
+    assert resumen.final == TERMINO
+    assert resumen.consultados == 2
+
+
+def test_sin_ean_en_toda_la_lista_no_hay_con_que_sondear():
+    """Sin EAN en ningún renglón, la sonda se salta -y no hay nada que perder.
+
+    Todo va a salir `sin clave` de todas formas: saltarse la sonda no deja
+    nada a medias porque no hay ni un portal que tocar.
+    """
+    almacen = _mundo(2)
+    almacen.catalogo_en_memoria = []  # ningún producto vendido está en catálogo
+    almacenamiento = AlmacenamientoFalso()
+    doyle = DoyleFalso()
+
+    resumen, _ = _correr(almacen, almacenamiento, doyle)
+
+    assert resumen.final == TERMINO
+    assert resumen.sin_clave == 2
+    assert doyle.pedidos == []
+
+
+def test_proveedores_con_sesion_caida_es_pura_y_ordena_alfabetico():
+    """La función pura, sin Doyle ni reloj: solo lee `motivo`."""
+    lecturas = (
+        LecturaDePrecio(proveedor="vicma", motivo=SESION_CADUCADA),
+        LecturaDePrecio(
+            proveedor="nadro", precio=Decimal("10.00"), precio_como_llego="10.00"
+        ),
+        LecturaDePrecio(proveedor="levic", motivo=SESION_CADUCADA),
+        LecturaDePrecio(proveedor="quepharma", motivo=SIN_RESULTADOS),
+    )
+
+    assert proveedores_con_sesion_caida(lecturas) == ("levic", "vicma")
 
 
 class _DoyleQueFallaEnUnaClave:
@@ -911,7 +1141,11 @@ def test_un_renglon_sin_clave_no_molesta_a_ningun_portal():
     resumen, _ = _correr(almacen, almacenamiento, doyle)
 
     assert resumen.sin_clave == 1
-    assert doyle.pedidos == [_clave(1)]
+    # Dos veces y no una: la primera es la sonda del ticket 30 -de respaldo,
+    # con la clave del único renglón con EAN, porque no hay
+    # `pedido.clave_de_sonda`- y la segunda es la consulta real de ese mismo
+    # renglón. El renglón sin clave nunca llega a pedir nada.
+    assert doyle.pedidos == [_clave(1), _clave(1)]
 
 
 # ------------------------------- no dejar la lista peor que antes de correr
@@ -1061,7 +1295,10 @@ def test_el_lote_consulta_en_el_orden_de_importancia():
 
     resumen, _ = _correr(almacen, almacenamiento, doyle)
 
-    assert doyle.pedidos == [_clave(2), _clave(3), _clave(1)]
+    # El primero es la sonda del ticket 30: sondea con la clave del primer
+    # renglón YA ordenado -clave(2), que es A- porque no hay
+    # `pedido.clave_de_sonda` configurada.
+    assert doyle.pedidos == [_clave(2), _clave(2), _clave(3), _clave(1)]
     assert resumen.orden is not None and resumen.orden.cumple_el_orden is True
 
 
@@ -1109,7 +1346,9 @@ def test_con_clase_en_parte_de_la_lista_el_lote_cumple_el_orden_y_lo_guarda(capl
     with caplog.at_level(logging.INFO, logger="continental"):
         resumen, _ = _correr(almacen, almacenamiento, doyle)
 
-    assert doyle.pedidos == [_clave(3), _clave(1), _clave(2)]
+    # El primero es la sonda del ticket 30, con la clave del primer renglón ya
+    # ordenado -clave(3), la única con clase- de respaldo.
+    assert doyle.pedidos == [_clave(3), _clave(3), _clave(1), _clave(2)]
     assert resumen.orden is not None and resumen.orden.cumple_el_orden is True
     assert resumen.orden.sin_clase == 2
     assert "SIN CUMPLIR" not in resumen.como_texto()
@@ -1146,14 +1385,19 @@ def test_el_lote_es_secuencial_y_por_eso_doyle_puede_reutilizar_el_navegador():
 
     _correr(almacen, almacenamiento, doyle)
 
-    # pide/lee, pide/lee, pide/lee: nunca dos "pide" seguidos.
+    # pide/lee, pide/lee, pide/lee: nunca dos "pide" seguidos. El primer par
+    # es la sonda del ticket 30 -sondea con la clave del primer renglón,
+    # respaldo porque no hay `pedido.clave_de_sonda` configurada- y también
+    # termina antes de que empiece el siguiente pide.
     assert orden_real == [
         "pide " + _clave(1),
         "lee trabajo-1",
-        "pide " + _clave(2),
+        "pide " + _clave(1),
         "lee trabajo-2",
-        "pide " + _clave(3),
+        "pide " + _clave(2),
         "lee trabajo-3",
+        "pide " + _clave(3),
+        "lee trabajo-4",
     ]
 
 
@@ -1170,7 +1414,14 @@ def test_la_corrida_escribe_su_resumen_en_la_bitacora(caplog):
     """
     almacen = _mundo(2)
     almacenamiento = AlmacenamientoFalso()
-    clave = _clave(1)
+    # La sesión caída va en el SEGUNDO renglón y no en el primero: desde el
+    # ticket 30 la sonda previa consulta la clave del primer renglón con EAN
+    # de la lista, y si ÉSE trajera la sesión caída el lote se negaría a
+    # correr entero (ver `test_se_niega_a_correr_si_una_sesion_no_sirve`) y no
+    # llegaría a consultarse ni un renglón. Poniéndola en el segundo, la sonda
+    # pasa con el primero y esta prueba sigue midiendo lo que dice su docstring:
+    # un hueco que aparece **durante** la corrida, no antes de arrancarla.
+    clave = _clave(2)
     doyle = _doyle_que_contesta(2)
     doyle.resultados_por_termino[clave] = {
         p: respuesta_con_sesion_caducada(p) for p in LOS_CUATRO
