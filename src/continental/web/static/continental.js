@@ -1352,7 +1352,7 @@ let FECHA_ACTUAL = null;
 const ocultarLoDeOtroDia = () => {
   ['pedido-tabla', 'armado', 'cierre', 'pedido-avisos', 'vistas', 'completar',
     'particion', 'descartados', 'pedido-corrida', 'pedido-sin-clasificar',
-    'recepcion', 'en-camino'].forEach(id => {
+    'recepcion', 'en-camino', 'conciliacion'].forEach(id => {
     document.getElementById(id).hidden = true;
   });
 };
@@ -1555,6 +1555,13 @@ async function cargarPedido(fecha) {
   // reponer puede tener, igual, tres renglones de ayer que no han llegado.
   pintarRecepcion(datos.recepcion);
   pintarEnCamino(datos.en_camino);
+  // LA CONCILIACIÓN DIARIA (ADR 0021): aparte de las dos de arriba porque no
+  // viaja en ESTA respuesta -es una lectura más cara que solo hace falta
+  // cuando se abre este bloque- y por eso se pide sola, sin esperarla: no hay
+  // razón para que una compra de hace tres días retrase pintar la lista de
+  // hoy. `cargarConciliacion` se cuida sola de esconder el bloque si algo
+  // sale mal, igual que `respuestaDe` nunca truena.
+  cargarConciliacion(datos.pedido_sugerido_id);
   pintarCabecera(datos);
   // Cerrar pasa por la confirmación, y cerrar y reabrir terminan igual: la
   // cabecera, el cierre y la tabla con el estado nuevo (ADR 0016).
@@ -2581,6 +2588,164 @@ const devolverAtrasado = async (renglonId, boton) => {
     notaDeFalla('pedido-accion', respuesta);
     return;
   }
+  await recargarLoQueSeVe();
+  nota('pedido-accion', respuesta.frase, 'todo');
+};
+
+// ============================== LA CONCILIACIÓN DIARIA (ADR 0021) ==============================
+//
+// Lo propuesto contra lo que de verdad se compró. Aparte de `datos` -no la
+// trae la carga de la lista- porque es una lectura más cara que solo hace
+// falta cuando se abre este bloque: el calendario del rango, las compras y
+// lo ya recibido de toda la instalación, no solo de esta lista.
+
+// Se pide con el id de la lista que YA se cargó. `null`/`undefined` esconde
+// el bloque en vez de pedir nada: pasa en el instante entre que `cargarPedido`
+// pinta un día sin lista (domingo, festivo, el 404 de la bitácora) y nadie le
+// dio ningún id.
+const cargarConciliacion = async (pedidoSugeridoId) => {
+  const caja = document.getElementById('conciliacion');
+  if (!pedidoSugeridoId) { caja.hidden = true; caja.replaceChildren(); return; }
+  const datos = await respuestaDe(fetch('/api/pedido-sugerido/' + pedidoSugeridoId + '/conciliacion'));
+  pintarConciliacion(datos);
+};
+
+const pintarConciliacion = (datos) => {
+  const caja = document.getElementById('conciliacion');
+  if (!datos) { caja.hidden = true; caja.replaceChildren(); return; }
+
+  const resumen = document.createElement('p');
+  resumen.className = 'resumen' + (datos.ok === false ? ' mal' : '');
+  resumen.textContent = datos.frase
+    + (datos.ok === false && datos.detalle ? ' (' + datos.detalle + ')' : '');
+  const piezas = [resumen];
+
+  (datos.avisos || []).forEach((aviso, i) => {
+    const p = document.createElement('p');
+    p.id = 'conciliacion-aviso-' + i;
+    piezas.push(p);
+    notaDeFalla(p.id, aviso);
+  });
+
+  // LO PROPUESTO QUE SÍ SE COMPRÓ (bloque 1): con a quién, cuánto y a qué
+  // precio, y LO QUE PAGA EL MÓDULO ENTERO -la diferencia contra lo más
+  // barato que ya sabíamos-. Las dos frases llegan hechas de Python.
+  //
+  // `marcadas` lleva qué renglones sigue queriendo confirmar la persona: nace
+  // con TODOS los accionables adentro -el clic de lote parte de "confirma
+  // todo"- y cada checkbox se puede destildar antes de apretar el botón.
+  const marcadas = new Map();
+  const coincidencias = document.createElement('ul');
+  coincidencias.className = 'coincidencias';
+  (datos.coincidencias || []).forEach(c => {
+    const li = document.createElement('li');
+    const que = document.createElement('span');
+    que.className = 'que';
+    que.textContent = c.frase;
+    li.append(que);
+    if (c.frase_del_pago) {
+      const pago = document.createElement('span');
+      pago.className = 'pago' + (c.hubo_mas_barato ? ' hallazgo' : '');
+      pago.textContent = c.frase_del_pago;
+      li.append(pago);
+    }
+    if (c.accionable) {
+      marcadas.set(c.renglon_id, c.compras);
+      const etiqueta = document.createElement('label');
+      etiqueta.className = 'lote';
+      const marca = document.createElement('input');
+      marca.type = 'checkbox';
+      marca.checked = true;
+      marca.addEventListener('change', () => {
+        if (marca.checked) marcadas.set(c.renglon_id, c.compras);
+        else marcadas.delete(c.renglon_id);
+      });
+      etiqueta.append(marca, ' Incluir en el lote');
+      li.append(etiqueta);
+    } else if (c.motivo_no_accionable) {
+      // NUNCA se auto-confirma sin clave de Doyle: se cuenta como comprado,
+      // pero no hay con qué armar el pedido retroactivo. Se revisa a mano
+      // (ADR 0014, heredado por la conciliación).
+      const explica = document.createElement('span');
+      explica.className = 'explica';
+      explica.textContent = c.motivo_no_accionable;
+      li.append(explica);
+    }
+    coincidencias.append(li);
+  });
+
+  const botonDelLote = datos.coincidencias && datos.coincidencias.some(c => c.accionable)
+    ? botonDeAccion('Confirmar el lote',
+        (b) => confirmarLoteDeConciliacion(datos.pedido_sugerido_id, marcadas, b))
+    : null;
+
+  // LO PROPUESTO QUE NO SE COMPRÓ (bloque 2), agrupado por motivo y en el
+  // orden de Python: lo que nunca se va a resolver solo primero, lo
+  // definitivo al final. Los tres motivos NO se confunden entre sí (ADR
+  // 0021) y por eso llegan ya distinguidos -esta pantalla no decide cuál es
+  // cuál, solo pinta el grupo que Python ya armó.
+  const sinComprar = document.createElement('ul');
+  sinComprar.className = 'sin-comprar';
+  (datos.sin_comprar || []).forEach(g => {
+    const li = document.createElement('li');
+    const cuales = document.createElement('ul');
+    (g.renglones || []).forEach(r => {
+      const fila = document.createElement('li');
+      fila.textContent = r.frase;
+      cuales.append(fila);
+    });
+    li.append(cuales);
+    sinComprar.append(li);
+  });
+
+  // LO COMPRADO QUE NADIE PROPUSO (bloque 3): normal, y se dice así. Lo
+  // descartado-y-comprado-de-todos-modos y lo ambiguo llevan su propia marca
+  // -ninguno de los dos se auto-confirma nunca, y por eso este bloque no
+  // trae ningún checkbox ni ningún `renglon_id` con el que armar uno.
+  const sueltas = document.createElement('ul');
+  sueltas.className = 'compradas-sin-proponer';
+  (datos.compradas_sin_proponer || []).forEach(c => {
+    const li = document.createElement('li');
+    li.className = 'suelta'
+      + (c.ambiguo ? ' ambiguo' : '') + (c.fue_descartado ? ' descartado' : '');
+    li.textContent = c.frase;
+    sueltas.append(li);
+  });
+
+  caja.replaceChildren(
+    ...piezas,
+    ...(coincidencias.children.length ? [coincidencias, ...(botonDelLote ? [botonDelLote] : [])] : []),
+    ...(sinComprar.children.length ? [sinComprar] : []),
+    ...(sueltas.children.length ? [sueltas] : []));
+  caja.hidden = false;
+};
+
+// EL ÚNICO CLIC QUE ESCRIBE ALGO DE LA CONCILIACIÓN (ADR 0021): confirma en
+// lote lo que sigue marcado. El servidor vuelve a conciliar antes de
+// escribir y se salta lo que ya no sea exactamente lo que se vio -la misma
+// garantía que confirmar o rechazar una recepción normal-, así que esto NO
+// manda lo que la persona cree que va a pasar: manda lo que vio, y el
+// servidor decide qué de eso sigue siendo cierto.
+const confirmarLoteDeConciliacion = async (pedidoSugeridoId, marcadas, boton) => {
+  boton.disabled = true;
+  nota('pedido-accion', '');
+  const renglones = [...marcadas.entries()].map(([renglon_id, compras]) => ({ renglon_id, compras }));
+  const respuesta = await respuestaDe(fetch('/api/pedido-sugerido/' + pedidoSugeridoId
+      + '/conciliacion/confirmar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ renglones }),
+      }), 'al_guardar');
+  if (!respuesta.ok) {
+    boton.disabled = false;
+    // Genérico a propósito (regla 5): el detalle está en la bitácora.
+    notaDeFalla('pedido-accion', respuesta);
+    return;
+  }
+  // Cambia el estado de los renglones confirmados -y quizá lo que se le
+  // puede pedir a cada proveedor-, así que se recarga la pantalla entera,
+  // igual que confirmar una recepción normal. Eso vuelve a pedir la
+  // conciliación también: no hace falta repintar este bloque a mano.
   await recargarLoQueSeVe();
   nota('pedido-accion', respuesta.frase, 'todo');
 };

@@ -93,6 +93,7 @@ from typing import TYPE_CHECKING
 from continental.almacen import DiaCalendario, LineaDeCompra
 from continental.almacenamiento import RENGLON_ABIERTO, RenglonGuardado
 from continental.comparacion import Ganador, elegir_ganador
+from continental.precios import nombre_del_proveedor
 
 if TYPE_CHECKING:  # pragma: no cover - solo para los tipos
     from continental.almacenamiento import PrecioDeProveedor
@@ -566,3 +567,207 @@ def frase_de_la_compra_suelta(c: CompraSuelta) -> str:
         f"Compra a {quien}, {_con_unidad(c.compra.cantidad)}: nadie la propuso. "
         "Es normal — no toda compra viene de esta lista."
     )
+
+
+# -------------------------------------------------------------- la pantalla
+#
+# Lo que la ruta HTTP necesita para armar el JSON del bloque (2026-09-27,
+# ADR 0021): nadie podía llegar a la conciliación desde el navegador hasta
+# este ticket. Las frases se redactan aquí, en Python, con pruebas — la misma
+# regla que ya siguen `recepcion.py` y `transito.py`: `continental.js` se
+# arma con `createElement` y solo pinta lo que llega hecho.
+#
+# Y la frase que paga el proyecto entero: comparar lo pagado contra lo más
+# barato que ya sabíamos, con dinero real ("pagó $126.25 a NADRO cuando
+# teníamos LEVIC a $122.50 — $3.75 por pieza"), para que no se entierre en
+# una tabla de números sueltos.
+
+
+def frase_de_la_diferencia(cmp: "ComparacionDePrecio", descripcion: str) -> str:
+    """La frase por la que existe el proyecto entero, con dinero real.
+
+    Sin ganador con precio, o sin una diferencia de verdad
+    (`hubo_mas_barato`), dice solo lo que se pagó: no se afirma un hallazgo
+    que la comparación no encontró.
+    """
+    quien_pago = (
+        "un proveedor sin clave de Doyle"
+        if cmp.proveedor_pagado is None
+        else nombre_del_proveedor(cmp.proveedor_pagado)
+    )
+    if not cmp.hubo_mas_barato or cmp.diferencia_por_pieza is None:
+        return f"{descripcion}: se pagó ${cmp.pagado:.2f} a {quien_pago}."
+    ganador = " o ".join(nombre_del_proveedor(p) for p in cmp.ganador.proveedores)
+    return (
+        f"{descripcion}: se pagó ${cmp.pagado:.2f} a {quien_pago} cuando "
+        f"{ganador} lo tenía a ${cmp.ganador.precio:.2f} — "
+        f"${cmp.diferencia_por_pieza:.2f} más por pieza."
+    )
+
+
+def frase_del_bloque(resultado: Conciliacion) -> str:
+    """El resumen de los tres bloques, de un vistazo — lo primero que se lee."""
+    total_coincidencias = len(resultado.coincidencias)
+    sin_comprar = len(resultado.sin_comprar)
+    sueltas = len(resultado.compradas_sin_proponer)
+    if not total_coincidencias and not sin_comprar and not sueltas:
+        return "Sin nada que conciliar todavía en la ventana de este día."
+    partes: list[str] = []
+    if total_coincidencias:
+        accionables = len(resultado.accionables)
+        partes.append(
+            (f"{total_coincidencias} coincidencia" if total_coincidencias == 1 else f"{total_coincidencias} coincidencias")
+            + (
+                f" ({accionables} para confirmar en lote)"
+                if accionables
+                else " (ninguna para confirmar en lote)"
+            )
+        )
+    if sin_comprar:
+        partes.append(f"{sin_comprar} sin comprar todavía")
+    if sueltas:
+        partes.append((f"{sueltas} compra" if sueltas == 1 else f"{sueltas} compras") + " sin proponer")
+    return "; ".join(partes) + "."
+
+
+def frase_del_lote_confirmado(confirmados: int, total: int) -> str:
+    """Lo que dice el clic del lote, ya escrito — nunca compuesto en el navegador."""
+
+    def _cuenta(n: int) -> str:
+        return f"{n} renglón" if n == 1 else f"{n} renglones"
+
+    if total == 0:
+        return "No había nada que confirmar."
+    if confirmados == total:
+        return f"Se confirmaron {_cuenta(confirmados)}."
+    if confirmados == 0:
+        return (
+            f"No se confirmó ninguno de {_cuenta(total)}: cambiaron antes del "
+            "clic. Vuelve a cargar la conciliación para verlos como quedaron."
+        )
+    return (
+        f"Se confirmaron {confirmados} de {_cuenta(total)}: los demás cambiaron "
+        "antes del clic. Vuelve a cargar la conciliación para verlos como quedaron."
+    )
+
+
+def _coincidencia_como_json(c: Coincidencia, cmp: "ComparacionDePrecio | None") -> dict:
+    return {
+        "renglon_id": c.renglon_id,
+        "producto_id": c.producto_id,
+        "clave": c.renglon.propuesto.clave,
+        "descripcion": c.descripcion,
+        "proveedor": c.proveedor,
+        "proveedor_nombre": None if c.proveedor is None else nombre_del_proveedor(c.proveedor),
+        # Qué vio la persona: esto es exactamente lo que la ruta de confirmar
+        # necesita para reconocer que la evidencia sigue siendo la misma.
+        "compras": list(c.compras_ids),
+        "piezas": c.piezas,
+        "piezas_pedidas": c.piezas_pedidas,
+        "importe_pagado": str(c.importe_pagado.quantize(Decimal("0.01"))),
+        "accionable": c.accionable,
+        "motivo_no_accionable": c.motivo_no_accionable,
+        "frase": frase_de_la_coincidencia(c),
+        # LO QUE PAGA EL MÓDULO ENTERO. `None` cuando no se pudieron leer los
+        # precios congelados de este renglón — no "no había diferencia".
+        "pagado": None if cmp is None else str(cmp.pagado),
+        "hubo_mas_barato": None if cmp is None else cmp.hubo_mas_barato,
+        "diferencia_por_pieza": (
+            None if cmp is None or cmp.diferencia_por_pieza is None else str(cmp.diferencia_por_pieza)
+        ),
+        "frase_del_pago": None if cmp is None else frase_de_la_diferencia(cmp, c.descripcion),
+    }
+
+
+def _sin_comprar_como_json(s: SinComprar) -> dict:
+    return {
+        "renglon_id": s.renglon_id,
+        "producto_id": s.producto_id,
+        "clave": s.renglon.propuesto.clave,
+        "descripcion": s.renglon.propuesto.descripcion,
+        "motivo": s.motivo,
+        "frase": frase_del_sin_comprar(s),
+    }
+
+
+def _compra_suelta_como_json(c: CompraSuelta) -> dict:
+    return {
+        "compra_id": c.compra.compra_id,
+        "producto_id": c.compra.producto_id,
+        "proveedor": c.proveedor,
+        "proveedor_nombre": None if c.proveedor is None else nombre_del_proveedor(c.proveedor),
+        "cantidad": c.compra.cantidad,
+        "fecha": c.compra.fecha.isoformat(),
+        "folio": c.compra.folio or None,
+        # Las dos marcas que NUNCA se auto-confirman (ADR 0021): una persona
+        # las revisa una por una. El JavaScript no ofrece lote para éstas
+        # porque este bloque —`compradas_sin_proponer`— nunca trae
+        # `accionable`, a diferencia de una coincidencia.
+        "fue_descartado": c.fue_descartado,
+        "ambiguo": c.ambiguo,
+        "frase": frase_de_la_compra_suelta(c),
+    }
+
+
+def conciliacion_como_json(
+    resultado: Conciliacion,
+    comparaciones: Mapping[int, "ComparacionDePrecio"] | None = None,
+) -> dict:
+    """El bloque de la conciliación diaria, como la pantalla lo lee (ADR 0021).
+
+    Las frases viajan hechas. `comparaciones` es lo que
+    `comparar_precio_pagado` calculó por `renglon_id` —puede faltar una si no
+    se pudieron leer los precios congelados de ese renglón, y entonces esa
+    coincidencia enseña lo que se pagó sin decir si había algo más barato—.
+
+    **`sin_comprar` viaja agrupado por motivo**, en el orden de
+    `MOTIVOS_SIN_COMPRAR` —lo que nunca se va a resolver solo primero, lo
+    definitivo al final—, la misma forma que `recepcion_como_json` ya usa
+    para `MOTIVOS_SIN_PROPUESTA`: la regla de "que la pantalla los distinga"
+    vive aquí, con pruebas, y el JavaScript solo pinta los grupos que llegan.
+    """
+    comparaciones = comparaciones or {}
+    grupos_sin_comprar = []
+    for motivo in MOTIVOS_SIN_COMPRAR:
+        de_este = [s for s in resultado.sin_comprar if s.motivo == motivo]
+        if not de_este:
+            continue
+        grupos_sin_comprar.append(
+            {
+                "motivo": motivo,
+                "renglones": [_sin_comprar_como_json(s) for s in de_este],
+            }
+        )
+    return {
+        "ok": True,
+        "detalle": None,
+        "dia": resultado.dia.isoformat(),
+        "limite": resultado.limite.isoformat(),
+        "frase": frase_del_bloque(resultado),
+        "coincidencias": [
+            _coincidencia_como_json(c, comparaciones.get(c.renglon_id))
+            for c in resultado.coincidencias
+        ],
+        "sin_comprar": grupos_sin_comprar,
+        "compradas_sin_proponer": [
+            _compra_suelta_como_json(c) for c in resultado.compradas_sin_proponer
+        ],
+    }
+
+
+def conciliacion_con_hueco(detalle: str) -> dict:
+    """El bloque cuando no se pudo leer algo: un hueco con su motivo (regla 4).
+
+    Nunca "nada que conciliar": eso se leería como que el día está limpio, y
+    quizá no se pudo ni preguntar.
+    """
+    return {
+        "ok": False,
+        "detalle": detalle,
+        "dia": None,
+        "limite": None,
+        "frase": "No se pudo conciliar este día.",
+        "coincidencias": [],
+        "sin_comprar": [],
+        "compradas_sin_proponer": [],
+    }

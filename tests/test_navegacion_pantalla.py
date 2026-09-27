@@ -266,6 +266,9 @@ def test_recibir_o_cancelar_recargan_el_dia_que_se_esta_viendo_no_siempre_hoy():
         in script
     )
     # Las cuatro acciones usan la misma función: ninguna volvió a escribir
-    # `await cargarPedido()` a secas, que habría sido el error de raíz.
-    assert script.count("await recargarLoQueSeVe();") == 4
+    # `await cargarPedido()` a secas, que habría sido el error de raíz. La
+    # quinta es `confirmarLoteDeConciliacion` (ADR 0021, 2026-09-27), que
+    # cambia el estado de los renglones confirmados y se recarga entera por
+    # la misma razón que las otras cuatro.
+    assert script.count("await recargarLoQueSeVe();") == 5
     assert "await cargarPedido();" not in script

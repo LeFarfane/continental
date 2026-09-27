@@ -664,6 +664,21 @@ li.transito.atrasado { opacity: 1; }
 .recepcion .esperan { margin: .9rem 0 0; }
 .recepcion .esperan li { flex-wrap: wrap; gap: .1rem .7rem; }
 .en-camino .recepcion-marca { flex: 1 1 100%; font-size: .82rem; color: var(--aviso); font-weight: 600; }
+/* LA CONCILIACIÓN DIARIA (ADR 0021). Reusa la caja de "en camino" -es la
+   misma familia de bloque, resumen arriba y una lista abajo- y solo agrega
+   lo que le falta: la frase del pago, el checkbox del lote y las dos marcas
+   que nunca se auto-confirman. Ningún color nuevo: los mismos `--aviso`,
+   `--tenue` y `--mal` de siempre. */
+.conciliacion .pago { flex: 1 1 100%; font-size: .82rem; color: var(--tenue); }
+/* LO QUE PAGA EL MÓDULO ENTERO: cuando de verdad había algo más barato, la
+   frase del pago deja de ser un dato tenue y pasa a ser lo que hay que ver
+   primero. */
+.conciliacion .pago.hallazgo { color: var(--aviso); font-weight: 600; }
+.conciliacion .lote { flex: 1 1 100%; font-size: .82rem; display: inline-flex;
+  align-items: center; gap: .35rem; }
+.conciliacion .sin-comprar li, .conciliacion .compradas-sin-proponer li { flex-wrap: wrap; gap: .1rem .7rem; }
+.conciliacion .suelta.ambiguo { color: var(--aviso); }
+.conciliacion .suelta.descartado { color: var(--mal); }
 /* Existencia y cobertura: a la derecha y con cifras de ancho fijo, que es lo
    que deja comparar dos renglones sin leerlos. */
 td.numero, th.numero { text-align: right; width: 4.8rem; }

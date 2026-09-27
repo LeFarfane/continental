@@ -404,7 +404,14 @@ def test_la_pantalla_marca_el_renglon_que_no_es_medicamento(cliente):
     # así que el total baja de 18 a 17. Navegar con las flechas de la
     # bitácora (2026-09-27) llama a esa MISMA `fetch(url)` con otra fecha, sin
     # agregar un sitio nuevo: este número no se mueve por la navegación.
-    assert portada.count("fetch('/api/") == 17
+    #
+    # Las dos de la conciliación diaria (ADR 0021, 2026-09-27): leerla
+    # (`cargarConciliacion`, que se pide aparte de la lista porque es una
+    # lectura más cara que solo hace falta cuando se abre ese bloque) y
+    # confirmar el lote (`confirmarLoteDeConciliacion`), que al terminar
+    # también vuelve a `cargarPedido` en vez de repintarse a mano. El total
+    # sube de 17 a 19.
+    assert portada.count("fetch('/api/") == 19
 
 
 # ------------------------------------------------------------------ ayudas

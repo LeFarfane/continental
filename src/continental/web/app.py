@@ -14,6 +14,7 @@ import dataclasses
 import datetime as dt
 import logging
 import time
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -37,11 +38,14 @@ from continental.almacenamiento import (
     PedidoGuardado,
     PedidoSugeridoGuardado,
     RenglonGuardado,
+    RenglonPorConciliar,
     LLAVE_DEL_ATRASO,
+    LLAVE_DE_LA_TOLERANCIA,
     Vecinos,
     Ventana,
     dias_en_transito_para_atrasado_configurados,
     dias_primera_vez_configurados,
+    tolerancia_dias_habiles_configurada,
     ventana_de_reposicion,
 )
 from continental.cierre import (
@@ -58,6 +62,15 @@ from continental.comparacion import (
     comparar,
     contar_la_lista,
     conteo_como_json,
+)
+from continental.conciliacion import (
+    Conciliacion,
+    calendario_desde_lista,
+    comparar_precio_pagado,
+    conciliacion_como_json,
+    conciliacion_con_hueco,
+    conciliar,
+    frase_del_lote_confirmado,
 )
 from continental.config import cargar
 from continental.consultas import (
@@ -2542,6 +2555,376 @@ def recibir_a_mano(
         "renglon_id": renglon.renglon_id,
         "estado": renglon.estado,
         "frase": frase_de_lo_recibido_a_mano(renglon, antes if corrigio else None),
+    }
+
+
+# ------------------------------------------------- la conciliación diaria (ADR 0021)
+#
+# Lo puro (`conciliacion.py`) y lo que se guarda
+# (`almacenamiento.confirmar_la_conciliacion`) ya existían y ya estaban
+# probados; lo que faltaba era esto — la ruta HTTP, que es lo único que hace
+# que una persona pueda llegar hasta la conciliación desde el navegador.
+
+
+def _conciliar_la_lista(
+    almacen: LecturaDelAlmacen,
+    almacenamiento: AlmacenamientoDelPedido,
+    negocio: str,
+    guardado: PedidoSugeridoGuardado,
+) -> tuple[Conciliacion | None, str | None]:
+    """Concilia una lista ya leída contra el almacén. `(None, detalle)` si algún
+    borde no contestó — nunca truena (regla 4: el hueco dice su motivo).
+
+    **Cinco lecturas, todas necesarias para los tres bloques**: la tolerancia
+    configurada, el puente de proveedores, el calendario de la ventana, las
+    compras desde el día de la lista y lo ya recibido (para no proponer una
+    compra que otro renglón —de esta lista o de otra— ya usó, ADR 0014). Si
+    cualquiera falla, la conciliación entera es un hueco: a diferencia de
+    `_la_recepcion`, aquí no hay una lectura "de más" que se pueda perder sin
+    tumbar el bloque — las cinco entran directo en `conciliar()`.
+
+    Sexta lectura, `productos_con_compras`, es la única que falla por su
+    lado (igual que en `_la_recepcion`): sin ella no se afirma
+    `MOTIVO_NUNCA_EN_COMPRAS`, y la conciliación sigue.
+    """
+    try:
+        tolerancia = tolerancia_dias_habiles_configurada()
+    except Exception as exc:  # noqa: BLE001 — sin el número no hay ventana que armar
+        log.exception("No se pudo leer pedido.%s", LLAVE_DE_LA_TOLERANCIA)
+        return None, (
+            f"falta o está mal escrito pedido.{LLAVE_DE_LA_TOLERANCIA} en "
+            f"config/continental.yml ({type(exc).__name__})"
+        )
+
+    try:
+        puente = puente_configurado()
+    except Exception as exc:  # noqa: BLE001 — sin el puente no hay a quién atribuir una compra
+        log.exception("No se pudo leer el puente de proveedores para la conciliación")
+        return None, f"no se pudo leer el puente de proveedores ({type(exc).__name__})"
+
+    dia = guardado.fecha_del_pedido
+    # Una ventana generosa y no la tolerancia a secas: `fecha_limite` cuenta
+    # DÍAS HÁBILES, así que un fin de semana o un festivo de por medio corre
+    # el límite más allá de `dia + tolerancia`. El triple más dos semanas
+    # cubre con margen amplio incluso una racha larga de festivos seguidos —
+    # pedir de más aquí es barato (`dim_fecha` son filas angostas) y pedir de
+    # menos dejaría a `fecha_limite` tratando un día real como hábil sin
+    # dato (regla 4).
+    hasta = dia + dt.timedelta(days=tolerancia * 3 + 14)
+    try:
+        calendario = calendario_desde_lista(
+            almacen.dias_entre(dia + dt.timedelta(days=1), hasta)
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.exception("No se pudo leer el calendario para la conciliación de %s", dia)
+        return None, f"no se pudo leer el calendario ({type(exc).__name__})"
+
+    try:
+        compras = almacen.compras_desde(dia)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("No se pudieron leer las compras para la conciliación de %s", dia)
+        return None, f"no se pudieron leer las compras ({type(exc).__name__})"
+
+    productos = {r.propuesto.producto_id for r in guardado.renglones}
+    try:
+        recibido = almacenamiento.lo_recibido(negocio, productos, set())
+    except Exception as exc:  # noqa: BLE001
+        log.exception("No se pudo leer lo ya recibido para la conciliación de %s", dia)
+        return None, f"no se pudo leer lo ya recibido ({type(exc).__name__})"
+    ya_usadas = {c for r in recibido for c in r.compras}
+
+    try:
+        ancla = almacen.ultima_fecha_con_ventas()
+    except Exception as exc:  # noqa: BLE001
+        log.exception("No se pudo leer la última fecha con ventas para la conciliación")
+        return None, f"no se pudo leer el ancla del almacén ({type(exc).__name__})"
+    # Un almacén sin ni una venta —una instalación nueva— no tiene ancla: se
+    # usa el día de la lista, que es lo único que sí se sabe (regla 4: no se
+    # inventa una fecha más fresca que la que hay).
+    if ancla is None:
+        ancla = dia
+
+    try:
+        comprados = almacen.productos_con_compras(productos) if productos else frozenset()
+    except Exception:  # noqa: BLE001 — sin esto no se afirma "nunca"
+        log.exception("No se pudo saber qué productos aparecen en compras (conciliación)")
+        comprados = None
+
+    resultado = conciliar(
+        dia,
+        guardado.renglones,
+        compras,
+        puente=puente,
+        tolerancia_dias_habiles=tolerancia,
+        calendario=calendario,
+        ancla=ancla,
+        productos_con_compras=comprados,
+        ya_usadas=ya_usadas,
+    )
+    return resultado, None
+
+
+def _conciliacion_con_hueco(detalle: str) -> dict:
+    """El bloque de la conciliación que no se pudo leer, con qué hacer (regla 4).
+
+    La misma forma que `_recepcion_con_hueco` y `_en_camino_con_hueco`:
+    `conciliacion_con_hueco` vive en el módulo puro y no conoce `_que_hacer`
+    —depende de `config/continental.yml`, que ese módulo no lee—, así que el
+    `que_hacer` se agrega aquí, donde sí está disponible.
+    """
+    return {**conciliacion_con_hueco(detalle), "que_hacer": _que_hacer(AL_LEER)}
+
+
+def _comparaciones_de_precio(
+    almacenamiento: AlmacenamientoDelPedido,
+    negocio: str,
+    guardado: PedidoSugeridoGuardado,
+    resultado: Conciliacion,
+):
+    """`{renglon_id: ComparacionDePrecio}` para cada coincidencia con piezas.
+
+    Una sola lectura para la lista entera (`precios_de_la_lista`, la misma
+    que ya paga la tabla de comparación) y nunca una por renglón. Si falla,
+    la conciliación se sigue enseñando —los tres bloques no dependen de
+    esto— y cada coincidencia enseña su evidencia sin decir si había algo
+    más barato, avisado aparte y no como un hueco que tumbe el bloque.
+    """
+    try:
+        precios = almacenamiento.precios_de_la_lista(negocio, guardado.pedido_sugerido_id)
+    except Exception as exc:  # noqa: BLE001 — sin precios, se sigue enseñando lo pagado
+        log.exception(
+            "No se pudieron leer los precios para comparar lo pagado (conciliación de %s)",
+            guardado.pedido_sugerido_id,
+        )
+        return {}, f"no se pudieron leer los precios para comparar ({type(exc).__name__})"
+
+    comparaciones = {}
+    for c in resultado.coincidencias:
+        if c.piezas <= 0:
+            continue
+        precio_promedio = float(c.importe_pagado / Decimal(str(c.piezas)))
+        comparaciones[c.renglon_id] = comparar_precio_pagado(
+            precio_promedio, c.proveedor, precios.get(c.renglon_id, ())
+        )
+    return comparaciones, None
+
+
+@app.get("/api/pedido-sugerido/{pedido_sugerido_id}/conciliacion")
+def conciliacion_de_la_lista(
+    pedido_sugerido_id: int,
+    almacen: LecturaDelAlmacen = Depends(obtener_almacen),
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+):
+    """La conciliación diaria de una lista (ADR 0021): los tres bloques.
+
+    Lo propuesto que sí se compró —con a quién, cuánto y a qué precio—, lo
+    propuesto que no —con sus tres motivos que no se confunden entre sí—, y
+    lo comprado que nadie propuso. **Solo lee** — nunca escribe nada, ni
+    siquiera cuando encuentra una coincidencia: eso lo decide una persona con
+    el clic del lote (`.../conciliacion/confirmar`, aquí abajo).
+
+    Vive aparte de `GET /api/pedido-sugerido...` (la lista) por lo mismo que
+    `.../al-cerrar`: es una lectura más cara —el calendario del rango, las
+    compras, lo ya recibido de toda la instalación— que solo hace falta
+    cuando alguien abre este bloque de la pantalla del día, no en cada carga.
+
+    Un `pedido_sugerido_id` que no existe en este negocio es un 404 — no hay
+    día que conciliar. Cualquier otra falla es un hueco con su motivo
+    (regla 4): la lista sigue viéndose, lo que no se puede es esto.
+    """
+    negocio = cargar().negocio
+    try:
+        guardado = almacenamiento.leer_por_id(negocio, pedido_sugerido_id)
+    except Exception as exc:  # noqa: BLE001 — el almacenamiento caído es un hueco, no un 500
+        log.exception("No se pudo leer la lista %s para conciliar", pedido_sugerido_id)
+        return JSONResponse(
+            status_code=200,
+            content=_conciliacion_con_hueco(f"no se pudo leer la lista ({type(exc).__name__})"),
+        )
+    if guardado is None or guardado.negocio != negocio:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "ok": False,
+                "detalle": "No hay una lista con ese número en este negocio.",
+            },
+        )
+
+    resultado, detalle = _conciliar_la_lista(almacen, almacenamiento, negocio, guardado)
+    if resultado is None:
+        return JSONResponse(status_code=200, content=_conciliacion_con_hueco(detalle))
+
+    comparaciones, aviso_de_precios = _comparaciones_de_precio(
+        almacenamiento, negocio, guardado, resultado
+    )
+    respuesta = conciliacion_como_json(resultado, comparaciones)
+    # El id de la lista, para que la pantalla sepa a dónde mandar el clic del
+    # lote sin tener que arrastrarlo por separado desde `cargarPedido`.
+    respuesta["pedido_sugerido_id"] = pedido_sugerido_id
+    if aviso_de_precios:
+        respuesta["avisos"] = [
+            {
+                "detalle": aviso_de_precios,
+                "frase": (
+                    "No se pudo comparar lo pagado contra lo más barato que "
+                    "ya sabíamos: lo que se compró y por qué sigue completo."
+                ),
+                "que_hacer": _que_hacer(AL_LEER),
+            }
+        ]
+    return respuesta
+
+
+class RenglonVistoEnConciliacion(BaseModel):
+    """Una coincidencia tal como la persona la vio en la pantalla: qué
+    renglón y qué compras la sostenían. El servidor vuelve a conciliar y solo
+    confirma lo que **sigue siendo exactamente eso** — la misma garantía que
+    `ComprasVistas` ya usa para confirmar o rechazar una recepción normal."""
+
+    renglon_id: int
+    compras: list[int]
+
+
+class LoteDeConciliacion(BaseModel):
+    """El lote entero que un clic confirma: cada renglón que la persona
+    aceptó, con la evidencia que vio. Nunca trae lo descartado ni lo
+    ambiguo — esos dos viven en `compradas_sin_proponer`, que no tiene
+    `renglon_id` con el que se pueda construir uno de éstos, y por eso no hay
+    manera de meterlos aquí ni por accidente."""
+
+    renglones: list[RenglonVistoEnConciliacion]
+
+
+@app.post("/api/pedido-sugerido/{pedido_sugerido_id}/conciliacion/confirmar")
+def confirmar_el_lote_de_conciliacion(
+    pedido_sugerido_id: int,
+    cuerpo: LoteDeConciliacion,
+    request: Request,
+    almacen: LecturaDelAlmacen = Depends(obtener_almacen),
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+):
+    """El único clic que escribe algo de la conciliación (ADR 0021): confirma
+    en lote las coincidencias que una persona vio y aceptó.
+
+    **Se vuelve a conciliar antes de escribir**, la misma garantía que ya usa
+    la recepción normal para un solo renglón (`_la_propuesta_de_ahora`): un
+    renglón del lote cuya evidencia ya no es la que la persona vio —cambió
+    porque apareció una compra nueva, u otra pestaña ya la usó— se **salta**
+    en vez de confirmarse con una evidencia que nadie juzgó. No es todo o
+    nada: `ConciliacionConfirmada` ya lo dice para cada renglón que sí
+    calificó, y aquí se suman los que se saltaron por no ser ya los mismos.
+
+    `fue_descartado` y `ambiguo` (ADR 0021) **nunca llegan hasta aquí**: no
+    tienen `renglon_id` de coincidencia con el que armar un
+    `RenglonVistoEnConciliacion`, así que no hay lote que los pueda arrastrar
+    — la garantía está en la forma del dato, no en un `if` que alguien podría
+    olvidar.
+    """
+    negocio = cargar().negocio
+    firma = quien(request)
+
+    try:
+        guardado = almacenamiento.leer_por_id(negocio, pedido_sugerido_id)
+    except Exception as exc:  # noqa: BLE001
+        log.exception(
+            "No se pudo leer la lista %s para confirmar el lote de conciliación",
+            pedido_sugerido_id,
+        )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "detalle": f"no se pudo leer la lista ({type(exc).__name__})",
+                "que_hacer": _que_hacer(AL_LEER),
+            },
+        )
+    if guardado is None or guardado.negocio != negocio:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "ok": False,
+                "detalle": "No hay una lista con ese número en este negocio.",
+            },
+        )
+
+    resultado, detalle = _conciliar_la_lista(almacen, almacenamiento, negocio, guardado)
+    if resultado is None:
+        return JSONResponse(
+            status_code=200,
+            content={"ok": False, "detalle": detalle, "que_hacer": _que_hacer(AL_LEER)},
+        )
+
+    vistos = {v.renglon_id: sorted(set(v.compras)) for v in cuerpo.renglones}
+    fresca_por_renglon = {c.renglon_id: c for c in resultado.accionables}
+
+    decisiones: list[RenglonPorConciliar] = []
+    saltados: list[int] = []
+    for renglon_id, compras_vistas in vistos.items():
+        fresca = fresca_por_renglon.get(renglon_id)
+        if fresca is None or sorted(fresca.compras_ids) != compras_vistas:
+            saltados.append(renglon_id)
+            continue
+        decisiones.append(
+            RenglonPorConciliar(
+                renglon_id=fresca.renglon_id,
+                proveedor=fresca.proveedor,
+                proveedor_id=fresca.proveedor_id,
+                compras=fresca.compras_ids,
+                piezas=fresca.piezas,
+                piezas_pedidas=fresca.piezas_pedidas,
+            )
+        )
+
+    try:
+        confirmada = almacenamiento.confirmar_la_conciliacion(
+            negocio, pedido_sugerido_id, decisiones, firma
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.exception(
+            "No se pudo confirmar el lote de conciliación de la lista %s", pedido_sugerido_id
+        )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "detalle": f"no se pudo confirmar el lote ({type(exc).__name__})",
+                "que_hacer": _que_hacer(AL_GUARDAR),
+            },
+        )
+
+    resultados = [
+        {"renglon_id": r.renglon_id, "ok": r.ok, "motivo": None}
+        for r in confirmada.resultados
+    ] + [
+        {
+            "renglon_id": renglon_id,
+            "ok": False,
+            "motivo": (
+                "Cambió lo que había que confirmar entre que se cargó la "
+                "pantalla y el clic. Vuelve a cargar la conciliación para "
+                "verlo como quedó."
+            ),
+        }
+        for renglon_id in saltados
+    ]
+    total = len(vistos)
+    confirmados = confirmada.confirmados
+    log.info(
+        "%s confirmó el lote de conciliación de la lista %s de %s: %s de %s "
+        "renglón(es) (%s saltado(s) por no ser ya la misma evidencia; ADR 0021).",
+        firma,
+        pedido_sugerido_id,
+        negocio,
+        confirmados,
+        total,
+        len(saltados),
+    )
+    return {
+        "ok": True,
+        "confirmados": confirmados,
+        "total": total,
+        "frase": frase_del_lote_confirmado(confirmados, total),
+        "resultados": resultados,
     }
 
 

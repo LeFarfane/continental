@@ -684,6 +684,7 @@ CUERPOS = {
     "MarcaDeCaptura": {"capturado": True},
     "ComprasVistas": {"compras": [1]},
     "PiezasRecibidas": {"piezas": 2},
+    "LoteDeConciliacion": {"renglones": [{"renglon_id": 1, "compras": [1]}]},
 }
 
 #: Con qué se prueba cada parámetro de ruta. Se prueban todos y la ruta se
