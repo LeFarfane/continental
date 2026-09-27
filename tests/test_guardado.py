@@ -37,7 +37,7 @@ from continental.almacenamiento import (
     CERRADO,
     ESTADOS_DE_LA_LISTA,
     RENGLON_ABIERTO,
-    VENCIDO,
+    SISTEMA,
     AlmacenamientoDelPedido,
     AlmacenamientoPostgres,
     PedidoSugeridoDuplicado,
@@ -364,12 +364,19 @@ def test_el_cierre_firma_en_la_bitacora_quien_lo_hizo(cliente, almacen, caplog):
 # ------------------------------------------------- vencer, anclado en el dato
 
 
-def test_una_lista_de_un_dia_anterior_con_renglones_sin_atender_queda_vencida(
+def test_una_lista_de_un_dia_anterior_con_renglones_sin_atender_queda_cerrada(
     cliente, almacen, almacenamiento
 ):
-    """No `abierta` para siempre: el día pasó y nadie la cerró.
+    """No `abierta` para siempre: el día pasó y nadie la cerró — ahora se cierra sola.
 
-    El vencimiento ocurre **al abrir el día**, que es el único momento en que
+    **Cambió el 2026-09-27** (decisión del dueño): antes esto la dejaba
+    `vencida`, sin mover el corte y sin poder reabrirse nunca (ADR 0016,
+    "`vencido` no se reabre"). Ahora se cierra sola, firmada por
+    `almacenamiento.SISTEMA`: mueve el corte —de ahí que las listas vuelvan a
+    ser cortas— y, en principio, sigue las mismas reglas de reabrir que
+    cualquier otro cierre (`test_cierre.py`).
+
+    El cierre ocurre **al abrir el día**, que es el único momento en que
     alguien mira. No hay lote ni reloj de pared que lo dispare: el disparador
     es que el almacén ya tiene datos de un día posterior.
     """
@@ -382,10 +389,17 @@ def test_una_lista_de_un_dia_anterior_con_renglones_sin_atender_queda_vencida(
 
     vieja = almacenamiento.leer(NEGOCIO, dt.date(2024, 3, 4))
     assert vieja.pedido_sugerido_id == ayer
-    assert vieja.estado == VENCIDO
-    assert vieja.cerrado_en is None
+    assert vieja.estado == CERRADO
+    assert vieja.cerrado_en is not None
+    assert vieja.cerrado_por == SISTEMA
+    # Cerrar no toca los renglones: lo que seguía `abierto` se da por
+    # atendido (ya no se vuelve a proponer), pero el renglón mismo no cambia
+    # de estado — nadie lo descartó ni lo pidió.
     assert [r.estado for r in vieja.renglones] == [RENGLON_ABIERTO]
     assert hoy["estado"] == ABIERTO
+    # El corte avanzó hasta el `ayer` que se acaba de cerrar: la de hoy
+    # arranca al día siguiente, no desde `dias_primera_vez_configurados()`.
+    assert hoy["ventas_consideradas_desde"] == "2024-03-05"
 
 
 def test_el_vencimiento_se_ancla_en_el_dato_y_nunca_en_el_reloj(

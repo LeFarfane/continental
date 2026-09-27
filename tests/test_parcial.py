@@ -44,6 +44,7 @@ from conftest import pantalla_completa
 from continental.almacen import LineaDeCompra, LineaDeVenta, Producto
 from continental.almacenamiento import (
     CANCELADO,
+    CERRADO,
     ENVIADO,
     PEDIDO_RECIBIDO,
     PEDIDO_RECIBIDO_PARCIAL,
@@ -51,6 +52,7 @@ from continental.almacenamiento import (
     RENGLON_EN_TRANSITO,
     RENGLON_RECIBIDO,
     RENGLON_RECIBIDO_PARCIAL,
+    SISTEMA,
     LoYaPedido,
     PedidoGuardado,
     RenglonGuardado,
@@ -1469,8 +1471,11 @@ def test_escenario_dos_facturas_el_resto_llega_y_no_se_pide_de_mas(
     + 4 que faltaron = 7. El miércoles llega el resto (segunda factura): se
     corrige a 10. La respuesta avisa que la lista ya armada trae las 4.
 
-    La del miércoles trae 3 (martes) + 2 (miércoles) = **5**, y **ninguna**
-    de las 4: llegaron.
+    **Cambió el 2026-09-27** (decisión del dueño): al abrirse la de miércoles,
+    la de martes —que nadie cerró— se cierra sola y mueve el corte hasta ahí.
+    Las 3 piezas de martes ya quedaron atendidas por ese cierre —se pueden ir
+    a ver en la lista de martes, que sigue existiendo— y la de miércoles ya
+    no las vuelve a proponer: trae solo sus **2** propias.
     """
     _fijar_la_hora(monkeypatch, _local(MIERCOLES, 18))
     almacen.catalogo_en_memoria = [_producto(1), _producto(2)]
@@ -1495,8 +1500,11 @@ def test_escenario_dos_facturas_el_resto_llega_y_no_se_pide_de_mas(
 
     almacen.ventas_en_memoria += [_venta(MIERCOLES, 1, 2)]
     miercoles = _abrir(cliente)
+    cerrada_martes = almacenamiento.leer(NEGOCIO, MARTES)
+    assert cerrada_martes.estado == CERRADO
+    assert cerrada_martes.cerrado_por == SISTEMA
     uno = _por_producto(miercoles)[1]
-    assert uno["cantidad_propuesta"] == 3 + 2
+    assert uno["cantidad_propuesta"] == 2
     assert uno["piezas_que_faltaron"] == 0
 
 

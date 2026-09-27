@@ -92,6 +92,15 @@ VENCIDO = "vencido"
 #: por omisión.
 ESTADOS_DE_LA_LISTA: tuple[str, ...] = (ABIERTO, CERRADO, VENCIDO)
 
+#: La firma de un cierre que no la puso una persona (decisión del dueño,
+#: 2026-09-27): al armarse la lista de un día, la anterior se cierra sola.
+#: **Es una firma, no un permiso** (regla 3 de `CLAUDE.md`), igual que el
+#: correo de Access: dice quién lo hizo, y aquí "quién" a veces es el propio
+#: sistema. Vive junto al vocabulario del estado porque viaja al mismo lugar
+#: que un correo real -- `pedido_sugerido.cerrado_por` no distingue los dos
+#: casos por tipo, solo por valor.
+SISTEMA = "sistema"
+
 RENGLON_ABIERTO = "abierto"
 RENGLON_DESCARTADO = "descartado"
 
@@ -383,6 +392,36 @@ class Ventana:
                 f"La ventana va al revés: desde {self.desde} hasta {self.hasta}. "
                 "Lo rechaza ck_pedido_sugerido_ventana."
             )
+
+
+@dataclass(frozen=True, slots=True)
+class Vecinos:
+    """El día anterior y el siguiente con lista, para las flechas de la bitácora.
+
+    **Diseño elegido: la lista trae sus vecinos, en vez de un endpoint de
+    navegación aparte.** Las dos opciones se consideraron:
+
+    - Un endpoint aparte (`GET /api/pedido-sugerido/navegacion?fecha=...`)
+      exigiría que la pantalla hiciera una segunda llamada por cada carga, y
+      las dos podrían no coincidir: entre que se lee la lista y se pregunta por
+      sus vecinos, alguien pudo cerrar el día de hoy o abrir uno nuevo. Es el
+      mismo argumento que ya usa este archivo para los precios, la corrida del
+      lote y los pedidos de una lista (`web/app.py::pedido_sugerido`): "dos
+      lecturas en dos momentos pueden no coincidir".
+    - Traer los vecinos **con** la lista es una lectura más, del mismo tamaño
+      —dos `max`/`min` sobre `pedido_sugerido_id, fecha_del_pedido`, un puñado
+      de filas por negocio— y sale en la misma respuesta que ya arma
+      `_como_json`: la pantalla no pide nada extra para pintar las flechas, y
+      lo que pintan es exactamente lo que se acaba de leer.
+
+    `anterior` es `None` cuando la lista que se está viendo es la primera que
+    existe (o no hay ninguna otra); `siguiente` es `None` casi siempre que se
+    ve la lista de **hoy** —por definición no hay lista después de la más
+    reciente— y también en cualquier lista sin una posterior.
+    """
+
+    anterior: dt.date | None
+    siguiente: dt.date | None
 
 
 def ventana_de_reposicion(
@@ -1170,6 +1209,15 @@ class PedidoSugeridoGuardado:
     #: deshecho, y la hora de aquel cierre está en la bitácora.
     reabierto_por: str | None = None
     reabierto_en: dt.datetime | None = None
+    #: LA FIRMA DEL ÚLTIMO CIERRE (migración 0013, decisión del dueño
+    #: 2026-09-27): quién cerró esta lista la vez más reciente —un correo de
+    #: Access, o `SISTEMA` si el cierre fue automático al abrirse un día
+    #: posterior—. `None` en dos casos que no se distinguen desde aquí: la
+    #: lista sigue abierta, o se cerró antes de esta migración (el `_CERRAR`
+    #: de atlas no la nombraba). Se limpia al reabrir, igual que `cerrado_en`:
+    #: "quién cerró" deja de describir algo en cuanto la lista vuelve a
+    #: `abierto`, y una segunda cerrada la vuelve a escribir.
+    cerrado_por: str | None = None
 
     @property
     def sin_catalogo(self) -> int:
@@ -1300,6 +1348,8 @@ def columnas_de_la_lista(
         # atlas tampoco.
         "reabierto_por": None,
         "reabierto_en": None,
+        # Nace sin cerrar (migración 0013): admite nulos y no tiene DEFAULT.
+        "cerrado_por": None,
     }
 
 
@@ -1472,6 +1522,22 @@ def revisar_la_lista(columnas: dict) -> None:
         raise ValueError(
             "Reapertura sin quién o sin cuándo: las dos o ninguna. Lo rechaza "
             "ck_pedido_sugerido_reapertura."
+        )
+    # LA FIRMA DEL CIERRE (migración 0013). `.get` por la misma razón que
+    # `reabierto_por`: una fila de antes de esta migración no la trae. **No se
+    # exige junto con `estado == CERRADO`**: una fila cerrada antes de la 0013
+    # se queda con `cerrado_por = NULL` para siempre, y eso es la verdad de esa
+    # fila, no un dato que falta por completar.
+    cerrado_por = columnas.get("cerrado_por")
+    if cerrado_por == "":
+        raise ValueError(
+            "Cierre firmado con un valor vacío: lo rechaza "
+            "ck_pedido_sugerido_cerrado_por."
+        )
+    if cerrado_por is not None and columnas["cerrado_en"] is None:
+        raise ValueError(
+            "Cierre firmado sin hora de cierre: lo rechaza "
+            "ck_pedido_sugerido_cerrado_en_firmado."
         )
 
 
@@ -2340,6 +2406,22 @@ class AlmacenamientoDelPedido(Protocol):
         """
         ...
 
+    def vecinos(self, negocio: str, fecha_del_pedido: dt.date) -> Vecinos:
+        """El día anterior y el siguiente con lista (bitácora navegable, 2026-09-27).
+
+        `MAX(fecha_del_pedido)` de lo anterior y `MIN(fecha_del_pedido)` de lo
+        posterior, en una sola lectura: es lo que necesitan las flechas de la
+        pantalla y nada más — no hace falta traer la lista vecina entera para
+        saber que existe. Ver `Vecinos` para por qué viaja con la lista y no
+        por un endpoint aparte.
+
+        No filtra por estado: un vecino `vencido` sigue siendo un día con
+        lista y la flecha lo tiene que poder abrir — "nada desaparece" es la
+        garantía que sustituye a `piso_sin_pedir` (decisión del dueño), y una
+        flecha que saltara por encima de una vencida rompería esa promesa.
+        """
+        ...
+
     def corte_del_ultimo_cerrado(
         self, negocio: str, antes_de: dt.date
     ) -> dt.date | None:
@@ -2378,6 +2460,20 @@ class AlmacenamientoDelPedido(Protocol):
 
         `antes_de` acota igual que en `corte_del_ultimo_cerrado`, y sale del
         dato (`max(fecha)`), nunca del reloj.
+
+        **Casi inalcanzable desde el cierre automático (2026-09-27), y a
+        propósito no se borró.** `ventana_de_reposicion` solo mira esto
+        cuando `corte is None` —nunca ha habido un cierre—, y desde que abrir
+        el día cierra sola cualquier lista anterior (`cerrar_las_de_dias_anteriores`),
+        el negocio tiene un `corte` a partir de la SEGUNDA lista que se arma.
+        Sigue existiendo para la primera: el día que una farmacia nueva abre
+        Continental por primera vez, no hay ningún cierre —automático o no—
+        del que partir, y sin este piso esa primera ventana ancha
+        (`dias_primera_vez_configurados()`, hoy 1) sería la única red bajo un
+        día que nadie atendió antes de que existiera el primer corte. Quitarlo
+        cambiaría "no se pierde nada la primera vez" por "depende de qué tan
+        rápido se abra la pantalla el primer día", que es exactamente la
+        clase de garantía que este repo no acepta.
         """
         ...
 
@@ -2404,7 +2500,7 @@ class AlmacenamientoDelPedido(Protocol):
         ...
 
     def cerrar(
-        self, negocio: str, pedido_sugerido_id: int
+        self, negocio: str, pedido_sugerido_id: int, quien: str | None = None
     ) -> PedidoSugeridoGuardado | None:
         """Da por cerrada una lista **abierta**. `None` si no había ninguna así.
 
@@ -2412,6 +2508,17 @@ class AlmacenamientoDelPedido(Protocol):
         así que un segundo clic no mueve `cerrado_en` ni resucita una vencida.
         `None` es "no había nada que cerrar" y quien llame lo dice; fingir que
         cerró sería la falla silenciosa que este repo prohíbe.
+
+        `quien` es la firma del cierre (migración 0013, columna
+        `cerrado_por`): un correo de Access para un clic humano, o
+        `almacenamiento.SISTEMA` para el cierre automático de
+        `cerrar_las_de_dias_anteriores`. Es **opcional y `None` por
+        omisión** a propósito: antes de esta migración `cerrar()` no la
+        pedía, y todo código —y toda prueba— que la llamaba con dos
+        argumentos sigue llamándola igual. `None` se guarda como `NULL`, que
+        es "no se sabe quién cerró" y no "cerró el sistema": son cosas
+        distintas y confundirlas mentiría sobre cierres de antes de esta
+        migración.
         """
         ...
 
@@ -2467,6 +2574,42 @@ class AlmacenamientoDelPedido(Protocol):
         que el ticket prohíbe, y cerrarla sola sería inventar una decisión que
         nadie tomó —con un `cerrado_en` que miente—. `vencido` dice la verdad:
         su día pasó y nadie la cerró.
+
+        **Desde el 2026-09-27, `abrir_el_dia` ya no llama a ésta**: el dueño
+        decidió que la lista anterior se cierra sola en vez de vencerse (ver
+        `cerrar_las_de_dias_anteriores`). Se queda aquí —`vencido` sigue siendo
+        un estado del glosario y hay filas así en producción— pero no la usa
+        el flujo de abrir el día. Ver el reporte de ese ticket para el porqué
+        de no borrarla.
+        """
+        ...
+
+    def cerrar_las_de_dias_anteriores(
+        self, negocio: str, fecha_del_pedido: dt.date, quien: str
+    ) -> tuple[PedidoSugeridoGuardado, ...]:
+        """Cierra —no vence— toda lista `abierta` de un día anterior. Firmado.
+
+        **Decisión del dueño, 2026-09-27**: "al crearse la lista de hoy, se
+        cierra sola la de ayer. Automático, sin intervención." Sustituye a
+        `vencer_las_de_dias_anteriores` en el flujo de abrir el día —la llaman
+        `web/app.py` y `lote.py` antes de `abrir_el_dia`, con el mismo ancla
+        (`ultima_fecha_con_ventas()`, nunca el reloj) — y por eso mismo mueve
+        el corte: la ventana de la lista que se abre a continuación ya no
+        necesita `piso_sin_pedir` para alcanzar lo que esta lista traía sin
+        pedir, porque ahora forma parte de lo que **este** cierre atendió.
+
+        `quien` casi siempre es `almacenamiento.SISTEMA`: es el sistema quien
+        dispara esto al abrir el día, no una persona que hizo clic. Se recibe
+        por argumento y no se fija aquí adentro para que una prueba pueda
+        comprobar la firma exacta sin inventar una constante paralela.
+
+        Devuelve las listas que cerró —**con sus renglones**, no solo el
+        conteo de `vencer_las_de_dias_anteriores`— para que quien llame pueda
+        registrar en la bitácora del servidor qué se dio por atendido sin
+        pedir (`cierre.lo_que_se_perderia`), aunque nadie vea un diálogo de
+        confirmación: automático no es lo mismo que silencioso (regla 4 de
+        `CLAUDE.md`). Nada de esto bloquea el cierre: **avisa, no prohíbe**,
+        igual que la confirmación manual del ADR 0016.
         """
         ...
 
@@ -3065,7 +3208,7 @@ _LEER_LISTA = text(
     """
     select pedido_sugerido_id, negocio, fecha_del_pedido, estado,
            ventas_consideradas_desde, ventas_consideradas_hasta,
-           armado_en, cerrado_en, reabierto_por, reabierto_en
+           armado_en, cerrado_en, reabierto_por, reabierto_en, cerrado_por
     from pedidos.pedido_sugerido
     where negocio = :negocio and fecha_del_pedido = :fecha_del_pedido
     """
@@ -3075,7 +3218,7 @@ _LEER_LISTA_POR_ID = text(
     """
     select pedido_sugerido_id, negocio, fecha_del_pedido, estado,
            ventas_consideradas_desde, ventas_consideradas_hasta,
-           armado_en, cerrado_en, reabierto_por, reabierto_en
+           armado_en, cerrado_en, reabierto_por, reabierto_en, cerrado_por
     from pedidos.pedido_sugerido
     where negocio = :negocio and pedido_sugerido_id = :pedido_sugerido_id
     """
@@ -3343,6 +3486,26 @@ _LO_RECIBIDO = text(
 # está trabajando, y pisarle la ventana o la hora de armado por una segunda
 # pestaña sería reescribir su historia. Cero filas devueltas es la señal de que
 # se perdió la carrera, y quien llama vuelve a leer.
+# LOS VECINOS (bitácora navegable, 2026-09-27): una lectura, dos subconsultas.
+# `MAX`/`MIN` y no un `LIMIT 1` con `ORDER BY` porque son escalares -el motor no
+# necesita materializar una fila de más- y porque las dos subconsultas
+# comparten el mismo índice que `ux_pedido_sugerido_dia` ya da por
+# `(negocio, fecha_del_pedido)`. Sin filtro de `estado`: un vecino `vencido`
+# sigue siendo un día con lista (ver el docstring de `vecinos`).
+_VECINOS = text(
+    """
+    select
+        (select max(fecha_del_pedido)
+           from pedidos.pedido_sugerido
+          where negocio = :negocio
+            and fecha_del_pedido < :fecha_del_pedido) as anterior,
+        (select min(fecha_del_pedido)
+           from pedidos.pedido_sugerido
+          where negocio = :negocio
+            and fecha_del_pedido > :fecha_del_pedido) as siguiente
+    """
+)
+
 _INSERTAR_LISTA = text(
     """
     insert into pedidos.pedido_sugerido
@@ -3354,7 +3517,7 @@ _INSERTAR_LISTA = text(
     on conflict on constraint ux_pedido_sugerido_dia do nothing
     returning pedido_sugerido_id, negocio, fecha_del_pedido, estado,
               ventas_consideradas_desde, ventas_consideradas_hasta,
-              armado_en, cerrado_en, reabierto_por, reabierto_en
+              armado_en, cerrado_en, reabierto_por, reabierto_en, cerrado_por
     """
 )
 
@@ -4341,16 +4504,22 @@ _DESMARCAR_CAPTURADO = text(
 # El `and estado = 'abierto'` es la transición del glosario metida en el
 # `WHERE`: cerrar lo ya cerrado no mueve `cerrado_en`, y una vencida no
 # resucita. Cero filas es "no había nada que cerrar".
+#
+# `:quien` (migración 0013) es NULLABLE a propósito: es una firma, no un
+# permiso (regla 3), y `cerrar()` la recibe con `None` por omisión para que
+# el código que la llamaba antes de esta migración —y toda prueba que no le
+# importa quién cerró— siga funcionando igual. `None` en Python es `NULL` en
+# Postgres, que `ck_pedido_sugerido_cerrado_por` acepta sin problema.
 _CERRAR = text(
     """
     update pedidos.pedido_sugerido
-       set estado = 'cerrado', cerrado_en = now()
+       set estado = 'cerrado', cerrado_en = now(), cerrado_por = :quien
      where negocio = :negocio
        and pedido_sugerido_id = :pedido_sugerido_id
        and estado = 'abierto'
     returning pedido_sugerido_id, negocio, fecha_del_pedido, estado,
               ventas_consideradas_desde, ventas_consideradas_hasta,
-              armado_en, cerrado_en, reabierto_por, reabierto_en
+              armado_en, cerrado_en, reabierto_por, reabierto_en, cerrado_por
     """
 )
 
@@ -4410,7 +4579,7 @@ _HASTA_UN_DIA_ATRAS = """
 _REABRIR = text(
     f"""
     update pedidos.pedido_sugerido as s
-       set estado = 'abierto', cerrado_en = null,
+       set estado = 'abierto', cerrado_en = null, cerrado_por = null,
            reabierto_por = :quien, reabierto_en = now()
      where s.negocio = :negocio
        and s.pedido_sugerido_id = :pedido_sugerido_id
@@ -4419,7 +4588,8 @@ _REABRIR = text(
        and {_HASTA_UN_DIA_ATRAS}
     returning s.pedido_sugerido_id, s.negocio, s.fecha_del_pedido, s.estado,
               s.ventas_consideradas_desde, s.ventas_consideradas_hasta,
-              s.armado_en, s.cerrado_en, s.reabierto_por, s.reabierto_en
+              s.armado_en, s.cerrado_en, s.reabierto_por, s.reabierto_en,
+              s.cerrado_por
     """
 )
 
@@ -4444,6 +4614,13 @@ _SE_PUEDE_REABRIR = text(
 # parámetro —el último día con ventas del almacén— y nunca contra
 # `current_date`. `cerrado_en` se queda en NULL, que es lo que
 # ck_pedido_sugerido_cierre exige de todo lo que no está cerrado.
+#
+# **`vencido` ya no lo escribe el flujo de abrir el día** (decisión del dueño,
+# 2026-09-27): lo reemplaza `_CERRAR_LAS_DE_DIAS_ANTERIORES`, aquí abajo. Esta
+# sentencia se queda —`vencido` sigue en `ESTADOS_DE_LA_LISTA` y el glosario lo
+# sigue definiendo, y una base ya tiene filas así— pero nada la llama desde
+# `web/app.py` ni `lote.py`. Si en unos meses ninguna fila nueva la necesita, se
+# vuelve a evaluar si vale la pena quitarla (ver el reporte de este ticket).
 _VENCER = text(
     """
     update pedidos.pedido_sugerido
@@ -4452,6 +4629,40 @@ _VENCER = text(
        and estado = 'abierto'
        and fecha_del_pedido < :fecha_del_pedido
     returning pedido_sugerido_id
+    """
+)
+
+# CERRAR LAS DE DÍAS ANTERIORES (decisión del dueño, 2026-09-27): al abrirse
+# la lista de un día, toda lista `abierta` de un día anterior se cierra sola,
+# firmada por quien la cierra —una persona o `SISTEMA` (`almacenamiento.SISTEMA`)
+# cuando lo dispara abrir el día—. Reemplaza a `_VENCER` en ese flujo: antes,
+# una lista de ayer que nadie tocó se quedaba `vencida` -sin mover el corte, sin
+# poder reabrirse nunca (ADR 0016: "`vencido` no se reabre")-, y el corte
+# retrocedía hasta ella con `piso_sin_pedir`. Ahora se cierra -mueve el corte,
+# como cualquier cierre- y sigue siendo, en principio, reabrible con las mismas
+# dos condiciones de siempre (`_NINGUNA_LISTA_DESPUES`, `_HASTA_UN_DIA_ATRAS`):
+# en la práctica casi nunca lo será, porque la lista que se está abriendo AHORA
+# es la que la cierra, así que en el instante en que existe ya hay "una lista
+# posterior". Sigue siendo la regla correcta y no una regla muerta: cubre el
+# caso en que la lista de hoy falla a mitad de camino después de cerrar la de
+# ayer y antes de insertarse -ahí reabrir sí sirve-, y dos cierres nunca se
+# confunden entre sí.
+#
+# `fecha_del_pedido < :fecha_del_pedido` es la MISMA comparación que `_VENCER`,
+# contra el mismo ancla (`ultima_fecha_con_ventas()`, nunca el reloj). Cierra
+# TODA lista abierta anterior y no solo "la de ayer": si por lo que sea quedaron
+# dos o tres abiertas sin cerrar, las cierra todas con la misma firma y la misma
+# hora, igual que `_VENCER` las vencía todas.
+_CERRAR_LAS_DE_DIAS_ANTERIORES = text(
+    """
+    update pedidos.pedido_sugerido
+       set estado = 'cerrado', cerrado_en = now(), cerrado_por = :quien
+     where negocio = :negocio
+       and estado = 'abierto'
+       and fecha_del_pedido < :fecha_del_pedido
+    returning pedido_sugerido_id, negocio, fecha_del_pedido, estado,
+              ventas_consideradas_desde, ventas_consideradas_hasta,
+              armado_en, cerrado_en, reabierto_por, reabierto_en, cerrado_por
     """
 )
 
@@ -4554,6 +4765,14 @@ class AlmacenamientoPostgres:
             if cabecera is None:
                 return None
             return self._con_renglones(conexion, cabecera)
+
+    def vecinos(self, negocio: str, fecha_del_pedido: dt.date) -> Vecinos:
+        with self._motor().connect() as conexion:
+            fila = conexion.execute(
+                _VECINOS,
+                {"negocio": negocio, "fecha_del_pedido": fecha_del_pedido},
+            ).mappings().first()
+            return Vecinos(anterior=fila["anterior"], siguiente=fila["siguiente"])
 
     def _leer(
         self, conexion, negocio: str, fecha_del_pedido: dt.date
@@ -4724,12 +4943,16 @@ class AlmacenamientoPostgres:
             return self._con_renglones(conexion, cabecera)
 
     def cerrar(
-        self, negocio: str, pedido_sugerido_id: int
+        self, negocio: str, pedido_sugerido_id: int, quien: str | None = None
     ) -> PedidoSugeridoGuardado | None:
         with self._motor().begin() as conexion:
             cabecera = conexion.execute(
                 _CERRAR,
-                {"negocio": negocio, "pedido_sugerido_id": pedido_sugerido_id},
+                {
+                    "negocio": negocio,
+                    "pedido_sugerido_id": pedido_sugerido_id,
+                    "quien": quien,
+                },
             ).mappings().first()
             return None if cabecera is None else self._con_renglones(conexion, cabecera)
 
@@ -4772,6 +4995,27 @@ class AlmacenamientoPostgres:
                     _VENCER,
                     {"negocio": negocio, "fecha_del_pedido": fecha_del_pedido},
                 ).fetchall()
+            )
+
+    def cerrar_las_de_dias_anteriores(
+        self, negocio: str, fecha_del_pedido: dt.date, quien: str
+    ) -> tuple[PedidoSugeridoGuardado, ...]:
+        with self._motor().begin() as conexion:
+            cabeceras = conexion.execute(
+                _CERRAR_LAS_DE_DIAS_ANTERIORES,
+                {
+                    "negocio": negocio,
+                    "fecha_del_pedido": fecha_del_pedido,
+                    "quien": quien,
+                },
+            ).mappings().all()
+            # Una lectura de renglones POR LISTA cerrada, no una para todas: son
+            # como mucho un puñado de listas (lo normal es cero o una), y cada
+            # una necesita sus propios renglones para que quien llame pueda
+            # loguear qué se perdería (`cierre.lo_que_se_perderia`) sin una
+            # segunda vuelta al almacenamiento.
+            return tuple(
+                self._con_renglones(conexion, cabecera) for cabecera in cabeceras
             )
 
     def descartar(
@@ -5305,6 +5549,10 @@ def armar_guardado(cabecera, filas) -> PedidoSugeridoGuardado:
         renglones=tuple(renglon_guardado_desde_columnas(f) for f in filas),
         reabierto_por=cabecera["reabierto_por"],
         reabierto_en=cabecera["reabierto_en"],
+        # `.get` y no `cabecera["cerrado_por"]`: una fila que el doble armó
+        # antes de que esta migración existiera en su memoria no la trae, y
+        # eso es exactamente `None` (no se sabe quién cerró).
+        cerrado_por=cabecera.get("cerrado_por"),
     )
 
 

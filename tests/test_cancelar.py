@@ -47,10 +47,12 @@ from continental.almacen import LineaDeVenta, Producto
 from continental.almacenamiento import (
     BORRADOR,
     CANCELADO,
+    CERRADO,
     ENVIADO,
     ESTADOS_DEL_PEDIDO,
     ESTADOS_DEL_RENGLON,
     ESTADOS_QUE_CIERRAN_EL_TRANSITO,
+    SISTEMA,
     LoYaPedido,
     PedidoGuardado,
     RENGLON_CANCELADO,
@@ -1216,8 +1218,21 @@ def test_casilla_2_cancelar_con_las_listas_cerradas_trae_todo_una_sola_vez(
 def test_casilla_2_cancelar_con_las_listas_sin_cerrar_tampoco_duplica(
     cliente, almacen, almacenamiento
 ):
-    """Las listas de en medio sin cerrar: la ventana ya vuelve a sus días por
-    el piso del ticket 09, y la memoria no puede sumarlos otra vez."""
+    """Las listas de en medio sin cerrar, ahora que se cierran solas.
+
+    **Cambió el 2026-09-27** (decisión del dueño): hasta entonces las listas
+    de lunes y martes se quedaban sin cerrar y el piso del ticket 09 retrocedía
+    la ventana hasta el lunes por accidente. Ahora las dos se cierran solas
+    -al abrirse martes se cierra lunes; al abrirse miércoles se cierra
+    martes- y el corte avanza de verdad, así que la ventana **oficial** de
+    miércoles ya no empieza en lunes.
+
+    Lo que no cambia es la memoria de lo cancelado (ADR 0013): el producto 1
+    vuelve **entero**, contado desde el lunes -donde empezaba lo que ese
+    renglón cubría-, aunque eso quede antes de la ventana oficial. Por eso
+    `ventas_desde` dice ahora "2026-09-14" en vez de `None`: antes coincidía
+    con el principio de la ventana por la casualidad del piso, y ahora no.
+    """
     almacen.catalogo_en_memoria = [_producto(1), _producto(2)]
     almacen.ventas_en_memoria = [_venta(LUNES, 1, 3)]
     lunes = _abrir(cliente)
@@ -1226,14 +1241,25 @@ def test_casilla_2_cancelar_con_las_listas_sin_cerrar_tampoco_duplica(
     almacen.ventas_en_memoria += [_venta(MARTES, 1, 2), _venta(MARTES, 2, 1)]
     martes = _abrir(cliente)
     assert sorted(_por_producto(martes)) == [2]
+    cerrada_lunes = almacenamiento.leer(NEGOCIO, LUNES)
+    assert cerrada_lunes.estado == CERRADO
+    assert cerrada_lunes.cerrado_por == SISTEMA
 
     assert _cancelar(cliente, pedido["pedido_id"]).status_code == 200
 
     almacen.ventas_en_memoria += [_venta(MIERCOLES, 1, 1)]
     miercoles = _abrir(cliente)
-    assert miercoles["ventas_consideradas_desde"] == LUNES.isoformat()
+    cerrada_martes = almacenamiento.leer(NEGOCIO, MARTES)
+    assert cerrada_martes.estado == CERRADO
+    assert cerrada_martes.cerrado_por == SISTEMA
+    assert miercoles["ventas_consideradas_desde"] == MIERCOLES.isoformat(), (
+        "El corte no avanzó hasta el martes, que se cerró solo."
+    )
+    # 3 (lunes) + 2 (martes, retenidas mientras el pedido seguía en tránsito) +
+    # 1 (miércoles): las tres siguen sumando, aunque lunes y martes ya no
+    # sean parte de la ventana oficial.
     assert _por_producto(miercoles)[1]["cantidad_propuesta"] == 6
-    assert _por_producto(miercoles)[1]["ventas_desde"] is None
+    assert _por_producto(miercoles)[1]["ventas_desde"] == LUNES.isoformat()
     _cerrar(cliente, miercoles)
 
     almacen.ventas_en_memoria += [_venta(JUEVES, 1, 1)]

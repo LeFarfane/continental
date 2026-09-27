@@ -125,25 +125,31 @@ def test_con_la_lista_cerrada_la_cantidad_ya_no_se_cambia(
     assert _renglon_guardado(almacenamiento, renglon_id).cantidad_final is None
 
 
-def test_con_la_lista_vencida_la_cantidad_tampoco_se_cambia(
+def test_con_la_lista_cerrada_sola_la_cantidad_tampoco_se_cambia(
     cliente, almacen, almacenamiento
 ):
-    """`vencido` es el otro estado que no es `abierto`, y cuenta igual.
+    """`cerrado` es el otro estado que no es `abierto`, y cuenta igual.
 
-    Una lista vencida pasó su día y nadie la cerró: lo que quede ahí ya no se va
-    a pedir con esas cantidades. El `WHERE` dice `estado = 'abierto'`, así que
-    los dos casos caen solos y no hay una lista de estados prohibidos que se
-    quede vieja el día que aparezca un cuarto.
+    **Cambió el 2026-09-27** (decisión del dueño): antes, cargar el día
+    siguiente dejaba la lista de ayer `vencida`; ahora la cierra sola,
+    firmada por `almacenamiento.SISTEMA`. Lo que no cambió es lo que esta
+    prueba mide: lo que quede ahí ya no se va a pedir con esas cantidades. El
+    `WHERE` dice `estado = 'abierto'`, así que cualquier otro estado —cerrado
+    por una persona, cerrado solo, o vencido— cae fuera por igual, y no hay
+    una lista de estados prohibidos que se quede vieja el día que aparezca
+    uno nuevo.
     """
     almacen.catalogo_en_memoria = [_producto(1, "7501000000001")]
     almacen.ventas_en_memoria = [_venta(dt.date(2024, 3, 4), 1, 2)]
     ayer = cliente.get(RUTA).json()
     renglon_id = ayer["renglones"][0]["renglon_id"]
 
-    # Cargar el día siguiente es lo que vence la lista de ayer.
+    # Cargar el día siguiente es lo que cierra sola la lista de ayer.
     almacen.ventas_en_memoria.append(_venta(HOY, 1, 3))
     cliente.get(RUTA)
-    assert almacenamiento.leer(NEGOCIO, dt.date(2024, 3, 4)).estado == "vencido"
+    cerrada = almacenamiento.leer(NEGOCIO, dt.date(2024, 3, 4))
+    assert cerrada.estado == "cerrado"
+    assert cerrada.cerrado_por == "sistema"
 
     assert _ajustar(cliente, renglon_id, 9).status_code == 409
     assert _renglon_guardado(almacenamiento, renglon_id).cantidad_final is None

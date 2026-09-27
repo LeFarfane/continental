@@ -20,7 +20,7 @@ import datetime as dt
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
-from continental.almacen import LineaDeCompra, LineaDeVenta, Producto
+from continental.almacen import DiaCalendario, LineaDeCompra, LineaDeVenta, Producto
 from continental.almacenamiento import (
     ABIERTO,
     BORRADOR,
@@ -46,6 +46,7 @@ from continental.almacenamiento import (
     PrecioDeProveedor,
     RenglonGuardado,
     RenglonRecibido,
+    Vecinos,
     Ventana,
     armar_guardado,
     columnas_de_la_corrida,
@@ -97,6 +98,11 @@ class AlmacenFalso:
     ventas_en_memoria: list[LineaDeVenta] = field(default_factory=list)
     catalogo_en_memoria: list[Producto] = field(default_factory=list)
     compras_en_memoria: list[LineaDeCompra] = field(default_factory=list)
+    #: Días de calendario que una prueba quiere forzar (festivos, sobre todo):
+    #: `{fecha: DiaCalendario}`. Un día que no está aquí se calcula solo —
+    #: domingo por `weekday()`, nunca festivo—, igual que `dim_fecha` marca
+    #: `es_cerrado` sin mirar el festivo (la trampa del 2026-09-27).
+    dias_en_memoria: dict[dt.date, DiaCalendario] = field(default_factory=dict)
     falla: Exception | None = None
 
     def _revisar(self) -> None:
@@ -125,6 +131,17 @@ class AlmacenFalso:
         if not self.ventas_en_memoria:
             return None
         return max(v.fecha for v in self.ventas_en_memoria)
+
+    def dia(self, fecha: dt.date) -> DiaCalendario:
+        self._revisar()
+        if fecha in self.dias_en_memoria:
+            return self.dias_en_memoria[fecha]
+        return DiaCalendario(
+            fecha=fecha,
+            es_cerrado=fecha.weekday() == 6,  # domingo, como `dim_fecha.es_cerrado`
+            es_festivo_oficial=False,
+            nombre_evento=None,
+        )
 
 
 @dataclass
@@ -488,6 +505,30 @@ class AlmacenamientoFalso:
             return None
         return renglon_guardado_desde_columnas(fila)
 
+    def vecinos(self, negocio: str, fecha_del_pedido: dt.date) -> Vecinos:
+        """`_VECINOS` en memoria: el `max`/`min` de `fecha_del_pedido` a cada lado.
+
+        Sin filtro de estado, igual que allá: un vecino `vencido` sigue siendo
+        un día con lista.
+        """
+        self._revisar()
+        anteriores = [
+            lista["fecha_del_pedido"]
+            for lista in self.listas
+            if lista["negocio"] == negocio
+            and lista["fecha_del_pedido"] < fecha_del_pedido
+        ]
+        siguientes = [
+            lista["fecha_del_pedido"]
+            for lista in self.listas
+            if lista["negocio"] == negocio
+            and lista["fecha_del_pedido"] > fecha_del_pedido
+        ]
+        return Vecinos(
+            anterior=max(anteriores) if anteriores else None,
+            siguiente=min(siguientes) if siguientes else None,
+        )
+
     def corte_del_ultimo_cerrado(
         self, negocio: str, antes_de: dt.date
     ) -> dt.date | None:
@@ -711,27 +752,39 @@ class AlmacenamientoFalso:
         pedido_sugerido_id: int,
         estado: str,
         cerrado_en: dt.datetime | None = None,
+        cerrado_por: str | None = None,
     ) -> PedidoSugeridoGuardado | None:
         """El `UPDATE` pelado, revisado contra los CHECK antes de aplicarse.
 
         Aparte por la misma razón que `insertar_la_lista`: es donde se ve que
         el doble rechaza un `cerrado` sin hora, o una hora de cierre en una
         lista que no está cerrada, igual que `ck_pedido_sugerido_cierre`.
+
+        `cerrado_por` (migración 0013) viaja aparte de `cerrado_en` por la
+        misma razón que allá: `None` por omisión, para que quien llame sin
+        firma —igual que `vencer_las_de_dias_anteriores`, que nunca cierra—
+        no tenga que inventar una.
         """
         self._revisar()
         lista = self._por_id(pedido_sugerido_id)
         if lista is None:
             return None
 
-        propuesta = {**lista, "estado": estado, "cerrado_en": cerrado_en}
+        propuesta = {
+            **lista,
+            "estado": estado,
+            "cerrado_en": cerrado_en,
+            "cerrado_por": cerrado_por,
+        }
         revisar_la_lista(propuesta)
 
         lista["estado"] = estado
         lista["cerrado_en"] = cerrado_en
+        lista["cerrado_por"] = cerrado_por
         return armar_guardado(lista, lista["renglones"])
 
     def cerrar(
-        self, negocio: str, pedido_sugerido_id: int
+        self, negocio: str, pedido_sugerido_id: int, quien: str | None = None
     ) -> PedidoSugeridoGuardado | None:
         self._revisar()
         lista = self._por_id(pedido_sugerido_id)
@@ -741,8 +794,38 @@ class AlmacenamientoFalso:
         if lista is None or lista["negocio"] != negocio or lista["estado"] != ABIERTO:
             return None
         return self.poner_estado(
-            pedido_sugerido_id, CERRADO, cerrado_en=dt.datetime.now(dt.UTC)
+            pedido_sugerido_id,
+            CERRADO,
+            cerrado_en=dt.datetime.now(dt.UTC),
+            cerrado_por=quien,
         )
+
+    def cerrar_las_de_dias_anteriores(
+        self, negocio: str, fecha_del_pedido: dt.date, quien: str
+    ) -> tuple[PedidoSugeridoGuardado, ...]:
+        """Igual que `vencer_las_de_dias_anteriores`, pero cierra en vez de vencer.
+
+        Mismo `WHERE` en memoria —negocio, `abierto`, día anterior—, y por eso
+        se apoya en `poner_estado` igual que `vencer_las_de_dias_anteriores` se
+        apoyaba en él: el doble no reimplementa la validación, la reusa.
+        """
+        self._revisar()
+        cerradas = []
+        for lista in list(self.listas):
+            if (
+                lista["negocio"] == negocio
+                and lista["estado"] == ABIERTO
+                and lista["fecha_del_pedido"] < fecha_del_pedido
+            ):
+                cerradas.append(
+                    self.poner_estado(
+                        lista["pedido_sugerido_id"],
+                        CERRADO,
+                        cerrado_en=dt.datetime.now(dt.UTC),
+                        cerrado_por=quien,
+                    )
+                )
+        return tuple(cerradas)
 
     def _ninguna_lista_despues(self, lista: dict) -> bool:
         """`_NINGUNA_LISTA_DESPUES`, en memoria y escrita una vez (ADR 0016).
@@ -821,12 +904,22 @@ class AlmacenamientoFalso:
             **lista,
             "estado": ABIERTO,
             "cerrado_en": None,
+            # `cerrado_por` (migración 0013) se limpia igual que `cerrado_en`:
+            # "quién cerró" deja de describir algo en cuanto la lista vuelve a
+            # `abierto`. Lo mismo hace `_REABRIR` contra Postgres.
+            "cerrado_por": None,
             "reabierto_por": quien,
             # El `now()` de la base: un instante real con zona.
             "reabierto_en": dt.datetime.now(dt.UTC),
         }
         revisar_la_lista(propuesta)
-        for columna in ("estado", "cerrado_en", "reabierto_por", "reabierto_en"):
+        for columna in (
+            "estado",
+            "cerrado_en",
+            "cerrado_por",
+            "reabierto_por",
+            "reabierto_en",
+        ):
             lista[columna] = propuesta[columna]
         return armar_guardado(lista, lista["renglones"])
 

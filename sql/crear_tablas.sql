@@ -75,7 +75,7 @@
 -- se corren a mano con credenciales de dueño (ADR 0003) y ninguno de los dos
 -- lo toca el código de arranque.
 --
--- Hoy hay diez, y se corren en orden:
+-- Hoy hay trece, y se corren en orden:
 --
 --   1. `sql/migraciones/0001-renglon-quien-descarto-y-cuando.sql` (ticket 10),
 --      que agrega `descartado_por` y `descartado_en`.
@@ -115,8 +115,14 @@
 --      da a `pedido_sugerido` la firma de la última reapertura -quién deshizo
 --      un cierre y cuándo-. NO crea tabla, y NO rompe el código de antes: las
 --      dos columnas admiten nulos y no tienen DEFAULT.
+--  13. `sql/migraciones/0013-cerrado_por-la-firma-del-cierre.sql` (decisión
+--      del dueño, 2026-09-27: la lista de ayer se cierra sola al abrirse la
+--      de hoy), que le da a `pedido_sugerido` la firma del último cierre
+--      -una persona, o 'sistema' si lo disparó el día siguiente-. NO crea
+--      tabla, y NO rompe el código de antes: la columna admite nulos y no
+--      tiene DEFAULT.
 --
--- Las doce son idempotentes, así que correrlas sobre una base que ya las
+-- Las trece son idempotentes, así que correrlas sobre una base que ya las
 -- tiene -o sobre una recién creada con este archivo- no rompe nada.
 --
 -- **La 0003 y la 0004 son distintas de las dos primeras y hay que decirlo**:
@@ -195,6 +201,12 @@ CREATE TABLE IF NOT EXISTS pedidos.pedido_sugerido (
     -- nulos y no tienen DEFAULT: el `INSERT` de la lista no las nombra.
     reabierto_por             text,
     reabierto_en              timestamptz,
+    -- La firma del último cierre (migración 0013, decisión del dueño
+    -- 2026-09-27): un correo de Access, o 'sistema' cuando el cierre lo
+    -- disparó abrir el día siguiente. Admite nulos y no tiene DEFAULT: una
+    -- lista cerrada antes de esta migración se queda en NULL para siempre, y
+    -- eso es la verdad de esa fila.
+    cerrado_por               text,
 
     CONSTRAINT pk_pedido_sugerido
         PRIMARY KEY (pedido_sugerido_id),
@@ -243,7 +255,18 @@ CREATE TABLE IF NOT EXISTS pedidos.pedido_sugerido (
         CHECK (reabierto_por <> ''),
 
     CONSTRAINT ck_pedido_sugerido_reapertura
-        CHECK ((reabierto_por IS NULL) = (reabierto_en IS NULL))
+        CHECK ((reabierto_por IS NULL) = (reabierto_en IS NULL)),
+
+    -- LA FIRMA DEL CIERRE (migración 0013). No exige `cerrado_por IS NOT NULL`
+    -- cuando `estado = 'cerrado'` a propósito: una fila cerrada antes de esta
+    -- migración se queda en NULL para siempre, y esa es su verdad, no un dato
+    -- que falta. Lo que sí exige es que no venga vacía, y que no aparezca sin
+    -- su hora de cierre -firmar un cierre que no pasó no tiene sentido-.
+    CONSTRAINT ck_pedido_sugerido_cerrado_por
+        CHECK (cerrado_por <> ''),
+
+    CONSTRAINT ck_pedido_sugerido_cerrado_en_firmado
+        CHECK (cerrado_por IS NULL OR cerrado_en IS NOT NULL)
 );
 
 COMMENT ON TABLE pedidos.pedido_sugerido IS

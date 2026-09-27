@@ -25,18 +25,20 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from continental import __version__
-from continental.almacen import LecturaDelAlmacen
+from continental.almacen import DiaCalendario, LecturaDelAlmacen
 from continental.almacenamiento import (
     ABIERTO,
     CANTIDAD_FINAL_MINIMA,
     CERRADO,
     RENGLON_ABIERTO,
+    SISTEMA,
     AlmacenamientoDelPedido,
     CorridaDelLote,
     PedidoGuardado,
     PedidoSugeridoGuardado,
     RenglonGuardado,
     LLAVE_DEL_ATRASO,
+    Vecinos,
     Ventana,
     dias_en_transito_para_atrasado_configurados,
     dias_primera_vez_configurados,
@@ -46,6 +48,8 @@ from continental.cierre import (
     al_cerrar,
     al_cerrar_sin_resumen,
     frase_de_la_reapertura,
+    frase_del_cierre,
+    lo_que_se_perderia,
     reapertura as boton_de_reabrir,
 )
 from continental.clasificacion import reglas_configuradas
@@ -506,19 +510,66 @@ def pedido_sugerido(
         # `ventas` dice si eso es lo normal para hoy.
         return _sin_ventas(ventas)
 
+    # NO HAY LISTA LOS DOMINGOS NI LOS DÍAS FESTIVOS (decisión del dueño,
+    # 2026-09-27). En la práctica `ultima` casi nunca cae en uno de los dos —la
+    # farmacia no ha vendido nada en domingo en 33 meses, y un festivo cerrado
+    # se ve exactamente igual, cero ventas— así que esto casi nunca se dispara
+    # por el camino ordinario. Existe para el caso anómalo: una venta con fecha
+    # de domingo o de festivo (una devolución capturada tarde, un mostrador
+    # que sí abrió un festivo). El dueño decidió que ninguna lista lleva esa
+    # fecha, pase lo que pase con las ventas de ese día — no se pierden: se
+    # quedan en `marts.fct_ventas` y la ventana del siguiente día operable las
+    # alcanza sola, con el mismo mecanismo que ya recoge cualquier racha de
+    # días sin cerrar (`ventana_de_reposicion`).
     try:
-        # Primero vencer, después abrir. El orden importa: si se abriera
-        # primero, la lista de hoy ya existiría cuando el barrido busca
-        # "abiertas de un día anterior" y daría igual, pero al revés el
-        # encargado vería por un instante dos listas abiertas.
-        vencidas = almacenamiento.vencer_las_de_dias_anteriores(negocio, ultima)
-        if vencidas:
+        dia = almacen.dia(ultima)
+    except Exception as exc:  # noqa: BLE001 — sin saberlo, se sigue igual que antes
+        log.exception("No se pudo leer si %s es domingo o festivo", ultima)
+        dia = None
+    if dia is not None and dia.es_dia_sin_lista:
+        log.info(
+            "%s es %s: no se arma lista. Las ventas de ese día esperan al "
+            "siguiente día operable.",
+            ultima,
+            (dia.nombre_evento or "domingo"),
+        )
+        return _dia_sin_lista(dia, ventas, _los_vecinos_de(almacenamiento, negocio, ultima))
+
+    try:
+        # Cierra —ya no vence— toda lista `abierta` de un día anterior, firmada
+        # por el sistema (decisión del dueño, 2026-09-27): "al crearse la
+        # lista de hoy, se cierra sola la de ayer. Automático, sin
+        # intervención." Va ANTES de abrir, igual que antes vencía antes de
+        # abrir: si se abriera primero, la lista de hoy ya existiría cuando
+        # esto busca "abiertas de un día anterior" y daría igual, pero al
+        # revés el encargado vería por un instante dos listas abiertas.
+        cerradas = almacenamiento.cerrar_las_de_dias_anteriores(
+            negocio, ultima, SISTEMA
+        )
+        for cerrada in cerradas:
             log.info(
-                "%d pedido(s) sugerido(s) anteriores al %s quedaron vencidos: "
-                "su día pasó y nadie los cerró.",
-                vencidas,
+                "El sistema cerró el pedido sugerido %s (%s), que consideró "
+                "ventas hasta el %s, al abrirse la lista del %s.",
+                cerrada.pedido_sugerido_id,
+                cerrada.fecha_del_pedido,
+                cerrada.ventana.hasta,
                 ultima,
             )
+            # LO QUE SE PERDERÍA (ADR 0016) no bloquea un cierre automático
+            # —no hay nadie que lea un diálogo de confirmación— pero tampoco
+            # se calla: automático no es lo mismo que silencioso (regla 4 de
+            # `CLAUDE.md`). Queda en la bitácora del servidor; la lista misma
+            # sigue viéndose entera en la bitácora navegable de la pantalla.
+            perdidas = lo_que_se_perderia(cerrada)
+            if perdidas:
+                log.warning(
+                    "El cierre automático del pedido sugerido %s dio por "
+                    "atendidos %d renglón(es) con algo de un pedido anterior "
+                    "que no se volverá a proponer: %s",
+                    cerrada.pedido_sugerido_id,
+                    len(perdidas),
+                    [r.renglon_id for r in perdidas],
+                )
 
         ventana = ventana_de_reposicion(
             corte=almacenamiento.corte_del_ultimo_cerrado(negocio, ultima),
@@ -561,22 +612,51 @@ def pedido_sugerido(
             ],
         )
 
-    # Los precios congelados viajan en la MISMA respuesta que la lista, y esa
-    # es la mitad del ticket 12 que se ve al recargar: lo que se muestra es lo
-    # guardado. Sin esto, una consulta lanzada hace diez minutos se vería como
-    # si nunca hubiera pasado en cuanto alguien recarga la página.
-    #
-    # Es una consulta más por carga y una sola para toda la lista. Una por
-    # renglón costaría tantas como productos distintos se vendieron, y —peor—
-    # cada una leería en un momento distinto: la tabla podría dejar de
-    # coincidir consigo misma mientras alguien la trabaja.
-    #
-    # Su falla es un hueco y no tumba la lista: un pedido sugerido sin precios
-    # todavía sirve para pedir, y la quinta casilla del ticket dice que un
-    # precio que no se pudo leer se ve como hueco, nunca como cero.
-    # LO QUE NO SE PUDO LEER Y NO TUMBA LA LISTA (ticket 29). Cada lectura de
-    # abajo que falla deja la lista viéndose —sirve para pedir— y agrega aquí
-    # su aviso, para que el vacío que deja no se lea como un dato.
+    return _respuesta_de_la_lista(almacen, almacenamiento, negocio, guardado, ultima, ventas)
+
+
+def _respuesta_de_la_lista(
+    almacen: LecturaDelAlmacen,
+    almacenamiento: AlmacenamientoDelPedido,
+    negocio: str,
+    guardado: PedidoSugeridoGuardado,
+    ultima: dt.date | None = None,
+    ventas: dict | None = None,
+) -> dict:
+    """Todo lo que se lee ALREDEDOR de una lista ya guardada, hecho respuesta.
+
+    Extraído del cuerpo de `pedido_sugerido` (2026-09-27) para que la lectura
+    de **hoy** —que además puede escribir, abriendo el día— y la lectura de
+    **un día cualquiera de la bitácora** (`pedido_sugerido_de_un_dia`, aquí
+    abajo) arme la misma respuesta con el mismo código. Dos copias de esto se
+    habrían separado a la primera lectura nueva que alguien agregara a una
+    sola, exactamente el motivo por el que `sugerido.armar_la_lista` existe.
+
+    `ultima` es el ancla —`almacen.ultima_fecha_con_ventas()`— si quien llama
+    ya la leyó (la carga de hoy, que la necesita para abrir el día); `None` dice
+    "léela tú si hace falta", que es lo que hace `_la_reapertura` por su
+    cuenta. `ventas` es lo que afirma `fallas.estado_de_las_ventas` sobre qué
+    tan recientes son los datos del almacén — tiene sentido para "hoy" y no
+    para un día cualquiera de la bitácora, así que la lectura por fecha de
+    abajo la deja en `None` a propósito: no es un hueco, es "no aplica aquí".
+
+    Los precios congelados viajan en la MISMA respuesta que la lista, y esa
+    es la mitad del ticket 12 que se ve al recargar: lo que se muestra es lo
+    guardado. Sin esto, una consulta lanzada hace diez minutos se vería como
+    si nunca hubiera pasado en cuanto alguien recarga la página.
+
+    Es una consulta más por carga y una sola para toda la lista. Una por
+    renglón costaría tantas como productos distintos se vendieron, y —peor—
+    cada una leería en un momento distinto: la tabla podría dejar de
+    coincidir consigo misma mientras alguien la trabaja.
+
+    Su falla es un hueco y no tumba la lista: un pedido sugerido sin precios
+    todavía sirve para pedir, y la quinta casilla del ticket dice que un
+    precio que no se pudo leer se ve como hueco, nunca como cero.
+    LO QUE NO SE PUDO LEER Y NO TUMBA LA LISTA (ticket 29). Cada lectura de
+    abajo que falla deja la lista viéndose —sirve para pedir— y agrega aquí
+    su aviso, para que el vacío que deja no se lea como un dato.
+    """
     avisos: list[dict] = []
     precios_sin_leer = False
 
@@ -671,9 +751,9 @@ def pedido_sugerido(
         aun_faltan=aun_faltan,
         # EL DESHACER (ADR 0016): solo de una lista cerrada, y solo si la base
         # dice que ninguna lista se armó después y que no es de hace más de un
-        # día (enmienda 2026-09-21). `ultima` es el mismo ancla que ya se leyó
-        # arriba para abrir el día: no se vuelve a leer. Sin su respuesta, no
-        # hay botón.
+        # día (enmienda 2026-09-21). `ultima`, si quien llama ya la leyó, no se
+        # vuelve a leer; si no, `_la_reapertura` la lee ella misma. Sin su
+        # respuesta, no hay botón.
         reapertura=_la_reapertura(almacen, almacenamiento, negocio, guardado, ultima),
         corrida_fallo=corrida_fallo,
         # CORREGIR LO RECIBIDO (2026-09-21, propuesta 1 de la revisión de
@@ -688,6 +768,11 @@ def pedido_sugerido(
     # enviar y tachar no lo cambian y la pantalla lo pinta una vez.
     respuesta["ventas"] = ventas
     respuesta["avisos"] = avisos
+    # LOS VECINOS (bitácora navegable, 2026-09-27). Ver `Vecinos` para el
+    # porqué de traerlos aquí y no por un endpoint de navegación aparte.
+    respuesta["vecinos"] = _vecinos_como_json(
+        _los_vecinos_de(almacenamiento, negocio, guardado.fecha_del_pedido)
+    )
     # Una lista vacía que SÍ se leyó dice por qué está vacía, con palabras de
     # Python: "no se vendió nada" sería falso —su último día tiene ventas—.
     respuesta["lista_vacia"] = (
@@ -710,6 +795,85 @@ def pedido_sugerido(
             renglon.pop("porque_no_hay_lectura", None)
             renglon["huecos_reintentables"] = []
     return respuesta
+
+
+@app.get("/api/pedido-sugerido/dia/{fecha}")
+def pedido_sugerido_de_un_dia(
+    fecha: dt.date,
+    almacen: LecturaDelAlmacen = Depends(obtener_almacen),
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+):
+    """La bitácora navegable (decisión del dueño, 2026-09-27): un día cualquiera, de solo lectura.
+
+    **Solo lee.** A diferencia de `GET /api/pedido-sugerido`, esta ruta nunca
+    arma ni abre nada: `fecha` puede ser cualquier día pasado, y armar una
+    lista para un día que no es `max(fecha)` del almacén rompería la ventana
+    de reposición entera (`ventana_de_reposicion` siempre ancla `hasta` en el
+    último día con ventas, nunca en uno elegido a mano). Es exactamente lo que
+    hace posible tener una sola lista por día sin duplicar código: la lista de
+    **hoy** la abre `pedido_sugerido`, y ésta solo la muestra otra vez para
+    cualquier fecha, incluida la de hoy.
+
+    Comparte con `pedido_sugerido` toda la lectura de lo que rodea a una lista
+    (`_respuesta_de_la_lista`); lo único distinto es de dónde sale `guardado`.
+
+    Tres respuestas posibles, y ninguna es un 500:
+
+    - **Hay lista** ese día: la respuesta completa, igual de rica que la de
+      hoy —incluida la recepción sugerida y lo que viene en camino, que no
+      dejan de calcularse por ser una lista vieja: un renglón `en tránsito` de
+      hace dos semanas sigue en tránsito—. `estado` dice si sigue `abierta`
+      (la de hoy, vista por esta ruta), `cerrada` o `vencida`.
+    - **No hay lista y el calendario dice por qué** (domingo o festivo
+      oficial, `almacen.dia`): `dia_sin_lista` con el nombre del evento, igual
+      que la ruta principal cuando `ultima` cae ahí.
+    - **No hay lista y no hay por qué calendario**: 404. Puede ser una fecha
+      futura, un día de antes de que Continental existiera, o un hueco real
+      que valdría la pena investigar — esta ruta no distingue esos tres, y
+      pretender que sí sería inventar una explicación que los datos no dan
+      (regla 4 de `CLAUDE.md`).
+
+    Las tres traen `vecinos`, para que la pantalla pueda ofrecer la flecha de
+    regreso aunque la fecha pedida no tenga nada que enseñar.
+    """
+    negocio = cargar().negocio
+
+    try:
+        guardado = almacenamiento.leer(negocio, fecha)
+    except Exception as exc:  # noqa: BLE001 — el almacenamiento caído es un hueco, no un 500
+        log.exception("No se pudo leer el pedido sugerido de %s para %s", negocio, fecha)
+        return _hueco(f"no se pudo leer la lista de ese día ({type(exc).__name__})")
+
+    vecinos_lista = _los_vecinos_de(almacenamiento, negocio, fecha)
+
+    if guardado is None:
+        try:
+            dia = almacen.dia(fecha)
+        except Exception as exc:  # noqa: BLE001 — el almacén caído es un hueco, no un 404 mentiroso
+            # Sin esto, "no se pudo leer el calendario" se vería igual que "no
+            # hay lista y no hay por qué" -- que SÍ tiene un motivo, solo que
+            # esta ruta no lo pudo leer. Sería la falla silenciosa que
+            # prohíbe la regla 4: un 404 que afirma "no hay forma de saberlo"
+            # mintiendo sobre por qué.
+            log.exception("No se pudo leer si %s es domingo o festivo", fecha)
+            return _hueco(f"no se pudo leer el calendario de ese día ({type(exc).__name__})")
+        if dia is not None and dia.es_dia_sin_lista:
+            return _dia_sin_lista(dia, None, vecinos_lista)
+        return JSONResponse(
+            status_code=404,
+            content={
+                "ok": False,
+                "detalle": (
+                    "No hay una lista para esa fecha en este negocio: puede "
+                    "ser una fecha futura, de antes de que existiera esta "
+                    "lista, o un hueco. No hay forma de distinguirlos desde "
+                    "aquí."
+                ),
+                "vecinos": _vecinos_como_json(vecinos_lista),
+            },
+        )
+
+    return _respuesta_de_la_lista(almacen, almacenamiento, negocio, guardado)
 
 
 def _la_recepcion(
@@ -922,16 +1086,17 @@ def cerrar_pedido_sugerido(
 
     **Quién cierra es una firma, no un permiso** (regla 3 de `CLAUDE.md`): el
     correo llega en `Cf-Access-Authenticated-User-Email`, ya validado por
-    Cloudflare Access, y aquí solo se anota en la bitácora. El ticket 08 no pide
-    una columna con quién cerró —el 10 la va a pedir para quién descartó— y
-    agregarla hoy costaría una visita a atlas para un dato que nadie consulta:
-    el rol no puede alterar sus tablas (ADR 0003).
+    Cloudflare Access. **Desde la migración 0013 sí se guarda** en
+    `cerrado_por`: el ticket que la trajo (2026-09-27, cierre automático de
+    listas anteriores) necesitaba distinguir un cierre humano de uno que puso
+    `almacenamiento.SISTEMA`, y una vez que la columna existe, este clic la
+    llena igual que ya llena la bitácora del servidor.
     """
     negocio = cargar().negocio
     firma = quien(request)
 
     try:
-        cerrado = almacenamiento.cerrar(negocio, pedido_sugerido_id)
+        cerrado = almacenamiento.cerrar(negocio, pedido_sugerido_id, firma)
     except Exception as exc:  # noqa: BLE001 — el almacenamiento caído es un hueco, no un 500
         log.exception("No se pudo cerrar el pedido sugerido %s", pedido_sugerido_id)
         return JSONResponse(
@@ -1011,6 +1176,43 @@ def _los_atendidos_despues(
         return frozenset(
             r.propuesto.producto_id for r in guardado.renglones if r.esta_recibido
         )
+
+
+def _vecinos_como_json(vecinos: Vecinos | None) -> dict | None:
+    """`Vecinos` → lo que la pantalla lee para pintar las flechas.
+
+    `None` es "no se pudo saber" (regla 4): la lectura falló y no hay con qué
+    decidir si hay algo a un lado u otro. Muy distinto de `{"anterior": None,
+    "siguiente": None}`, que es un hecho —esta es la única lista que existe—.
+    """
+    if vecinos is None:
+        return None
+    return {
+        "anterior": vecinos.anterior.isoformat() if vecinos.anterior else None,
+        "siguiente": vecinos.siguiente.isoformat() if vecinos.siguiente else None,
+    }
+
+
+def _los_vecinos_de(
+    almacenamiento: AlmacenamientoDelPedido, negocio: str, fecha_del_pedido: dt.date
+) -> Vecinos | None:
+    """`almacenamiento.vecinos`, con su propio hueco (regla 4): sin botón sin dato.
+
+    Una lectura barata —dos `max`/`min` sobre `pedido_sugerido_id`— y aparte
+    de todo lo demás: si falla, las flechas de navegación desaparecen y la
+    lista se sigue viendo entera. Nunca se inventan vecinos con `None` en vez
+    de decir que no se pudo leer: eso se vería como "esta es la única lista
+    que existe", que puede ser falso.
+    """
+    try:
+        return almacenamiento.vecinos(negocio, fecha_del_pedido)
+    except Exception:  # noqa: BLE001 — sin la respuesta, no hay flechas
+        log.exception(
+            "No se pudo leer los vecinos del pedido sugerido de %s (%s)",
+            negocio,
+            fecha_del_pedido,
+        )
+        return None
 
 
 def _la_reapertura(
@@ -3717,6 +3919,13 @@ def _como_json(
         "cerrado_en": (
             guardado.cerrado_en.isoformat() if guardado.cerrado_en else None
         ),
+        # LA FIRMA DEL ÚLTIMO CIERRE (migración 0013): un correo de Access, o
+        # `almacenamiento.SISTEMA` si el cierre fue automático al abrirse un
+        # día posterior (decisión del dueño, 2026-09-27). `None` en dos casos
+        # que esta respuesta no distingue —sigue abierta, o se cerró antes de
+        # esta migración— y `frase_del_cierre` ya devuelve `None` en los dos.
+        "cerrado_por": guardado.cerrado_por,
+        "frase_del_cierre": frase_del_cierre(guardado.cerrado_por, guardado.cerrado_en),
         # LA ÚLTIMA REAPERTURA (ADR 0016): la firma, y su frase hecha en Python
         # en la hora de la farmacia. `reapertura` es el botón de deshacer —solo
         # lo traen la carga y el cierre, que son las que preguntan a la base—.
@@ -4516,6 +4725,27 @@ def _sin_ventas(ventas: dict | None = None) -> dict:
         "sin_catalogo": 0,
         "sin_clasificar": 0,
         "vistas": _vistas(),
+    }
+
+
+def _dia_sin_lista(dia: DiaCalendario, ventas: dict | None, vecinos: Vecinos | None) -> dict:
+    """Domingo o festivo: por calendario, hoy no se arma lista (2026-09-27).
+
+    Misma forma que `_sin_ventas` —la pantalla ya sabe leer una respuesta sin
+    lista— y con dos campos más: `dia_sin_lista` dice **por qué** (para no
+    confundir "cerrado por calendario" con "sin ventas" ni con "el almacén no
+    contestó"), y `vecinos` deja que la pantalla ofrezca de una vez la última
+    lista de verdad en vez de una pantalla en blanco sin salida.
+    """
+    return {
+        **_sin_ventas(ventas),
+        "dia_sin_lista": {
+            "fecha": dia.fecha.isoformat(),
+            "es_cerrado": dia.es_cerrado,
+            "es_festivo_oficial": dia.es_festivo_oficial,
+            "nombre_evento": dia.nombre_evento,
+        },
+        "vecinos": _vecinos_como_json(vecinos),
     }
 
 

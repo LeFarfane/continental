@@ -43,8 +43,11 @@ lo único con lo que se empareja un producto nuestro con el suyo.
 sistema a partir de lo que se vendió. No se le envía a nadie.
 
 - `abierto` — todavía se está trabajando.
-- `cerrado` — ya se pidió lo que se iba a pedir.
-- `vencido` — pasó su día y quedaron renglones sin atender.
+- `cerrado` — ya se pidió lo que se iba a pedir, o se dio por atendida sola.
+- `vencido` — pasó su día y quedaron renglones sin atender. **Ya no lo produce
+  el flujo de abrir el día** desde el 2026-09-27 (decisión del dueño, ver
+  **Cerrar**): sigue en el glosario porque una base puede tener filas así de
+  antes, y `reabrir` lo sigue rechazando igual.
 
 > **Solo una lista `abierta` se deja modificar**, y eso vale para las cuatro
 > acciones que una persona hace sobre un renglón: descartarlo, devolverlo a la
@@ -62,10 +65,26 @@ sistema a partir de lo que se vendió. No se le envía a nadie.
 
 **Cerrar** — decir que ya se pidió lo que se iba a pedir. La siguiente lista
 arranca al día siguiente de lo que ésta consideró, y **lo que quedó sin pedir
-se da por atendido**: la siguiente no lo vuelve a proponer. Antes de cerrar la
-pantalla lo enseña, y señala aparte lo que **se perdería** —renglones sin pedir
-o descartados que traen lo que faltó de un parcial o lo vendido mientras un
-pedido venía en camino: su última oportunidad—. Avisa; no prohíbe.
+se da por atendido**: la siguiente no lo vuelve a proponer. Antes de cerrar a
+mano la pantalla lo enseña, y señala aparte lo que **se perdería** —renglones
+sin pedir o descartados que traen lo que faltó de un parcial o lo vendido
+mientras un pedido venía en camino: su última oportunidad—. Avisa; no prohíbe.
+
+> **Desde el 2026-09-27 también se cierra sola** (decisión del dueño): al
+> armarse la lista de un día, toda lista `abierta` de un día anterior se
+> cierra, sin que nadie haga clic. La firma —`cerrado_por`— dice quién: un
+> correo de Access para un cierre a mano, o `sistema` para uno automático.
+> **No hay confirmación que avisar** —no hay nadie ahí para leerla— así que lo
+> que se perdería se registra en la bitácora del servidor en vez de en un
+> diálogo, y **nada desaparece de todos modos**: la lista sigue entera, se
+> puede ir a ver. Es la garantía que sustituye a `piso_sin_pedir` para el día a
+> día: antes, una lista abierta que nadie cerraba retrocedía la ventana
+> siguiente hasta alcanzarla (nada se perdía de la reposición); ahora se cierra
+> y dejó de proponerse, pero queda accesible en la bitácora navegable. Por eso
+> las listas volvieron a ser cortas —un día, no la ventana `2026-09-12 → hoy`
+> que llegó a 174 renglones—. `piso_sin_pedir` se queda para el primer arranque
+> —antes de que exista ningún cierre no hay corte del que partir—, pero deja de
+> intervenir en cuanto hay uno.
 
 **Reabrir** — deshacer un cierre: `cerrado` → `abierto`, firmado —quién y
 cuándo—. **Solo la lista más reciente, solo mientras no se haya armado la
@@ -81,8 +100,8 @@ hubiera pisado. `vencido` no se reabre. Ver el ADR 0016.
 > **Reabrir no deshace nada más que el cierre.** Lo que se envió sigue
 > enviado, lo recibido sigue recibido y lo descartado sigue descartado —con la
 > lista abierta otra vez, se puede devolver—. Si se reabre una lista cuyo día
-> ya pasó, la siguiente carga la vence como a cualquiera que nadie cerró, y sus
-> ventas se arrastran a la lista que sigue.
+> ya pasó, la siguiente carga la **cierra sola otra vez** —ya no la vence,
+> desde el 2026-09-27— y sus ventas se dan por atendidas, no se arrastran.
 
 **Renglón** — un producto con su cantidad dentro de un pedido sugerido.
 

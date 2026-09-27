@@ -646,6 +646,12 @@ VALORES = {
     "pedido_id": (1, 2),
     "pedido_sugerido_id": (1,),
     "proveedor": ("nadro",),
+    # La bitácora navegable (2026-09-27): el mismo día de `LUNES_21`, que es
+    # cuando la `semilla` arma su única lista. Con cualquier otra fecha la
+    # ruta encuentra "no hay lista" en el primer camino y nunca llega a las
+    # lecturas de más adentro -- igual que `pedido_sugerido_id` usa el id que
+    # `semilla` sí arma, y no uno cualquiera.
+    "fecha": ("2026-09-21",),
 }
 
 RUTAS = [r for r in app.routes if isinstance(r, APIRoute)]

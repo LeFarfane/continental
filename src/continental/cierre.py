@@ -42,6 +42,7 @@ from continental.almacenamiento import (
     CERRADO,
     RENGLON_ABIERTO,
     RENGLON_DESCARTADO,
+    SISTEMA,
     PedidoSugeridoGuardado,
     RenglonGuardado,
     Ventana,
@@ -341,6 +342,29 @@ def frase_de_la_reapertura(quien: str | None, cuando: dt.datetime | None) -> str
         cuando = cuando.replace(tzinfo=dt.UTC)
     local = cuando.astimezone(ZONA_DE_LA_FARMACIA)
     return f"Se reabrió {fecha_en_palabras(local.date())} a las {local:%H:%M}; lo firmó {quien}."
+
+
+def frase_del_cierre(quien: str | None, cuando: dt.datetime | None) -> str | None:
+    """Quién cerró esta lista la última vez, y cuándo (migración 0013). `None` si no se sabe.
+
+    `None` cubre dos casos que esta frase no distingue —la lista sigue
+    abierta, o se cerró antes de la migración 0013— y ninguno de los dos es
+    "hubo un cierre y no se sabe quién": es más honesto callar la frase entera
+    que afirmar una firma que no existe.
+
+    `quien == SISTEMA` (decisión del dueño, 2026-09-27) se dice distinto de un
+    correo: "se cerró sola" y no "la cerró sistema", que leería como si
+    `sistema` fuera una persona con ese nombre.
+    """
+    if quien is None or cuando is None:
+        return None
+    if cuando.tzinfo is None:
+        cuando = cuando.replace(tzinfo=dt.UTC)
+    local = cuando.astimezone(ZONA_DE_LA_FARMACIA)
+    dicho = f"{fecha_en_palabras(local.date())} a las {local:%H:%M}"
+    if quien == SISTEMA:
+        return f"Se cerró sola {dicho}, al abrirse la lista del día siguiente."
+    return f"Se cerró {dicho}; lo firmó {quien}."
 
 
 # `motivo_para_no_reabrir` se movió a `transiciones.py` el 2026-09-22 (paso 2

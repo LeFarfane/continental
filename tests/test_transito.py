@@ -57,6 +57,7 @@ from conftest import pantalla_completa
 from continental.almacen import LineaDeVenta, Producto
 from continental.almacenamiento import (
     AlmacenamientoDelPedido,
+    CERRADO,
     ESTADOS_DEL_RENGLON,
     ESTADOS_QUE_CIERRAN_EL_TRANSITO,
     LoYaPedido,
@@ -64,6 +65,7 @@ from continental.almacenamiento import (
     RENGLON_DESCARTADO,
     RENGLON_EN_TRANSITO,
     RenglonGuardado,
+    SISTEMA,
     Ventana,
     columnas_del_renglon,
     renglon_desde_columnas,
@@ -1045,9 +1047,15 @@ def test_casilla_1_lo_enviado_no_se_propone_aunque_la_lista_no_se_cierre(
 ):
     """El doble pedido de hoy, de punta a punta.
 
-    El lunes se envía el producto 1 a NADRO y **nadie cierra la lista**. El
-    martes la ventana vuelve a recoger el lunes (el piso del ticket 09): sin la
-    memoria, las 3 piezas del lunes se piden otra vez.
+    El lunes se envía el producto 1 a NADRO y **nadie cierra la lista**.
+
+    **Cambió el 2026-09-27** (decisión del dueño): antes, sin cerrarla, el
+    piso del ticket 09 hacía que la ventana del martes retrocediera hasta el
+    lunes por accidente. Ahora la de lunes se cierra sola al abrirse la de
+    martes, y el corte SÍ avanza: la ventana del martes ya empieza en martes.
+    Lo que no cambia —y es lo que esta prueba mide de verdad— es que el
+    producto 1 sigue sin proponerse: `en tránsito` es del renglón, no de la
+    lista, y cerrar la lista no lo toca.
     """
     almacen.catalogo_en_memoria = [_producto(1), _producto(2)]
     almacen.ventas_en_memoria = [_venta(LUNES, 1, 3), _venta(LUNES, 2, 1)]
@@ -1057,7 +1065,10 @@ def test_casilla_1_lo_enviado_no_se_propone_aunque_la_lista_no_se_cierre(
     almacen.ventas_en_memoria.append(_venta(MARTES, 2, 1))
     martes = _abrir(cliente)
 
-    assert martes["ventas_consideradas_desde"] == LUNES.isoformat()
+    cerrada = almacenamiento.leer(NEGOCIO, LUNES)
+    assert cerrada.estado == CERRADO
+    assert cerrada.cerrado_por == SISTEMA
+    assert martes["ventas_consideradas_desde"] == MARTES.isoformat()
     assert 1 not in _productos(martes), (
         "Lo que ya se le pidió a NADRO el lunes se está proponiendo otra vez."
     )

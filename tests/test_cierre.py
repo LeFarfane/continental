@@ -45,6 +45,7 @@ from continental.almacenamiento import (
     RENGLON_EN_TRANSITO,
     RENGLON_RECIBIDO,
     RENGLON_RECIBIDO_PARCIAL,
+    SISTEMA,
     VENCIDO,
     AlmacenamientoDelPedido,
     PedidoSugeridoGuardado,
@@ -963,12 +964,21 @@ def test_escenario_la_cadena_trajo_ventas_y_nadie_abrio_el_dia(
 ):
     """**El borde**: jueves cerrado por error; a las 20:30 entra la venta del
     viernes (**1**) pero nadie abrió la pantalla ni corrió el lote. La del
-    jueves sigue siendo la última lista: **se reabre** (una pestaña que se quedó
-    abierta). La siguiente carga la vence —su día pasó— y arma la del viernes
-    desde el corte del miércoles: el producto 1 vuelve con 3 + 2 + 1 + 1 = 7
-    vendidas + 4 que faltaron = **11** = las 10 del jueves + 1 del viernes.
-    Ninguna perdida y ninguna dos veces: es lo que pasa con cualquier lista que
-    nadie cerró (ticket 09)."""
+    jueves sigue siendo la última lista: **se reabre** (una pestaña que se
+    quedó abierta) y nadie vuelve a pedir las 10 que trae sin pedir.
+
+    **Cambió el 2026-09-27** (decisión del dueño): hasta entonces, la
+    siguiente carga **vencía** a jueves —su día pasó— sin mover el corte, y
+    las 10 sin pedir volvían a proponerse en la de viernes (con las que se
+    vendieron mientras tanto: 3+2+1+1=7, más las 4 que faltaron, 11 en
+    total). Ahora la siguiente carga **cierra sola** a jueves —ya no la
+    vence— y el corte SÍ avanza hasta ahí: la de viernes arranca en viernes,
+    con solo su propia venta. Las 10 de jueves —6 vendidas mientras el pedido
+    viajaba, más 4 que faltaron— se quedan ahí, visibles en la lista de
+    jueves para quien la vaya a ver, y no se vuelven a proponer: es la
+    garantía que sustituye a `piso_sin_pedir` (decisión 2 del ticket) — ya no
+    "nada se pierde en la ventana", sino "nada desaparece de la bitácora".
+    """
     jueves = _hasta_el_jueves_con_10_sin_pedir(cliente, almacen, almacenamiento)
     _cerrar(cliente, jueves)
     almacen.ventas_en_memoria += [_venta(VIERNES, 1, 1)]
@@ -976,11 +986,13 @@ def test_escenario_la_cadena_trajo_ventas_y_nadie_abrio_el_dia(
     assert _reabrir(cliente, jueves).status_code == 200
 
     viernes = _abrir(cliente)
-    assert almacenamiento.leer(NEGOCIO, JUEVES).estado == VENCIDO
+    cerrada_jueves = almacenamiento.leer(NEGOCIO, JUEVES)
+    assert cerrada_jueves.estado == CERRADO
+    assert cerrada_jueves.cerrado_por == SISTEMA
     uno = _por_producto(viernes)[1]
-    assert uno["piezas_vendidas"] == 3 + 2 + 1 + 1
-    assert uno["piezas_que_faltaron"] == 4
-    assert uno["cantidad_propuesta"] == 11
+    assert uno["piezas_vendidas"] == 1
+    assert uno["piezas_que_faltaron"] == 0
+    assert uno["cantidad_propuesta"] == 1
     _cerrar(cliente, viernes)
 
     almacen.ventas_en_memoria += [_venta(SABADO, 1, 1)]
@@ -1074,12 +1086,16 @@ def test_la_firma_es_firma_y_no_permiso(cliente, almacen, almacenamiento):
 def test_reabrir_lo_que_no_esta_cerrado_contesta_409_con_su_motivo(
     cliente, almacen, almacenamiento, como_queda, pista
 ):
+    """`vencida` ya no la produce la ruta (2026-09-27: se cierra sola en vez de
+    vencerse), pero el estado sigue existiendo en el glosario y en datos
+    viejos, así que se fuerza directo en el almacenamiento con la misma
+    función que antes disparaba `abrir_el_dia` —el `WHERE` de `_REABRIR` sigue
+    rechazando `vencido` igual, lo produzca quien lo produzca."""
     almacen.catalogo_en_memoria = [_producto(1)]
     almacen.ventas_en_memoria = [_venta(LUNES, 1, 3)]
     lunes = _abrir(cliente)
     if como_queda == "vencida":
-        almacen.ventas_en_memoria += [_venta(MARTES, 1, 1)]
-        _abrir(cliente)
+        almacenamiento.vencer_las_de_dias_anteriores(NEGOCIO, MARTES)
 
     respuesta = _reabrir(cliente, lunes)
 

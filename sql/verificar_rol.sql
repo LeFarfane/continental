@@ -800,6 +800,33 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
          END),
  NULL),
 
+-- LA FIRMA DEL CIERRE (migración 0013, decisión del dueño 2026-09-27). Sin la
+-- columna la lista del día no se puede leer -`_LEER_LISTA` la nombra- y la
+-- pantalla entera se queda en "no se pudo armar el pedido sugerido". El
+-- cierre automático de una lista anterior (`_CERRAR_LAS_DE_DIAS_ANTERIORES`)
+-- también la escribe, con `'sistema'`.
+(39,
+ 'Una lista cerrada dice quién la cerró: una persona o "sistema"',
+ 'las restricciones y la columna',
+ (SELECT CASE
+           WHEN NOT EXISTS (SELECT 1 FROM pg_constraint con
+                             WHERE con.conrelid = to_regclass('pedidos.pedido_sugerido')
+                               AND con.conname = 'ck_pedido_sugerido_cerrado_por')
+                THEN 'NO EXISTE ck_pedido_sugerido_cerrado_por'
+           WHEN NOT EXISTS (SELECT 1 FROM pg_constraint con
+                             WHERE con.conrelid = to_regclass('pedidos.pedido_sugerido')
+                               AND con.conname = 'ck_pedido_sugerido_cerrado_en_firmado')
+                THEN 'NO EXISTE ck_pedido_sugerido_cerrado_en_firmado'
+           WHEN NOT EXISTS (SELECT 1 FROM pg_attribute a
+                             WHERE a.attrelid = to_regclass('pedidos.pedido_sugerido')
+                               AND NOT a.attisdropped
+                               AND NOT a.attnotnull
+                               AND a.attname = 'cerrado_por')
+                THEN 'falta cerrado_por, o no admite nulos'
+           ELSE 'las restricciones y la columna'
+         END),
+ NULL),
+
 -- AVISO y no MAL: una tabla temporal vive en la sesión, no puede leer nada que
 -- el rol no pueda leer ya, y desaparece al desconectarse. El permiso llega por
 -- el TEMPORARY que PUBLIC tiene sobre la base por omisión, y quitarlo sería

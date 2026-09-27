@@ -111,13 +111,16 @@ def test_las_esperadas_traen_columnas_de_cada_migracion_y_ninguna_restriccion():
 
 
 def test_el_conteo_de_columnas_es_el_del_ddl():
-    """Contadas a mano sobre `sql/crear_tablas.sql` el 2026-09-21. Si cambia el
-    DDL, este número cambia con él — y alguien lo tiene que mirar."""
+    """Contadas a mano sobre `sql/crear_tablas.sql` el 2026-09-27 (antes,
+    2026-09-21). Si cambia el DDL, este número cambia con él — y alguien lo
+    tiene que mirar."""
     esperadas = _esperadas()
 
     assert len(esperadas["renglon"]) == 35
     assert len(esperadas["pedido"]) == 12
-    assert len(esperadas["pedido_sugerido"]) == 10
+    # 11 desde la migración 0013 (`cerrado_por`, decisión del dueño
+    # 2026-09-27: la lista de ayer se cierra sola al abrirse la de hoy).
+    assert len(esperadas["pedido_sugerido"]) == 11
     assert len(esperadas["precio_de_proveedor"]) == 14
     assert len(esperadas["corrida_del_lote"]) == 16
 

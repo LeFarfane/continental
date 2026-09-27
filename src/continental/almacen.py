@@ -196,6 +196,42 @@ class LineaDeCompra:
     folio: str
 
 
+@dataclass(frozen=True, slots=True)
+class DiaCalendario:
+    """Una fila de `marts.dim_fecha`, solo lo que decide si hay lista ese día.
+
+    Decisión del dueño, 2026-09-27: no se arma pedido sugerido en domingo ni
+    en día festivo. La trampa, medida sobre septiembre de 2026 y anotada en
+    el ticket: **`es_cerrado` de `dim_fecha` solo marca domingos**. El 16 de
+    septiembre (Independencia) tuvo cero ventas y `es_cerrado = f` — el
+    festivo no se ve ahí, se ve en `es_festivo_oficial`. Por eso las dos
+    banderas viajan aparte y ninguna se deduce de la otra.
+
+    **Nunca se deduce "cerrado" de "sin ventas".** Un día reciente sin una
+    sola venta puede ser domingo, festivo, o simplemente que el respaldo de
+    SICAR todavía no llega —hasta 2.5 días de retraso, `CLAUDE.md`—. Esa
+    tercera posibilidad no está aquí: `DiaCalendario` solo dice lo que el
+    calendario afirma de antemano, nunca lo que las ventas del día sugieren.
+    """
+
+    fecha: dt.date
+    es_cerrado: bool  # domingo, `dim_fecha.es_cerrado`
+    es_festivo_oficial: bool
+    nombre_evento: str | None
+
+    @property
+    def es_dia_sin_lista(self) -> bool:
+        """Si por el calendario —domingo o festivo oficial— no se arma lista.
+
+        Los dos juntos y no uno solo: `es_cerrado` no ve los festivos (arriba),
+        así que un festivo que cayera en entre semana necesita la segunda
+        bandera para no armar lista. Las fechas comerciales (`es_fecha_comercial`,
+        San Valentín, Día de las Madres) **no** cuentan: la farmacia abre esos
+        días, solo vende distinto.
+        """
+        return self.es_cerrado or self.es_festivo_oficial
+
+
 # --------------------------------------------------------------- interfaz
 
 
@@ -203,10 +239,11 @@ class LineaDeCompra:
 class LecturaDelAlmacen(Protocol):
     """El borde de lectura. Solo `SELECT`, y solo datos de salida.
 
-    Cinco lecturas y ninguna más: las tres que el módulo de Pedido necesitaba,
-    el ancla temporal, y desde el ticket 26 la quinta —qué productos han
-    aparecido alguna vez en una compra—. Si hace falta una sexta, entra aquí y
-    no por una conexión prestada.
+    Seis lecturas y ninguna más: las tres que el módulo de Pedido necesitaba,
+    el ancla temporal, desde el ticket 26 la quinta —qué productos han
+    aparecido alguna vez en una compra—, y desde el 2026-09-27 la sexta —si un
+    día es domingo o festivo oficial, para no armar lista ese día—. Si hace
+    falta una séptima, entra aquí y no por una conexión prestada.
     """
 
     def ventas(self, desde: dt.date, hasta: dt.date) -> list[LineaDeVenta]:
@@ -245,6 +282,19 @@ class LecturaDelAlmacen(Protocol):
         de crecimiento inventados. Además, el respaldo de SICAR sube hacia las
         18:51 de lunes a viernes y lo del sábado llega hasta el lunes en la
         noche — peor caso, 2.5 días de retraso real.
+        """
+        ...
+
+    def dia(self, fecha: dt.date) -> DiaCalendario:
+        """La fila de `marts.dim_fecha` de ese día — solo `es_cerrado` y festivo.
+
+        La sexta lectura, del 2026-09-27: si `abrir_el_dia` no la pregunta,
+        una venta anómala de domingo o de festivo (una devolución con fecha
+        atrasada, un mostrador que abrió un festivo) armaría una lista que el
+        dueño decidió que no debe existir. `fecha` casi siempre es
+        `ultima_fecha_con_ventas()` — nunca el reloj —, y por eso esto pide un
+        solo día y no un rango: la pregunta es "¿hoy se puede?", no una tabla
+        de calendario entera.
         """
         ...
 
@@ -334,6 +384,20 @@ _ULTIMA_VENTA = text(
     select max(f.fecha)
     from marts.fct_ventas v
     join marts.dim_fecha f on f.fecha_id = v.fecha_id
+    """
+)
+
+# Un solo día, por `fecha` y no por `fecha_id`: quien llama tiene la fecha (el
+# ancla de `ultima_fecha_con_ventas`), no el entero que dbt deriva de ella.
+# `coalesce(..., false)` porque un `fecha` fuera del rango 2020-2032 de
+# `dim_fecha` (ver farmacia-data) no trae fila, y "no sé" no puede ser
+# "domingo" ni "festivo" — se pide que ese hueco se vea como falso y quien
+# llama lo trate como un día ordinario, nunca como un día sin lista.
+_DIA = text(
+    """
+    select es_cerrado, es_festivo_oficial, nombre_evento
+    from marts.dim_fecha
+    where fecha = :fecha
     """
 )
 
@@ -427,6 +491,23 @@ class AlmacenPostgres:
     def ultima_fecha_con_ventas(self) -> dt.date | None:
         filas = self._filas(_ULTIMA_VENTA)
         return filas[0][0] if filas else None
+
+    def dia(self, fecha: dt.date) -> DiaCalendario:
+        filas = self._filas(_DIA, fecha=fecha)
+        if not filas:
+            return DiaCalendario(
+                fecha=fecha,
+                es_cerrado=False,
+                es_festivo_oficial=False,
+                nombre_evento=None,
+            )
+        f = filas[0]
+        return DiaCalendario(
+            fecha=fecha,
+            es_cerrado=bool(f.es_cerrado),
+            es_festivo_oficial=bool(f.es_festivo_oficial),
+            nombre_evento=(f.nombre_evento or None),
+        )
 
 
 @lru_cache(maxsize=1)

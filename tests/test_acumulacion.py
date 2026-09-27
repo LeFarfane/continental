@@ -30,7 +30,8 @@ import pytest
 from conftest import pantalla_servida
 from continental.almacen import LineaDeVenta, Producto
 from continental.almacenamiento import (
-    VENCIDO,
+    CERRADO,
+    SISTEMA,
     Ventana,
     dias_primera_vez_configurados,
     ventana_de_reposicion,
@@ -271,14 +272,24 @@ def test_la_primera_vez_sin_ningun_cierre_la_ventana_es_de_siete_dias(
     assert sorted(r["producto_id"] for r in cuerpo["renglones"]) == [1, 2]
 
 
-def test_una_lista_abierta_o_vencida_no_es_un_corte(cliente, almacen, almacenamiento):
-    """"No hay cierre anterior" no es "no hay listas anteriores".
+def test_la_lista_de_ayer_se_cierra_sola_y_se_vuelve_el_corte(
+    cliente, almacen, almacenamiento
+):
+    """**Cambió el 2026-09-27** (decisión del dueño): reemplaza a la prueba que
+    aquí decía "una lista abierta o vencida no es un corte".
 
-    Una lista `abierta` o `vencida` no ordenó nada —`vencida` es literalmente
-    "pasó su día y quedaron renglones sin atender"—, así que tomar su
-    `ventas_consideradas_hasta` como corte dejaría fuera días que nadie repuso.
-    Solo una lista **cerrada** mueve el corte; mientras no la haya, cada lista
-    nueva es una primera vez.
+    Hasta esa fecha, una lista `abierta` que nadie cerraba no movía el corte
+    -`vencida` es literalmente "pasó su día y quedaron renglones sin
+    atender"-, así que la ventana siguiente retrocedía con `piso_sin_pedir`
+    hasta alcanzarla: nada se perdía, pero las listas volvían a estirarse.
+
+    Ahora esa misma lista **se cierra sola**, firmada por
+    `almacenamiento.SISTEMA`, al abrirse la del día siguiente. Cerrarla SÍ
+    mueve el corte -es lo que "cerrar" siempre ha querido decir (`CONTEXT.md`)-
+    así que la ventana de la lista nueva arranca justo el día después, sin
+    retroceder: la garantía de que nada se pierde ya no es "vuelve a
+    proponerse", es "se puede ir a ver" en la bitácora (decisión 2 del mismo
+    ticket).
     """
     almacen.catalogo_en_memoria = [
         _producto(1, "7501000000001", "AMOXICILINA"),
@@ -290,15 +301,15 @@ def test_una_lista_abierta_o_vencida_no_es_un_corte(cliente, almacen, almacenami
     almacen.ventas_en_memoria.append(_venta(dt.date(2026, 9, 16), 2, 1))
     cuerpo = cliente.get(RUTA).json()
 
-    assert almacenamiento.leer(NEGOCIO, dt.date(2026, 9, 15)).estado == VENCIDO
-    # El principio de la lista que nadie cerró, que es `piso_sin_pedir`. Aquí
-    # decía `2026-09-10` —siete días— y eso era la ventana ancha de la primera
-    # vez recogiéndolo **por accidente**. Desde que la ventana es de un día
-    # hábil (2026-09-20) lo recoge a propósito, y esta prueba pasó de
-    # comprobar una casualidad a comprobar la garantía.
-    assert cuerpo["ventas_consideradas_desde"] == "2026-09-15"
-    assert sorted(r["producto_id"] for r in cuerpo["renglones"]) == [1, 2], (
-        "Lo del día que nadie cerró desapareció de la lista siguiente."
+    cerrada = almacenamiento.leer(NEGOCIO, dt.date(2026, 9, 15))
+    assert cerrada.estado == CERRADO
+    assert cerrada.cerrado_por == SISTEMA
+    assert cuerpo["ventas_consideradas_desde"] == "2026-09-16", (
+        "El corte no avanzó hasta la lista que se acaba de cerrar sola."
+    )
+    assert sorted(r["producto_id"] for r in cuerpo["renglones"]) == [2], (
+        "El producto del día que se cerró solo se volvió a proponer: cerrar "
+        "es cerrar, aunque haya sido automático."
     )
 
 
@@ -665,25 +676,19 @@ def test_la_pantalla_avisa_cuando_la_lista_trae_mas_de_un_dia(cliente):
     )
 
 
-def test_un_dia_sin_cerrar_no_se_pierde_aunque_despues_se_cierre_otro(
+def test_un_dia_sin_cerrar_se_cierra_solo_al_abrirse_el_siguiente(
     cliente, almacen, almacenamiento
 ):
-    """**El hueco que se creia abierto, y no lo esta.** Escrito para medirlo.
+    """**Cambió el 2026-09-27** (decisión del dueño): reemplaza a la prueba que
+    aquí medía que un día sin cerrar "no se perdía" retrocediendo la ventana.
 
-    Al acortar la ventana a un dia habil quedo anotado como hueco conocido que
-    "un dia sin cerrar anterior a un corte posterior se pierde igual". Esta
-    prueba recorre ese escenario exacto y comprueba que NO se pierde. Existe
-    para que la afirmacion deje de descansar en un razonamiento.
-
-    El recorrido: el jueves se cierra. El viernes se abre y **nadie la cierra**.
-    El lunes se abre -- y tiene que traer el viernes, porque el corte sigue
-    siendo el del jueves y la ventana arranca al dia siguiente de ese corte. La
-    acumulacion desde el corte ya cubre cualquier racha de dias sin cerrar: no
-    hace falta ni extender la ventana ni segmentarla por dia.
-
-    Lo que hace que esto se sostenga es que el corte es `max(...)` sobre las
-    CERRADAS. Una lista abierta o vencida no lo mueve, asi que el corte se
-    queda atras y la ventana la alcanza sola.
+    El recorrido: el jueves se cierra. El viernes se abre y **nadie la
+    cierra**. El lunes se abre -- y **cierra sola la del viernes** (firmada por
+    `almacenamiento.SISTEMA`), moviendo el corte hasta ahí: la ventana del
+    lunes arranca el sábado, no el viernes. Las cinco piezas del viernes no
+    reaparecen en la lista del lunes -- siguen ahí, en la lista del viernes,
+    que se puede ir a ver (decisión 2 del ticket) -- y las dos del lunes salen
+    solas.
     """
     almacen.catalogo_en_memoria = [
         _producto(1, "7501000000001", "AMOXICILINA"),
@@ -695,18 +700,21 @@ def test_un_dia_sin_cerrar_no_se_pierde_aunque_despues_se_cierre_otro(
     jueves = cliente.get(RUTA).json()["pedido_sugerido_id"]
     cliente.post(f"{RUTA}/{jueves}/cerrar")
 
-    # Viernes: se arma y NADIE la cierra. Se quedara vencida.
+    # Viernes: se arma y NADIE la cierra.
     almacen.ventas_en_memoria.append(_venta(dt.date(2026, 9, 11), 2, 5))
-    cliente.get(RUTA)
+    viernes = cliente.get(RUTA).json()["pedido_sugerido_id"]
 
-    # Lunes.
+    # Lunes: al abrirse, cierra sola la del viernes.
     almacen.ventas_en_memoria.append(_venta(dt.date(2026, 9, 14), 2, 2))
     cuerpo = cliente.get(RUTA).json()
 
-    assert almacenamiento.leer(NEGOCIO, dt.date(2026, 9, 11)).estado == VENCIDO
-    assert cuerpo["ventas_consideradas_desde"] == "2026-09-11", (
-        "La ventana no retrocedio hasta el dia siguiente del corte: las ventas "
-        "del viernes que nadie cerro se cayeron al piso."
+    cerrada = almacenamiento.leer(NEGOCIO, dt.date(2026, 9, 11))
+    assert cerrada.pedido_sugerido_id == viernes
+    assert cerrada.estado == CERRADO
+    assert cerrada.cerrado_por == SISTEMA
+    assert cuerpo["ventas_consideradas_desde"] == "2026-09-12", (
+        "El corte no avanzó hasta la lista del viernes que se acaba de cerrar "
+        "sola."
     )
-    # Las cinco del viernes MAS las dos del lunes, en un solo renglon.
-    assert [r["cantidad_propuesta"] for r in cuerpo["renglones"]] == [7]
+    # Solo las dos del lunes: las cinco del viernes no se proponen otra vez.
+    assert [r["cantidad_propuesta"] for r in cuerpo["renglones"]] == [2]

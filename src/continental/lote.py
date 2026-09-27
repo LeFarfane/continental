@@ -114,6 +114,7 @@ from continental.almacenamiento import (
     SE_ACABO_EL_TIEMPO,
     SE_INTERRUMPIO,
     SIN_LISTA,
+    SISTEMA,
     TERMINO,
     AlmacenamientoDelPedido,
     CorridaDelLote,
@@ -122,6 +123,7 @@ from continental.almacenamiento import (
     dias_primera_vez_configurados,
     ventana_de_reposicion,
 )
+from continental.cierre import lo_que_se_perderia
 from continental.clasificacion import reglas_configuradas
 from continental.consultas import (
     GUARDADA,
@@ -1331,17 +1333,55 @@ def correr_el_lote(
                 ),
             )
 
+        # NO HAY LISTA LOS DOMINGOS NI LOS DÍAS FESTIVOS (decisión del dueño,
+        # 2026-09-27): mismo guardia que `web/app.py::pedido_sugerido`, con el
+        # mismo motivo — casi nunca se dispara por el camino ordinario (0
+        # ventas en domingo, y un festivo cerrado también da 0), pero cubre el
+        # caso anómalo de una venta con fecha de domingo o de festivo. `almacen
+        # .dia` puede fallar como cualquier lectura del almacén: si falla, el
+        # lote sigue igual que antes de este ticket, con su motivo en la
+        # bitácora en vez de tumbar la corrida por un guardia nuevo.
+        try:
+            dia = almacen.dia(ultima)
+        except Exception:  # noqa: BLE001 — sin saberlo, se sigue como antes de este ticket
+            log.exception("No se pudo leer si %s es domingo o festivo", ultima)
+            dia = None
+        if dia is not None and dia.es_dia_sin_lista:
+            return sellar(
+                detalle=(
+                    f"{ultima} es {dia.nombre_evento or 'domingo'}: no se arma "
+                    "lista. Las ventas de ese día esperan al siguiente día "
+                    "operable."
+                ),
+            )
+
         catalogo = almacen.catalogo()
         clases = clases_del_catalogo(catalogo)
 
-        vencidas = almacenamiento.vencer_las_de_dias_anteriores(negocio, ultima)
-        if vencidas:
+        # CIERRA -YA NO VENCE- TODA LISTA ABIERTA DE UN DÍA ANTERIOR, firmada
+        # por el sistema (decisión del dueño, 2026-09-27). Ver el comentario
+        # largo junto a `_CERRAR_LAS_DE_DIAS_ANTERIORES` en `almacenamiento.py`
+        # para el porqué completo; aquí solo se dispara con el mismo ancla que
+        # ya usaba `vencer_las_de_dias_anteriores`.
+        cerradas = almacenamiento.cerrar_las_de_dias_anteriores(negocio, ultima, SISTEMA)
+        for cerrada in cerradas:
             log.info(
-                "%d pedido(s) sugerido(s) anteriores al %s quedaron vencidos "
-                "antes de arrancar el lote.",
-                vencidas,
-                ultima,
+                "El sistema cerró el pedido sugerido %s (%s), que consideró "
+                "ventas hasta el %s, antes de arrancar el lote.",
+                cerrada.pedido_sugerido_id,
+                cerrada.fecha_del_pedido,
+                cerrada.ventana.hasta,
             )
+            perdidas = lo_que_se_perderia(cerrada)
+            if perdidas:
+                log.warning(
+                    "El cierre automático del pedido sugerido %s dio por "
+                    "atendidos %d renglón(es) con algo de un pedido anterior "
+                    "que no se volverá a proponer: %s",
+                    cerrada.pedido_sugerido_id,
+                    len(perdidas),
+                    [r.renglon_id for r in perdidas],
+                )
 
         ventana = ventana_de_reposicion(
             corte=almacenamiento.corte_del_ultimo_cerrado(negocio, ultima),
