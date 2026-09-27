@@ -1328,33 +1328,150 @@ const pintarAvisos = (avisos) => {
   caja.hidden = !caja.children.length;
 };
 
-async function cargarPedido() {
+// LA FECHA DE HOY, tal como la ancla el servidor (`max(fecha)` del almacén,
+// nunca el reloj). Se fija UNA vez, en la carga inicial —la única que pide
+// `/api/pedido-sugerido` sin fecha, con permiso de armar el día—: las flechas
+// siempre navegan con una fecha explícita de `vecinos` y nunca vuelven a
+// pedirla. Sirve para que el contenedor de navegación pueda decir "(hoy)".
+let FECHA_DE_HOY = null;
+
+// LA FECHA QUE SE ESTÁ VIENDO AHORA, a diferencia de `FECHA_DE_HOY`: ésta SÍ
+// cambia con cada navegación. Recibir una recepción probable, cancelar un
+// pedido o devolver un atrasado (más abajo) vuelven a cargar la pantalla
+// entera al terminar —cambia lo que viene en camino, que no se recalcula a
+// mano—, y sin esto la recarga siempre volvía a "hoy" así se hubiera hecho el
+// clic viendo un día de la bitácora: la persona perdía el lugar donde estaba.
+let FECHA_ACTUAL = null;
+
+// LO QUE SOLO PINTA UNA LISTA CON RENGLONES DE VERDAD (2026-09-27). Hasta la
+// bitácora navegable, `cargarPedido` corría UNA vez por carga de página y
+// nunca dejaba nada prendido de un día anterior. Navegar sí puede: un
+// domingo, un festivo, el 404 de la bitácora o una falla pueden llegar
+// DESPUÉS de que otro día ya encendió la tabla, el cierre o alguno de estos
+// recuadros, y sin apagarlos se verían pegados de un día que ya no es éste.
+const ocultarLoDeOtroDia = () => {
+  ['pedido-tabla', 'armado', 'cierre', 'pedido-avisos', 'vistas', 'completar',
+    'particion', 'descartados', 'pedido-corrida', 'pedido-sin-clasificar',
+    'recepcion', 'en-camino'].forEach(id => {
+    document.getElementById(id).hidden = true;
+  });
+};
+
+// EL CONTENEDOR DE NAVEGACIÓN (decisión del dueño, 2026-09-27): la fecha al
+// centro, una flecha a cada lado, y cada lista es un día. Vive aparte de
+// `cargarPedido` porque las tres formas de respuesta que puede traer un día
+// —la lista completa, "domingo o festivo" y el 404 de la bitácora que no
+// sabe por qué— traen las tres sus `vecinos`, y las tres necesitan las
+// mismas flechas.
+//
+// `vecinos` en `null` (o ausente) es "no se pudo saber" (regla 4 de
+// `CLAUDE.md`): las dos flechas se esconden en vez de ofrecer una que
+// podría 404ear o mentir sobre qué hay al lado. `vecinos.anterior` o
+// `.siguiente` en `null` es un HECHO —no hay nada de ese lado— y se lee
+// igual: la flecha no aparece.
+const pintarNavegacion = (fecha, vecinos) => {
+  const caja = document.getElementById('pedido-navegacion');
+  if (!fecha) { caja.hidden = true; return; }
+  const etiqueta = document.getElementById('pedido-navegacion-fecha');
+  etiqueta.textContent = enPalabras(fecha) + (fecha === FECHA_DE_HOY ? ' (hoy)' : '');
+  const anterior = document.getElementById('pedido-navegacion-anterior');
+  const siguiente = document.getElementById('pedido-navegacion-siguiente');
+  anterior.disabled = false;
+  siguiente.disabled = false;
+  anterior.hidden = !(vecinos && vecinos.anterior);
+  siguiente.hidden = !(vecinos && vecinos.siguiente);
+  if (vecinos && vecinos.anterior) anterior.onclick = () => cargarPedido(vecinos.anterior);
+  if (vecinos && vecinos.siguiente) siguiente.onclick = () => cargarPedido(vecinos.siguiente);
+  caja.hidden = false;
+};
+
+// RECARGA LA FECHA QUE SE ESTÁ VIENDO, no siempre "hoy". La usan las cuatro
+// acciones de recepción y tránsito de más abajo —confirmar o rechazar una
+// recepción probable, recibir a mano, cancelar un pedido, devolver un
+// atrasado—, que cambian lo que viene en camino y no pueden pintar su propio
+// resultado porque ese bloque solo lo trae la carga completa. "Hoy" sigue
+// pidiéndose sin fecha —con permiso de armar el día si hace falta—; un día
+// de la bitácora se vuelve a leer por `GET .../dia/{fecha}`, que solo lee.
+const recargarLoQueSeVe = () =>
+  cargarPedido(FECHA_ACTUAL === FECHA_DE_HOY ? undefined : FECHA_ACTUAL);
+
+// `fecha` (`AAAA-MM-DD`) es la que traen los `vecinos` de otro día: nunca la
+// teclea nadie ni sale del reloj del navegador. Sin ella se pide **hoy**, que
+// es la única llamada con permiso de armar el día si hace falta —decisión 1
+// del dueño, "al abrir, siempre cae en el día de hoy"—; con ella se pide la
+// bitácora navegable (`GET .../dia/{fecha}`), que **solo lee** (ADR 0020).
+async function cargarPedido(fecha) {
   const corte = document.getElementById('corte');
   const tabla = document.getElementById('pedido-tabla');
-  let datos = await respuestaDe(fetch('/api/pedido-sugerido'));
+  // Mientras la petición viaja, las flechas no invitan a un segundo clic que
+  // se cruce con el primero en el aire; `pintarNavegacion` las reactiva ella
+  // misma en cuanto llega la respuesta, por cualquiera de las salidas.
+  document.getElementById('pedido-navegacion-anterior').disabled = true;
+  document.getElementById('pedido-navegacion-siguiente').disabled = true;
+  const url = fecha ? '/api/pedido-sugerido/dia/' + fecha : '/api/pedido-sugerido';
+  let datos = await respuestaDe(fetch(url));
 
-  // Un hueco con su motivo, nunca una lista vacía: vacío se lee "hoy no se
-  // vendió nada" y el pedido del día no se hace. Entra aquí TODO lo que no es
-  // la lista: el hueco del servidor, su 500 y la falta de respuesta. Hasta el
-  // ticket 29 el 500 se colaba a la rama de abajo y la pantalla decía que el
-  // almacén no tenía ni una venta.
-  if (datos.ok === false) {
+  // UNA FALLA DE VERDAD: sin respuesta del servidor, o el servidor leyó y no
+  // pudo (`fallas.que_hacer`, ticket 29). El 404 de la bitácora que "no sabe
+  // por qué" —más abajo— no trae `que_hacer`, y por eso esta condición lo
+  // deja pasar de largo: no es la misma falla y no se pinta igual.
+  if (datos.ok === false && (datos.que_hacer || datos.sin_respuesta)) {
     // Si el servidor mandó su frase, ésa ya dice qué no se pudo armar: el
     // titular se esconde para no decirlo dos veces (recorrido del ticket 29).
     // Sin respuesta no hay frase, y el titular da el contexto.
+    corte.hidden = false;
     corte.textContent = 'No se pudo armar el pedido sugerido.';
     corte.hidden = !!datos.frase;
     notaDeFalla('pedido-nota', datos);
+    ocultarLoDeOtroDia();
+    pintarNavegacion(fecha || null, datos.vecinos);
+    return;
+  }
+
+  // LA BITÁCORA NAVEGABLE (ADR 0020): no hay lista para esa fecha y ni el
+  // calendario dice por qué. Puede ser una fecha futura, de antes de que
+  // Continental existiera, o un hueco real —el servidor ya dijo que no los
+  // distingue, y aquí no se inventa una causa que los datos no dan (regla 4
+  // de `CLAUDE.md`): se enseña su `detalle` tal cual, sin componer nada.
+  if (datos.ok === false) {
+    corte.hidden = true;
+    ocultarLoDeOtroDia();
+    nota('pedido-nota', datos.detalle || '', 'aviso');
+    pintarNavegacion(fecha, datos.vecinos);
     return;
   }
 
   // Qué tan recientes son las ventas que SÍ se leyeron, dicho por el servidor
   // (ticket 29): un lunes por la mañana, la lista del viernes es lo normal, y
-  // esto lo dice. Si falta un día que ya debía estar, lo dice también.
+  // esto lo dice. Para un día cualquiera de la bitácora viaja en `null` a
+  // propósito —no aplica ahí— y `pintarVentas` ya sabe esconderse con eso.
   pintarVentas(datos.ventas);
 
+  // La fecha que se está mostrando, para la navegación: la de la lista, o la
+  // del día sin lista por calendario. Las dos vienen del servidor y nunca de
+  // lo que se pidió, que es la garantía que trae `Vecinos` (dos lecturas en
+  // dos momentos no pueden discrepar). Si esta carga fue la de "hoy" —sin
+  // fecha—, aquí queda fijada para el resto de la sesión.
+  const fechaMostrada = datos.dia_sin_lista ? datos.dia_sin_lista.fecha : datos.fecha_de_ventas;
+  if (!fecha && fechaMostrada) FECHA_DE_HOY = fechaMostrada;
+  if (fechaMostrada) FECHA_ACTUAL = fechaMostrada;
+  pintarNavegacion(fechaMostrada, datos.vecinos);
+
+  // DOMINGO O FESTIVO (decisión del dueño, 2026-09-27): por calendario no se
+  // arma lista ese día. Nunca una lista vacía sin decir por qué (regla 4):
+  // la razón llega hecha de Python, con el nombre del evento si lo hay —esta
+  // pantalla no compone la frase, solo la pinta.
+  if (datos.dia_sin_lista) {
+    corte.hidden = true;
+    ocultarLoDeOtroDia();
+    nota('pedido-nota', datos.dia_sin_lista.frase, 'aviso');
+    return;
+  }
+
   // Ni una venta en el almacén: el servidor lo AFIRMA —leyó y no había—, con
-  // su frase en `ventas`. No se escribe nada más.
+  // su frase en `ventas`. No se escribe nada más. Solo puede pasar en la
+  // carga de "hoy": la bitácora navegable nunca trae esta forma (siempre hay
+  // una lista, un día sin lista por calendario, o el 404 de arriba).
   if (!datos.fecha_de_ventas) {
     corte.hidden = true;
     return;
@@ -1370,6 +1487,9 @@ async function cargarPedido() {
   // `pro_id` de SICAR y cuál no (ticket 20).
   if (Array.isArray(datos.puente)) PROVEEDORES = datos.puente;
 
+  // Un día anterior pudo esconder este párrafo (domingo, 404, una falla): se
+  // vuelve a enseñar aquí, con la lista de verdad que sí hay que mostrar.
+  corte.hidden = false;
   corte.innerHTML = '';
   corte.append('Ventas ');
   const cuando = document.createElement('strong');
@@ -1454,6 +1574,15 @@ async function cargarPedido() {
     // La frase llega de Python (ticket 29): "no se vendió nada" era falso —el
     // último día de la ventana siempre tiene ventas—.
     nota('pedido-nota', datos.lista_vacia || '', 'aviso');
+    // Un día anterior con renglones pudo dejar la tabla y estos recuadros
+    // prendidos: sin apagarlos aquí, esta lista vacía se vería con la de otro
+    // día pegada debajo (armado, cierre, avisos y lo que viene en camino ya
+    // se pintaron arriba con los datos de HOY, y esos sí se quedan).
+    tabla.hidden = true;
+    ['vistas', 'completar', 'particion', 'descartados', 'pedido-corrida',
+      'pedido-sin-clasificar'].forEach(id => {
+      document.getElementById(id).hidden = true;
+    });
     return;
   }
 
@@ -2360,7 +2489,7 @@ const recibirORechazar = async (accion, renglonId, compras, boton) => {
     notaDeFalla('pedido-accion', respuesta);
     return;
   }
-  await cargarPedido();
+  await recargarLoQueSeVe();
   nota('pedido-accion', respuesta.frase, 'todo');
 };
 
@@ -2415,7 +2544,7 @@ const recibirAMano = async (renglonId, escrito, boton) => {
     notaDeFalla('pedido-accion', respuesta);
     return;
   }
-  await cargarPedido();
+  await recargarLoQueSeVe();
   nota('pedido-accion', respuesta.frase, 'todo');
 };
 
@@ -2438,7 +2567,7 @@ const cancelarPedido = async (pedidoId, boton) => {
     notaDeFalla('pedido-accion', respuesta);
     return;
   }
-  await cargarPedido();
+  await recargarLoQueSeVe();
   nota('pedido-accion', respuesta.frase, 'todo');
 };
 
@@ -2452,7 +2581,7 @@ const devolverAtrasado = async (renglonId, boton) => {
     notaDeFalla('pedido-accion', respuesta);
     return;
   }
-  await cargarPedido();
+  await recargarLoQueSeVe();
   nota('pedido-accion', respuesta.frase, 'todo');
 };
 

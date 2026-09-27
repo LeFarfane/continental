@@ -1584,7 +1584,9 @@ def test_la_pantalla_manda_las_compras_que_vio():
     inicio = pantalla.index("const recibirORechazar")
     cuerpo = pantalla[inicio : inicio + 2500]
     assert "JSON.stringify({ compras })" in cuerpo
-    assert "await cargarPedido()" in cuerpo
+    # Recarga la fecha que se está viendo -"hoy" o un día de la bitácora
+    # (2026-09-27)-, no siempre "hoy": ver `recargarLoQueSeVe`.
+    assert "await recargarLoQueSeVe()" in cuerpo
 
 
 def test_la_pantalla_conserva_la_recepcion_de_la_carga():

@@ -102,6 +102,12 @@ li:last-child { border-bottom: 0; }
 .detalle { color: var(--tenue); font-size: .88rem; }
 code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
 
+/* EL CONTENEDOR DE NAVEGACIÓN (2026-09-27): la fecha al centro, una flecha a
+   cada lado. Los botones reusan `.accion` -no estrenan un estilo nuevo- y
+   esto solo acomoda a los tres en línea. */
+.navegacion { display: flex; align-items: center; justify-content: center; gap: 1rem; margin: 0 0 .75rem; }
+.navegacion span { font-weight: 600; min-width: 15rem; text-align: center; }
+
 /* El pedido sugerido. Tabla y no lista: son cinco datos por renglón y las
    cifras se leen en columna, que es como se verifica de un vistazo. */
 .corte { margin: 0 0 .35rem; font-size: 1.05rem; }

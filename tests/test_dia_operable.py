@@ -81,6 +81,11 @@ def test_un_domingo_con_una_venta_anomala_no_arma_lista(cliente, almacen):
     assert cuerpo["dia_sin_lista"]["fecha"] == UN_DOMINGO.isoformat()
     assert cuerpo["dia_sin_lista"]["es_cerrado"] is True
     assert cuerpo["dia_sin_lista"]["es_festivo_oficial"] is False
+    # La misma frase hecha en Python que trae la bitácora navegable
+    # (`GET .../dia/{fecha}`, `tests/test_navegacion.py`): esta ruta pasa por
+    # el mismo `_dia_sin_lista`, así que las dos dicen lo mismo con las
+    # mismas palabras.
+    assert cuerpo["dia_sin_lista"]["frase"] == "Domingo: la farmacia no abre y no hay lista."
 
 
 def test_un_festivo_entre_semana_tampoco_arma_lista_aunque_es_cerrado_no_lo_vea(

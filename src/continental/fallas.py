@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import datetime as dt
 
+from continental.almacen import DiaCalendario
 from continental.transito import ZONA_DE_LA_FARMACIA, fecha_en_palabras
 
 #: Lo que se dice cuando el YAML no trae a quién avisarle. Es una función, no
@@ -195,6 +196,25 @@ def _rango(desde: dt.date, hasta: dt.date) -> str:
     if (desde.year, desde.month) == (hasta.year, hasta.month):
         izquierda = izquierda.split(" de ")[0]
     return f"del {izquierda} al " + fecha_en_palabras(hasta).removeprefix("el ")
+
+
+def frase_del_dia_sin_lista(dia: DiaCalendario) -> str:
+    """Por qué no hay lista este día: domingo o festivo (decisión del dueño, 2026-09-27).
+
+    Nunca una lista vacía sin decir por qué (regla 4 de `CLAUDE.md`): armar
+    una de un día cerrado se leería como "no se vendió nada", y lo que pasó
+    es que la farmacia no abrió. Vive aquí y no en el JavaScript por la misma
+    lección de los tickets 15 y 21 que el resto de este módulo.
+
+    `nombre_evento` manda cuando existe: es lo único que distingue un festivo
+    entre semana —que trae `es_cerrado = False`, la trampa de `DiaCalendario`—
+    de un domingo. Sin él, es domingo: los dos `es_cerrado` y
+    `es_festivo_oficial` pueden ser ciertos a la vez (un festivo que cae en
+    domingo), y ahí también manda el nombre porque es el dato más específico.
+    """
+    if dia.nombre_evento:
+        return f"{dia.nombre_evento}: día festivo. La farmacia no abre y no hay lista."
+    return "Domingo: la farmacia no abre y no hay lista."
 
 
 # ------------------------------------------------------------- las ventas

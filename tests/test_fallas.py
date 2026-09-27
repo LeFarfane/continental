@@ -41,7 +41,7 @@ from fastapi.testclient import TestClient
 
 from conftest import pantalla_completa, pantalla_servida
 from continental import config
-from continental.almacen import LineaDeCompra, LineaDeVenta, Producto
+from continental.almacen import DiaCalendario, LineaDeCompra, LineaDeVenta, Producto
 from continental.consultas import RegistroDeConsultas
 from continental.dobles import AlmacenamientoFalso, AlmacenFalso, DoyleFalso, respuesta_lista
 from continental.fallas import (
@@ -57,6 +57,7 @@ from continental.fallas import (
     falla_como_json,
     frase_de_doyle_caido,
     frase_de_la_lista_vacia,
+    frase_del_dia_sin_lista,
     frase_del_hueco,
     que_hacer,
     ultimo_dia_que_ya_deberia_estar,
@@ -356,6 +357,53 @@ def test_la_lista_vacia_no_dice_que_no_se_vendio_nada():
 
 def test_la_lista_vacia_de_un_solo_dia_lo_dice_con_una_fecha():
     assert "del lunes 21 de septiembre" in frase_de_la_lista_vacia(LUNES_21, LUNES_21)
+
+
+# ------------------------------------------ domingo o festivo (2026-09-27)
+#
+# La bitácora navegable (ADR 0020) no arma lista un domingo ni un festivo, y
+# la regla 4 de `CLAUDE.md` exige decir por qué: `frase_del_dia_sin_lista`
+# es la frase que la pantalla nueva pinta tal cual, sin componer nada — la
+# misma lección de los tickets 15 y 21 que ya sigue el resto de este módulo.
+
+
+def _domingo(fecha: dt.date) -> DiaCalendario:
+    return DiaCalendario(
+        fecha=fecha, es_cerrado=True, es_festivo_oficial=False, nombre_evento=None
+    )
+
+
+def _festivo(fecha: dt.date, nombre: str, *, tambien_domingo: bool = False) -> DiaCalendario:
+    return DiaCalendario(
+        fecha=fecha, es_cerrado=tambien_domingo, es_festivo_oficial=True,
+        nombre_evento=nombre,
+    )
+
+
+def test_un_domingo_dice_domingo_y_no_inventa_un_evento():
+    frase = frase_del_dia_sin_lista(_domingo(dt.date(2026, 9, 20)))
+
+    assert frase == "Domingo: la farmacia no abre y no hay lista."
+
+
+def test_un_festivo_entre_semana_nombra_el_evento():
+    frase = frase_del_dia_sin_lista(_festivo(dt.date(2026, 9, 16), "Independencia"))
+
+    assert frase == "Independencia: día festivo. La farmacia no abre y no hay lista."
+
+
+def test_un_festivo_que_cae_en_domingo_dice_el_nombre_y_no_solo_domingo():
+    """El dato más específico manda: `nombre_evento` gana aunque `es_cerrado`
+    también sea cierto (un festivo fijo que cae en domingo ese año)."""
+    frase = frase_del_dia_sin_lista(
+        _festivo(dt.date(2026, 12, 25), "Navidad", tambien_domingo=True)
+    )
+
+    assert frase == "Navidad: día festivo. La farmacia no abre y no hay lista."
+
+
+def test_la_frase_del_dia_sin_lista_nunca_dice_que_no_se_vendio_nada():
+    assert "no se vendió nada" not in frase_del_dia_sin_lista(_domingo(LUNES_21))
 
 
 def test_la_carga_trae_el_estado_de_las_ventas_hecho_en_python(

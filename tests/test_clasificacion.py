@@ -343,11 +343,14 @@ def test_la_pantalla_marca_el_renglon_que_no_es_medicamento(cliente):
 
     assert "r.clasificacion" in portada
     assert "sin clasificar" in portada
-    # **La lista se pide UNA sola vez**, y eso es lo que de verdad se está
-    # afirmando: ni el interruptor, ni descartar, ni consultar un precio
-    # vuelven a pedirla. Dos lecturas en momentos distintos pueden no coincidir
-    # y nadie sabría cuál tiene razón.
-    assert portada.count("fetch('/api/pedido-sugerido')") == 1
+    # **La lista tiene un solo sitio en el código que la pide**, y eso es lo
+    # que de verdad se está afirmando: ni el interruptor, ni descartar, ni
+    # consultar un precio vuelven a pedirla. Dos lecturas en momentos
+    # distintos pueden no coincidir y nadie sabría cuál tiene razón. Desde la
+    # bitácora navegable (2026-09-27) esa única llamada usa una URL que
+    # cambia según el día (`fetch(url)`, hoy o `/dia/{fecha}`) y no la
+    # cadena suelta de antes: lo que sigue fijo es que hay una sola.
+    assert portada.count("fetch(url)") == 1
 
     # DIEZ llamadas en total y ni una más. Fueron cinco, siete con el ticket 12
     # y diez con el 19, y el número está escrito a mano a propósito: cada
@@ -397,8 +400,11 @@ def test_la_pantalla_marca_el_renglon_que_no_es_medicamento(cliente):
     # enviado algo—; y `/reabrir`, el deshacer. Ninguna vuelve a pedir la
     # lista: el resumen es la pregunta de un clic, y reabrir devuelve la lista
     # entera como cerrar.
-    assert portada.count("fetch('/api/") == 18
-    assert portada.count("fetch('/api/pedido-sugerido')") == 1
+    # La de la lista ya no cuenta aquí —es `fetch(url)`, comprobada arriba—,
+    # así que el total baja de 18 a 17. Navegar con las flechas de la
+    # bitácora (2026-09-27) llama a esa MISMA `fetch(url)` con otra fecha, sin
+    # agregar un sitio nuevo: este número no se mueve por la navegación.
+    assert portada.count("fetch('/api/") == 17
 
 
 # ------------------------------------------------------------------ ayudas

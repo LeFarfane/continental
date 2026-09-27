@@ -13,6 +13,17 @@
 
   <section>
     <h2>Pedido sugerido</h2>
+    <!-- EL CONTENEDOR DE NAVEGACIÓN (decisión del dueño, 2026-09-27): la
+         fecha al centro, una flecha a cada lado, y cada lista es un día.
+         Nace escondido: sin una fecha que mostrar -un almacén sin una sola
+         venta todavía- no hay nada que navegar. Las flechas nacen sin
+         `hidden` propio -esconder el contenedor ya las esconde a las dos- y
+         `pintarNavegacion` decide en cada carga si cada una se enseña. -->
+    <div class="navegacion" id="pedido-navegacion" hidden>
+      <button type="button" class="accion" id="pedido-navegacion-anterior" aria-label="Día anterior">&larr;</button>
+      <span id="pedido-navegacion-fecha"></span>
+      <button type="button" class="accion" id="pedido-navegacion-siguiente" aria-label="Día siguiente">&rarr;</button>
+    </div>
     <p class="corte" id="corte">Armando la lista…</p>
     <!-- QUÉ TAN RECIENTES SON LAS VENTAS (ticket 29). Pegado al corte porque
          lo explica: la lista del viernes vista un lunes por la mañana dice si

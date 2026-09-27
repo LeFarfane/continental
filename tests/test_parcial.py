@@ -1789,7 +1789,11 @@ def test_la_pantalla_recibe_a_mano_y_manda_solo_las_piezas():
     assert "'/recepcion/a-mano'" in pantalla
     assert "JSON.stringify({ piezas })" in pantalla
     inicio = pantalla.index("const recibirAMano")
-    assert "await cargarPedido()" in pantalla[inicio : inicio + 2000]
+    # Recarga la fecha que se está viendo -"hoy" o un día de la bitácora
+    # (2026-09-27)-, no siempre "hoy": `recargarLoQueSeVe` es la misma regla
+    # de siempre —se vuelve a cargar la pantalla entera porque lo que viene
+    # en camino solo lo trae la carga— con el lugar correcto.
+    assert "await recargarLoQueSeVe()" in pantalla[inicio : inicio + 2000]
 
 
 def test_la_pantalla_no_compone_las_frases_de_lo_recibido():

@@ -1371,7 +1371,7 @@ def test_la_pantalla_no_compone_las_frases_que_afirman():
 def test_el_bloque_se_pinta_tambien_el_dia_sin_renglones():
     """Una lista vacía no quiere decir que no venga nada en camino."""
     pagina = pantalla_completa()
-    inicio = pagina.index("async function cargarPedido()")
+    inicio = pagina.index("async function cargarPedido(fecha)")
     pintado = pagina.index("pintarEnCamino(", inicio)
     salida = pagina.index("if (!datos.renglones.length)", inicio)
 

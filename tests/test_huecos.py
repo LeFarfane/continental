@@ -805,8 +805,10 @@ def test_la_pantalla_avisa_cuando_el_conteo_envejecio():
 
     assert "conteoEnvejecido" in portada
     assert "Recarga la página para ponerlo al día" in portada
-    # Y sigue pidiéndose una sola vez: si esto sube a dos, el acuerdo se rompió.
-    assert portada.count("fetch('/api/pedido-sugerido')") == 1
+    # Y sigue habiendo un solo sitio que la pide: si esto sube a dos, el
+    # acuerdo se rompió. Desde la bitácora navegable (2026-09-27) esa única
+    # llamada es `fetch(url)`, con la URL de hoy o la de un día cualquiera.
+    assert portada.count("fetch(url)") == 1
 
 
 def test_la_pantalla_no_dice_que_la_referencia_es_la_mas_barata_si_fue_la_unica():

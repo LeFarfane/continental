@@ -187,6 +187,10 @@ def test_un_domingo_sin_lista_dice_dia_sin_lista_y_no_404(cliente, almacen):
     assert cuerpo["ok"] is True
     assert cuerpo["dia_sin_lista"]["es_cerrado"] is True
     assert cuerpo["pedido_sugerido_id"] is None
+    # La pantalla nueva (otro agente, sobre lo que este archivo deja) no
+    # compone la frase: la pinta tal cual llega de
+    # `fallas.frase_del_dia_sin_lista` (lección de los tickets 15 y 21).
+    assert cuerpo["dia_sin_lista"]["frase"] == "Domingo: la farmacia no abre y no hay lista."
 
 
 def test_un_festivo_entre_semana_sin_lista_tambien_dice_dia_sin_lista(
@@ -208,6 +212,9 @@ def test_un_festivo_entre_semana_sin_lista_tambien_dice_dia_sin_lista(
 
     assert cuerpo["ok"] is True
     assert cuerpo["dia_sin_lista"]["nombre_evento"] == "Independencia"
+    assert cuerpo["dia_sin_lista"]["frase"] == (
+        "Independencia: día festivo. La farmacia no abre y no hay lista."
+    )
 
 
 def test_los_vecinos_de_un_dia_leido_por_fecha_se_calculan_igual(
@@ -228,3 +235,50 @@ def test_los_vecinos_de_un_dia_leido_por_fecha_se_calculan_igual(
         "anterior": LUNES.isoformat(),
         "siguiente": MIERCOLES.isoformat(),
     }
+
+
+# ============================================ lo pasado se navega, de solo
+# ============================================ lectura, pero se puede reabrir
+#
+# Decisión 2 y 3 del dueño (2026-09-27, ADR 0020): un día pasado se ve por
+# `GET .../dia/{fecha}` con su estado normal `cerrado` -no se descarta, no se
+# ajusta cantidad, no se pide-, y la pantalla ofrece reabrirlo. Las dos cosas
+# ya las calcula esta misma ruta -comparte `_respuesta_de_la_lista` con la de
+# hoy-, y lo que prueban los dos casos de aquí es que le llegan igual de
+# completas a la pantalla nueva por este camino como por el de siempre.
+
+
+def test_un_dia_pasado_cerrado_no_se_deja_editar(cliente, almacen):
+    """`se_puede_editar` en falso por renglón: la pantalla nueva no necesita
+    adivinar el estado de la lista para saber que no hay nada que tocar."""
+    almacen.catalogo_en_memoria = [_producto()]
+    almacen.ventas_en_memoria = [_venta(LUNES)]
+    lunes = _abrir(cliente)
+    cliente.post(f"{RUTA}/{lunes['pedido_sugerido_id']}/cerrar")
+
+    cuerpo = _dia(cliente, LUNES).json()
+
+    assert cuerpo["estado"] == CERRADO
+    assert all(r["se_puede_editar"] is False for r in cuerpo["renglones"])
+
+    # Y el servidor lo exige también, no solo lo declara: descartar un
+    # renglón de esta lista pasada rebota con un 409, el mismo candado que
+    # ya prueba `test_descarte.py` para una lista cerrada cualquiera.
+    renglon_id = cuerpo["renglones"][0]["renglon_id"]
+    rechazado = cliente.post(f"/api/renglon/{renglon_id}/descartar")
+    assert rechazado.status_code == 409
+
+
+def test_una_lista_cerrada_leida_por_fecha_ofrece_reabrir(cliente, almacen):
+    """Solo lectura no quiere decir sin salida: el botón de reabrir viaja
+    igual por esta ruta que por la de hoy (`cierre.reapertura`)."""
+    almacen.catalogo_en_memoria = [_producto()]
+    almacen.ventas_en_memoria = [_venta(LUNES)]
+    lunes = _abrir(cliente)
+    cliente.post(f"{RUTA}/{lunes['pedido_sugerido_id']}/cerrar")
+
+    cuerpo = _dia(cliente, LUNES).json()
+
+    assert cuerpo["reapertura"] is not None
+    assert cuerpo["reapertura"]["se_puede"] is True
+    assert cuerpo["reapertura"]["boton"]

@@ -88,6 +88,7 @@ from continental.fallas import (
     frase_de_la_lista_vacia,
     frase_de_pedidos_sin_leer,
     frase_de_precios_sin_leer,
+    frase_del_dia_sin_lista,
     frase_del_hueco,
     que_hacer,
 )
@@ -4732,10 +4733,11 @@ def _dia_sin_lista(dia: DiaCalendario, ventas: dict | None, vecinos: Vecinos | N
     """Domingo o festivo: por calendario, hoy no se arma lista (2026-09-27).
 
     Misma forma que `_sin_ventas` —la pantalla ya sabe leer una respuesta sin
-    lista— y con dos campos más: `dia_sin_lista` dice **por qué** (para no
-    confundir "cerrado por calendario" con "sin ventas" ni con "el almacén no
-    contestó"), y `vecinos` deja que la pantalla ofrezca de una vez la última
-    lista de verdad en vez de una pantalla en blanco sin salida.
+    lista— y con tres campos más: `dia_sin_lista` dice **por qué**, con su
+    `frase` ya redactada por `fallas.frase_del_dia_sin_lista` —la pantalla no
+    compone frases que afirman algo, por la lección de los tickets 15 y 21—,
+    y `vecinos` deja que la pantalla ofrezca de una vez la última lista de
+    verdad en vez de una pantalla en blanco sin salida.
     """
     return {
         **_sin_ventas(ventas),
@@ -4744,6 +4746,7 @@ def _dia_sin_lista(dia: DiaCalendario, ventas: dict | None, vecinos: Vecinos | N
             "es_cerrado": dia.es_cerrado,
             "es_festivo_oficial": dia.es_festivo_oficial,
             "nombre_evento": dia.nombre_evento,
+            "frase": frase_del_dia_sin_lista(dia),
         },
         "vecinos": _vecinos_como_json(vecinos),
     }
