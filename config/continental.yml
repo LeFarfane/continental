@@ -144,12 +144,25 @@ pedido:
   # caducó`" (ver `continental.lote.proveedores_con_sesion_caida`)-, solo que
   # sea estable para no tener que perseguirlo si el producto se deja de vender.
   #
-  # SIN CONFIGURAR TODAVÍA. Mientras falte, el lote cae de respaldo a la clave
-  # del primer renglón con EAN de la lista de hoy y lo avisa en el journal: la
-  # sonda sigue activa -nunca se salta en silencio-, solo que con una
-  # identidad que cambia cada noche y repitiendo esa búsqueda dos veces. Ver
-  # `continental.lote._clave_de_sonda`.
-  # clave_de_sonda: "7501234567890"
+  # ES SIGDAN MOMETASONA, FRASCO DE 18 ML, y lo eligió el dueño el 2026-09-26
+  # por ser el producto estrella de la farmacia. Medido sobre `marts` antes de
+  # escribirlo aquí, para no elegir de memoria:
+  #
+  #   7502256040203  SIGDAN MOMETASONA 18 ML     100 líneas · 106 piezas
+  #                                              $11,943 de utilidad
+  #                                              última venta 2026-09-25
+  #   7502256040197  SIGDAN pediátrica            22 líneas ·  24 piezas
+  #                                              $1,612 · última 2026-06-05
+  #
+  # Se descartó la pediátrica a propósito: lleva casi cuatro meses sin venderse
+  # y una sonda que se apoya en un producto muerto es la que un día deja de
+  # existir en el catálogo del proveedor sin que nadie lo note.
+  #
+  # Si algún día deja de venderse, esto se cambia aquí y en ningún otro lado.
+  # Mientras falte, el lote cae de respaldo a la clave del primer renglón con
+  # EAN de la lista de hoy y lo avisa en el journal: la sonda nunca se salta en
+  # silencio. Ver `continental.lote._clave_de_sonda`.
+  clave_de_sonda: "7502256040203"
 
   # El botón "completar lo que falta" (ticket 19). Vuelve a consultar SOLO los
   # renglones a los que volver a preguntar puede cambiarles algo -sin lectura,
