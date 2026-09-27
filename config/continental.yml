@@ -127,6 +127,37 @@ pedido:
   # atrasado, y dice por qué. Ver `dias_en_transito_para_atrasado_configurados`.
   dias_en_transito_para_atrasado: 7
 
+  # LA CONCILIACIÓN DIARIA (2026-09-27, decisión del dueño: seguimos suponiendo
+  # que alguien va a marcar "Enviar", pero con tolerancia a que se le olvide uno
+  # o dos días). La encargada pide directo en el portal de NADRO sin pasar por
+  # esta pantalla, así que "no aparece todavía una compra que empareje esta
+  # lista" no es lo mismo que "no se compró": el respaldo de SICAR llega hasta
+  # 2.5 días tarde (CLAUDE.md) y hay que dejarle ese margen antes de decir que
+  # un renglón propuesto de verdad no se compró.
+  #
+  # CUÁNTOS DÍAS HÁBILES, Y NO CORRIDOS. Una ventana de días corridos se
+  # quedaría corta justo los lunes: el respaldo del viernes por la tarde y el
+  # del sábado entero llegan hasta el lunes en la noche, y contra una lista del
+  # viernes eso ya son casi tres días corridos sin haber pasado un solo día
+  # hábil. `marts.dim_fecha` dice qué día es hábil -domingo por `es_cerrado`,
+  # festivo por `es_festivo_oficial`; OJO, `es_cerrado` SOLO marca domingos, el
+  # festivo hay que mirarlo aparte (la trampa del ticket de "no domingos ni
+  # festivos", 2026-09-27)-.
+  #
+  # TRES, Y NO ESTÁ MEDIDO: como con `dias_en_transito_para_atrasado`, hasta que
+  # haya un mes de conciliaciones no hay un solo tiempo real de "cuánto tarda
+  # una compra en aparecer emparejada" del cual sacar el número. Se eligió con
+  # el mismo margen que ya cubre el peor caso del respaldo (2.5 días) redondeado
+  # a un día hábil completo de colchón, para que "se le olvidó un día" no se
+  # lea todavía como "no se compró".
+  #
+  # UN ENTERO Y NADA MÁS, y TRUENA SI FALTA -al revés que
+  # `dias_primera_vez` y como `dias_en_transito_para_atrasado`-: este número
+  # decide cuándo un renglón propuesto se dice "no comprado" de verdad, y
+  # adivinar uno sería inventar la palabra del dueño en su lugar. Ver
+  # `tolerancia_dias_habiles_configurada`.
+  tolerancia_dias_habiles: 3
+
   # LA SONDA DE SESIONES (ticket 30, ADR pendiente de aprobar). Antes de tocar
   # el primer renglón, el lote nocturno hace UNA búsqueda real con este EAN
   # para comprobar que las cuatro sesiones de proveedor sirven de verdad -y se

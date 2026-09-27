@@ -239,11 +239,13 @@ class DiaCalendario:
 class LecturaDelAlmacen(Protocol):
     """El borde de lectura. Solo `SELECT`, y solo datos de salida.
 
-    Seis lecturas y ninguna más: las tres que el módulo de Pedido necesitaba,
+    Siete lecturas y ninguna más: las tres que el módulo de Pedido necesitaba,
     el ancla temporal, desde el ticket 26 la quinta —qué productos han
-    aparecido alguna vez en una compra—, y desde el 2026-09-27 la sexta —si un
-    día es domingo o festivo oficial, para no armar lista ese día—. Si hace
-    falta una séptima, entra aquí y no por una conexión prestada.
+    aparecido alguna vez en una compra—, desde el 2026-09-27 la sexta —si un
+    día es domingo o festivo oficial, para no armar lista ese día— y su
+    hermana de rango, la séptima, que la conciliación diaria del mismo día
+    necesita para contar días hábiles. Si hace falta una octava, entra aquí y
+    no por una conexión prestada.
     """
 
     def ventas(self, desde: dt.date, hasta: dt.date) -> list[LineaDeVenta]:
@@ -295,6 +297,23 @@ class LecturaDelAlmacen(Protocol):
         `ultima_fecha_con_ventas()` — nunca el reloj —, y por eso esto pide un
         solo día y no un rango: la pregunta es "¿hoy se puede?", no una tabla
         de calendario entera.
+        """
+        ...
+
+    def dias_entre(self, desde: dt.date, hasta: dt.date) -> list[DiaCalendario]:
+        """Las filas de `marts.dim_fecha` del rango, ambos extremos incluidos.
+
+        La séptima lectura, de la conciliación diaria (2026-09-27): "¿cuántos
+        días **hábiles** hay entre la fecha de una lista y hoy?" necesita saber
+        de VARIOS días de corrido cuáles son domingo o festivo, y `dia()` solo
+        contesta uno a la vez. Sobre la misma tabla que `dia()`, así que el rol
+        no necesita ningún permiso nuevo — es la misma razón por la que
+        `productos_con_compras` no pidió permiso aparte de `compras_desde`.
+
+        Un día del rango que la tabla no trae **no aparece en la lista** —igual
+        que `dia()` no inventa uno para una fecha fuera de 2020-2032—; quien
+        llama trata lo que falta como día hábil ordinario, nunca como domingo
+        ni festivo (regla 4: no se afirma sin dato).
         """
         ...
 
@@ -398,6 +417,17 @@ _DIA = text(
     select es_cerrado, es_festivo_oficial, nombre_evento
     from marts.dim_fecha
     where fecha = :fecha
+    """
+)
+
+# El rango, para la conciliación diaria (2026-09-27): la misma tabla que
+# `_DIA`, sin más columnas y sin más filas que las del rango que se pide.
+_DIAS_ENTRE = text(
+    """
+    select fecha, es_cerrado, es_festivo_oficial, nombre_evento
+    from marts.dim_fecha
+    where fecha between :desde and :hasta
+    order by fecha
     """
 )
 
@@ -508,6 +538,17 @@ class AlmacenPostgres:
             es_festivo_oficial=bool(f.es_festivo_oficial),
             nombre_evento=(f.nombre_evento or None),
         )
+
+    def dias_entre(self, desde: dt.date, hasta: dt.date) -> list[DiaCalendario]:
+        return [
+            DiaCalendario(
+                fecha=f.fecha,
+                es_cerrado=bool(f.es_cerrado),
+                es_festivo_oficial=bool(f.es_festivo_oficial),
+                nombre_evento=(f.nombre_evento or None),
+            )
+            for f in self._filas(_DIAS_ENTRE, desde=desde, hasta=hasta)
+        ]
 
 
 @lru_cache(maxsize=1)

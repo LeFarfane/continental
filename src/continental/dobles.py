@@ -37,6 +37,7 @@ from continental.almacenamiento import (
     ESTADOS_QUE_CIERRAN_EL_TRANSITO,
     ESTADOS_QUE_TERMINAN_EL_TRANSITO,
     VENCIDO,
+    ConciliacionConfirmada,
     CorridaDelLote,
     LoYaPedido,
     PedidoCancelado,
@@ -44,10 +45,12 @@ from continental.almacenamiento import (
     PedidoSugeridoDuplicado,
     PedidoSugeridoGuardado,
     PrecioDeProveedor,
+    RenglonConciliado,
     RenglonGuardado,
     RenglonRecibido,
     Vecinos,
     Ventana,
+    _firma_de_la_conciliacion,
     armar_guardado,
     columnas_de_la_corrida,
     columnas_de_la_lista,
@@ -142,6 +145,15 @@ class AlmacenFalso:
             es_festivo_oficial=False,
             nombre_evento=None,
         )
+
+    def dias_entre(self, desde: dt.date, hasta: dt.date) -> list[DiaCalendario]:
+        self._revisar()
+        dias = []
+        cursor = desde
+        while cursor <= hasta:
+            dias.append(self.dia(cursor))
+            cursor += dt.timedelta(days=1)
+        return dias
 
 
 @dataclass
@@ -1716,6 +1728,112 @@ class AlmacenamientoFalso:
             piezas_recibidas=piezas,
         )
         return renglon_guardado_desde_columnas(fila)
+
+    # ------------------------------------------ la conciliación diaria (2026-09-27)
+
+    def confirmar_la_conciliacion(
+        self,
+        negocio: str,
+        pedido_sugerido_id: int,
+        decisiones,
+        quien: str,
+    ) -> ConciliacionConfirmada:
+        """El clic de la conciliación, en memoria, en las MISMAS tres pasadas
+        que la implementación real (ver su docstring para el porqué: enviar
+        saca al pedido de `borrador`, así que todo el lote de un proveedor
+        tiene que estar asignado ANTES de que cualquiera de sus renglones lo
+        envíe).
+
+        Crear el pedido y asignarle el renglón **sin mirar el estado de la
+        lista** son las dos partes nuevas, sin equivalente real hasta este
+        ticket. Para lo demás —enviar, confirmar o recibir parcial— se
+        **llama a los métodos de siempre**: `self.enviar_el_pedido` y
+        `self.confirmar_la_recepcion` / `self.recibir_parcial_con_compras`.
+        No hay una segunda copia de esas reglas aquí: si divergieran de la
+        real, sería porque el archivo real cambió y éste no, que es justo lo
+        que las pruebas de ambos lados existen para cazar.
+        """
+        self._revisar()
+        firma = _firma_de_la_conciliacion(quien)
+        lista = self._por_id(pedido_sugerido_id)
+        ok_de: dict[int, bool] = {}
+
+        # Paso 1: crear/reencontrar el pedido de cada proveedor y asignarle
+        # cada renglón. Nada se envía todavía.
+        pedidos_por_proveedor: dict[str, int] = {}
+        pedidos_tocados: set[int] = set()
+        for decision in decisiones:
+            if lista is None or lista["negocio"] != negocio:
+                ok_de[decision.renglon_id] = False
+                continue
+
+            pedido_id = pedidos_por_proveedor.get(decision.proveedor)
+            if pedido_id is None:
+                fila = self._pedido_de(negocio, pedido_sugerido_id, decision.proveedor)
+                if fila is None:
+                    fila = {
+                        "negocio": negocio,
+                        "pedido_sugerido_id": pedido_sugerido_id,
+                        "proveedor": decision.proveedor,
+                        "proveedor_id": decision.proveedor_id,
+                        "estado": BORRADOR,
+                        "total_sin_iva": None,
+                        "pedido_id": self._siguiente_pedido,
+                        "armado_en": dt.datetime.now(dt.UTC),
+                    }
+                    revisar_el_pedido(fila)
+                    self._siguiente_pedido += 1
+                    self.pedidos.append(fila)
+                elif fila["estado"] != BORRADOR:
+                    ok_de[decision.renglon_id] = False
+                    continue
+                else:
+                    fila["proveedor_id"] = decision.proveedor_id
+                pedido_id = fila["pedido_id"]
+                pedidos_por_proveedor[decision.proveedor] = pedido_id
+
+            # `_ASIGNAR_RENGLON_DEDUCIDO`: el renglón, de esta lista, abierto y
+            # sin pedido todavía.
+            renglon = next(
+                (
+                    r
+                    for r in lista["renglones"]
+                    if r["renglon_id"] == decision.renglon_id
+                ),
+                None,
+            )
+            if (
+                renglon is None
+                or renglon["estado"] != RENGLON_ABIERTO
+                or renglon.get("pedido_id") is not None
+            ):
+                ok_de[decision.renglon_id] = False
+                continue
+            renglon["pedido_id"] = pedido_id
+            pedidos_tocados.add(pedido_id)
+
+        # Paso 2: enviar cada pedido tocado, una sola vez, con todos sus
+        # renglones del lote ya dentro.
+        for pedido_id in pedidos_tocados:
+            self.enviar_el_pedido(negocio, pedido_id, firma)
+
+        # Paso 3: confirmar la recepción de cada renglón que sí se asignó.
+        resultados: list[RenglonConciliado] = []
+        for decision in decisiones:
+            if decision.renglon_id in ok_de:
+                resultados.append(RenglonConciliado(decision.renglon_id, False))
+                continue
+            if decision.piezas >= decision.piezas_pedidas:
+                recibido = self.confirmar_la_recepcion(
+                    negocio, decision.renglon_id, decision.compras, decision.piezas, firma
+                )
+            else:
+                recibido = self.recibir_parcial_con_compras(
+                    negocio, decision.renglon_id, decision.compras, decision.piezas, firma
+                )
+            resultados.append(RenglonConciliado(decision.renglon_id, recibido is not None))
+
+        return ConciliacionConfirmada(resultados=tuple(resultados))
 
     def _ya_se_atendio(self, negocio: str, producto_id: int, fecha: dt.date) -> bool:
         """El `NOT EXISTS` de `_CORREGIR_LO_RECIBIDO`: una lista POSTERIOR ya

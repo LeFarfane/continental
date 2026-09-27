@@ -623,6 +623,40 @@ def dias_en_transito_para_atrasado_configurados() -> int:
     return crudo
 
 
+#: La llave del YAML de la conciliación diaria (2026-09-27). Escrita una vez.
+LLAVE_DE_LA_TOLERANCIA = "tolerancia_dias_habiles"
+
+
+def tolerancia_dias_habiles_configurada() -> int:
+    """El N de la conciliación diaria: cuántos días **hábiles** se le da a una
+    compra para aparecer antes de decir que un renglón propuesto no se compró.
+
+    Sale de `config/continental.yml` (`pedido.tolerancia_dias_habiles`), con su
+    comentario de por qué vale lo que vale. La misma forma que
+    `dias_en_transito_para_atrasado_configurados` y por la misma razón: **truena
+    si falta o está mal escrito**, al revés que `dias_primera_vez_configurados`.
+    Tronar aquí no deja a la farmacia sin nada -la conciliación es un reporte,
+    no la cadena nocturna del pedido sugerido-, y caer a un número elegido en
+    silencio sería peor: es el número que decide cuándo un renglón se dice "no
+    se compró", y una válvula que se abre en un día que nadie escogió declara
+    "no comprado" mercancía que todavía puede llegar en el respaldo de mañana.
+
+    Un entero y nada más, igual que su vecino: `"3"` entre comillas, `3.5` y
+    `True` -que en Python es un `int`- se rechazan.
+    """
+    from continental.config import cargar
+
+    crudo = cargar().pedido.get(LLAVE_DE_LA_TOLERANCIA)
+    if isinstance(crudo, bool) or not isinstance(crudo, int) or crudo < 1:
+        raise ValueError(
+            f"config/continental.yml no trae un `pedido.{LLAVE_DE_LA_TOLERANCIA}` "
+            f"utilizable ({crudo!r}): tiene que ser un entero de días hábiles, "
+            "uno o más. Sin él no se puede decir cuándo un renglón propuesto "
+            "de verdad no se compró, y no se inventa uno."
+        )
+    return crudo
+
+
 @dataclass(frozen=True, slots=True)
 class RenglonGuardado:
     """Un renglón que ya tiene fila: su id, su estado y lo que se propuso.
@@ -1032,6 +1066,74 @@ class RenglonRecibido:
     pedido_id: int | None
     producto_id: int
     compras: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class RenglonPorConciliar:
+    """Un renglón que una persona vio en la conciliación diaria y aceptó
+    confirmar de un clic (2026-09-27, ADR pendiente de aprobar).
+
+    Sale de `conciliacion.Coincidencia.accionable`, ya con lo que una persona
+    decidió aceptar. `confirmar_la_conciliacion` **no vuelve a calcular la
+    propuesta** a partir de esto —lo usa tal cual para escribir—: la garantía
+    de que la evidencia sigue siendo válida vive en el `WHERE` de
+    `_CONFIRMAR_LA_RECEPCION` / `_RECIBIR_PARCIAL_CON_COMPRAS`, que se
+    reutilizan sin tocar (ver el docstring de `confirmar_la_conciliacion`).
+
+    `proveedor` es la clave de Doyle, ya resuelta: solo las coincidencias
+    `accionable` llegan hasta aquí, porque sin una clave no hay con qué
+    escribir `pedidos.pedido.proveedor` (`ck_pedido_proveedor` la rechaza
+    vacía). `piezas_pedidas` es `RenglonGuardado.cantidad_a_pedir` del
+    renglón, y decide si se confirma completo o parcial — la misma
+    comparación de siempre, hecha una vez en la ruta que ya leyó el renglón.
+    """
+
+    renglon_id: int
+    proveedor: str
+    proveedor_id: int
+    compras: tuple[int, ...]
+    piezas: float
+    piezas_pedidas: int
+
+
+@dataclass(frozen=True, slots=True)
+class RenglonConciliado:
+    """El resultado de UNA decisión del lote: si se escribió o no.
+
+    `False` es siempre "no se escribió nada de este renglón" y no se
+    distingue el motivo desde aquí —no es de este negocio, ya no está
+    `abierto`, alguna de sus compras ya confirmó otro renglón mientras
+    tanto—: es la misma ambigüedad deliberada de un 409, porque comprobar y
+    escribir tienen la carrera de siempre. Quien llama puede releer la lista
+    para saber cómo quedó.
+    """
+
+    renglon_id: int
+    ok: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ConciliacionConfirmada:
+    """El lote entero: cuántas de las decisiones que una persona aceptó se
+    escribieron de verdad.
+
+    **No es todo o nada**, y es a propósito: una compra pudo haberse usado
+    para confirmar OTRO renglón en el instante entre que la persona vio la
+    pantalla y apretó el botón —de esta lista o de otra—, y esa sola carrera
+    no tiene por qué tirar las demás decisiones del lote. Es la misma
+    filosofía de `guardar_la_particion` con cada pedido: lo que no calificó
+    se salta, y lo que sí, se escribe.
+    """
+
+    resultados: tuple[RenglonConciliado, ...] = ()
+
+    @property
+    def confirmados(self) -> int:
+        return sum(1 for r in self.resultados if r.ok)
+
+    @property
+    def fallidos(self) -> tuple[int, ...]:
+        return tuple(r.renglon_id for r in self.resultados if not r.ok)
 
 
 @dataclass(frozen=True, slots=True)
@@ -3088,6 +3190,37 @@ class AlmacenamientoDelPedido(Protocol):
         """
         ...
 
+    def confirmar_la_conciliacion(
+        self,
+        negocio: str,
+        pedido_sugerido_id: int,
+        decisiones: Sequence[RenglonPorConciliar],
+        quien: str,
+    ) -> ConciliacionConfirmada:
+        """El único clic que escribe algo de la conciliación diaria
+        (2026-09-27, ADR pendiente de aprobar): confirma en lote las
+        `conciliacion.Coincidencia` que una persona vio y aceptó.
+
+        Por cada `RenglonPorConciliar`: crea o reencuentra el pedido
+        retroactivo a `decision.proveedor` de esta lista, le asigna el
+        renglón, lo envía, y confirma su recepción —completa o parcial, según
+        `piezas` contra `piezas_pedidas`—. Las cuatro escrituras del pedido
+        retroactivo son nuevas (ver el docstring de la implementación real);
+        el envío y la recepción son **las mismas** `_ENVIAR_EL_PEDIDO` /
+        `_RENGLONES_A_TRANSITO` / `_CONFIRMAR_LA_RECEPCION` /
+        `_RECIBIR_PARCIAL_CON_COMPRAS` de siempre, sin tocar: es la misma
+        garantía que un envío y una recepción de verdad, y no hay una segunda
+        copia de esa regla que se pueda desincronizar.
+
+        Firmado con `quien` —el correo de Access de quien confirmó el
+        lote—, pero **no tal cual**: la firma que se guarda en
+        `enviado_por`/`recibido_por` dice que se dedujo de una compra, para
+        no confundirla con "yo lo capturé en el portal" o "yo juzgué esta
+        evidencia en la pantalla de recepción", que son afirmaciones
+        distintas (ADR 0009, ADR 0014).
+        """
+        ...
+
     def productos_atendidos_despues(
         self, negocio: str, pedido_sugerido_id: int
     ) -> frozenset[int]:
@@ -4441,6 +4574,113 @@ _VACIAR_LOS_PEDIDOS_SIN_RENGLONES = text(
     """
 )
 
+def _firma_de_la_conciliacion(quien: str) -> str:
+    """La firma que dice "se dedujo de una compra", no "alguien lo capturó".
+
+    El correo de quien dio el clic sigue adentro —sirve para saber a quién
+    preguntarle—, pero **no se guarda tal cual** en `enviado_por` ni en
+    `recibido_por`: esas dos columnas, hasta este ticket, siempre habían
+    querido decir "una persona vio el portal (o la evidencia de SICAR) con
+    sus propios ojos" (ADR 0009, ADR 0014). Lo que pasa aquí es distinto —una
+    persona aceptó una **deducción** del sistema, con la compra de SICAR
+    como evidencia— y guardarlo con las mismas palabras confundiría las dos
+    cosas la primera vez que alguien mire la bitácora y pregunte "¿quién
+    capturó esto en el portal de NADRO?": la respuesta honesta es "nadie, se
+    dedujo".
+
+    No es una columna nueva y es a propósito, la misma razón de
+    `almacenamiento.SISTEMA` para el cierre automático (ADR 0020): un dato
+    que rara vez hace falta consultar por sí solo no paga una migración ni un
+    `crear_rol.sql` — vive como una marca de texto en la misma columna que ya
+    existía. Si algún día hace falta contar "cuántos pedidos nacieron de la
+    conciliación" a menudo, ahí sí vale una columna aparte; hoy es un
+    `LIKE '%(conciliación%'` cuando alguien lo necesite mirar.
+    """
+    return f"{quien} (conciliación: deducido de una compra)"
+
+
+# ============================================================================
+# LA CONCILIACIÓN DIARIA (2026-09-27, ADR pendiente de aprobar). Dos
+# sentencias nuevas y nada más: crear el pedido retroactivo y meterle el
+# renglón. Lo que sigue —enviarlo, confirmar su recepción— son
+# `_ENVIAR_EL_PEDIDO`, `_RENGLONES_A_TRANSITO`, `_CONFIRMAR_LA_RECEPCION` y
+# `_RECIBIR_PARCIAL_CON_COMPRAS` DE ARRIBA, SIN TOCAR: son la misma garantía
+# que un envío y una recepción de verdad, y una segunda copia de esa regla
+# es exactamente lo que se desincroniza sin que ninguna prueba se entere.
+#
+# POR QUÉ NO SE REUTILIZAN `_ABRIR_EL_PEDIDO` NI `_ASIGNAR_RENGLONES` TAL
+# CUAL: las dos exigen `s.estado = 'abierto'` — son para **armar** la lista
+# de trabajo, mientras alguien todavía la está resolviendo. La conciliación
+# es lo contrario: corre después de que el respaldo de SICAR trajo las
+# compras, y el respaldo llega hasta 2.5 días tarde (CLAUDE.md), así que la
+# lista que se concilia casi siempre ya se cerró sola (ADR 0020). Exigir
+# `abierta` dejaría la conciliación sin poder escribir nunca nada — el modo
+# de falla que este ticket viene a resolver, no a repetir.
+#
+# CREAR EL PEDIDO RETROACTIVO. La misma forma que `_ABRIR_EL_PEDIDO` —mismo
+# `ON CONFLICT ON CONSTRAINT ux_pedido_proveedor`, mismo candado de
+# `pedido.estado = 'borrador'` en el `DO UPDATE`— y las mismas dos
+# diferencias:
+#
+#   - **sin `s.estado = 'abierto'`**, por lo de arriba.
+#   - **`total_sin_iva` siempre `NULL`**: este pedido no se va a imprimir para
+#     que nadie lo capture en un portal —ya se capturó, hace días, sin pasar
+#     por aquí—, así que no hay para qué congelar un total contra el que
+#     comparar una factura. Lo que sí importa —el precio de verdad— vive en
+#     `marts.fct_compras.precio_unitario_pagado`, y de ahí sale la
+#     comparación contra `pedidos.precio_de_proveedor` que hace
+#     `conciliacion.comparar_precio_pagado`.
+_CREAR_PEDIDO_DEDUCIDO = text(
+    """
+    insert into pedidos.pedido
+        (negocio, pedido_sugerido_id, proveedor, proveedor_id, estado,
+         total_sin_iva)
+    select s.negocio, s.pedido_sugerido_id, :proveedor, :proveedor_id,
+           'borrador', null
+      from pedidos.pedido_sugerido as s
+     where s.negocio = :negocio
+       and s.pedido_sugerido_id = :pedido_sugerido_id
+    on conflict on constraint ux_pedido_proveedor do update
+       set proveedor_id = excluded.proveedor_id
+     where pedido.estado = 'borrador'
+    returning pedido_id, negocio, pedido_sugerido_id, proveedor, proveedor_id,
+              estado, armado_en, total_sin_iva, enviado_por, enviado_en
+    """
+)
+
+# METER EL RENGLÓN DEDUCIDO EN SU PEDIDO. La misma forma que
+# `_ASIGNAR_RENGLONES`, para un solo renglón y sin la condición de lista
+# abierta, por la misma razón que la de arriba.
+#
+#   - `r.estado = 'abierto'` — la transición en el WHERE, igual que siempre:
+#     un renglón que Continental ya atendió por otra vía (en tránsito,
+#     recibido, cancelado, descartado) no se toca aquí. `conciliacion.py` ya
+#     los excluyó de las coincidencias por la misma razón; esto es el
+#     candado, no la explicación.
+#   - `r.pedido_id is null` — un renglón `abierto` nunca debería tener
+#     pedido ya (nada más lo asigna), pero se comprueba: es el mismo criterio
+#     de "la garantía vive en el WHERE, no en que el código de arriba se
+#     porte bien" de todo este módulo.
+#   - `p.estado = 'borrador'` — el pedido que se acaba de crear o reencontrar
+#     arriba. Si en el instante entre las dos sentencias alguien más lo envió
+#     -otra decisión del mismo lote, otra pestaña-, cero filas.
+_ASIGNAR_RENGLON_DEDUCIDO = text(
+    """
+    update pedidos.renglon as r
+       set pedido_id = :pedido_id
+      from pedidos.pedido as p
+     where r.negocio = :negocio
+       and r.renglon_id = :renglon_id
+       and r.pedido_sugerido_id = :pedido_sugerido_id
+       and r.estado = 'abierto'
+       and r.pedido_id is null
+       and p.pedido_id = :pedido_id
+       and p.negocio = r.negocio
+       and p.estado = 'borrador'
+    returning r.renglon_id
+    """
+)
+
 # Tachar un renglón en la pantalla de captura (ticket 22, ADR 0010).
 #
 # Las cuatro condiciones del `WHERE`, y cada una defiende algo distinto:
@@ -5393,6 +5633,148 @@ class AlmacenamientoPostgres:
                 .first()
             )
         return None if fila is None else renglon_guardado_desde_columnas(fila)
+
+    def confirmar_la_conciliacion(
+        self,
+        negocio: str,
+        pedido_sugerido_id: int,
+        decisiones: Sequence[RenglonPorConciliar],
+        quien: str,
+    ) -> ConciliacionConfirmada:
+        """El clic de la conciliación diaria, en una sola transacción y **tres
+        pasadas** sobre el lote — no una, y el porqué es la trampa que este
+        método existe para no redescubrir: enviar un pedido lo saca de
+        `borrador` (`_ENVIAR_EL_PEDIDO` exige justo eso), así que si el
+        segundo renglón de un proveedor con dos en el lote intentara
+        asignarse **después** de que el primero ya mandó ese pedido, la
+        asignación fallaría contra un pedido que dejó de estar en borrador.
+        Todo el lote de ese proveedor tiene que estar asignado ANTES de que
+        cualquiera de sus renglones lo envíe.
+
+        1. **Por cada decisión: crea o reencuentra el pedido `borrador`** a
+           `decision.proveedor` de esta lista (`_CREAR_PEDIDO_DEDUCIDO` —una
+           sola vez por proveedor: dos renglones del lote al mismo proveedor
+           comparten pedido, igual que en la partición de siempre—) y le mete
+           el renglón (`_ASIGNAR_RENGLON_DEDUCIDO`).
+        2. **Por cada pedido tocado en el paso 1: lo envía**
+           (`_ENVIAR_EL_PEDIDO` + `_RENGLONES_A_TRANSITO`, **sin tocar**), una
+           sola vez, ya con todos sus renglones del lote dentro.
+        3. **Por cada decisión que sí se asignó: confirma su recepción**,
+           completa (`_CONFIRMAR_LA_RECEPCION`) o parcial
+           (`_RECIBIR_PARCIAL_CON_COMPRAS`) según `piezas` contra
+           `piezas_pedidas` — la misma comparación de siempre, y las dos
+           sentencias **sin tocar**.
+
+        Con **la firma marcada**: lo que se guarda en `enviado_por` y
+        `recibido_por` no es `quien` a secas, es
+        `_firma_de_la_conciliacion(quien)` — dice que se dedujo de una
+        compra, no que alguien lo capturó en el portal ni que alguien juzgó
+        esta evidencia en la pantalla de recepción normal (ADR 0009, ADR
+        0014). El correo sigue ahí, para saber a quién preguntarle.
+
+        **Una sola transacción para el lote entero**, pero **no todo o
+        nada**: cada decisión que no calificó se salta —`ConciliacionConfirmada`
+        lo dice— y las demás se escriben igual. La alternativa —abortar todo
+        el lote por una sola compra que alguien más ya usó— tiraría once
+        confirmaciones buenas por una carrera de una, y esa carrera va a
+        pasar: es la misma que ya cubre `_CONFIRMAR_LA_RECEPCION` renglón por
+        renglón.
+        """
+        firma = _firma_de_la_conciliacion(quien)
+        ok_de: dict[int, bool] = {}
+        with self._motor().begin() as conexion:
+            # Paso 1: crear/reencontrar el pedido de cada proveedor y meterle
+            # cada renglón. Nada se envía todavía.
+            pedidos_por_proveedor: dict[str, int] = {}
+            pedidos_tocados: set[int] = set()
+            for decision in decisiones:
+                pedido_id = pedidos_por_proveedor.get(decision.proveedor)
+                if pedido_id is None:
+                    fila = (
+                        conexion.execute(
+                            _CREAR_PEDIDO_DEDUCIDO,
+                            {
+                                "negocio": negocio,
+                                "pedido_sugerido_id": pedido_sugerido_id,
+                                "proveedor": decision.proveedor,
+                                "proveedor_id": decision.proveedor_id,
+                            },
+                        )
+                        .mappings()
+                        .first()
+                    )
+                    if fila is None:
+                        # La lista no existe en este negocio. Todo el lote
+                        # comparte lista, así que si esto falla una vez va a
+                        # fallar siempre — pero no se aborta la transacción
+                        # por eso: se sigue registrando cada decisión como no
+                        # escrita, y quien llama ve el reporte completo.
+                        ok_de[decision.renglon_id] = False
+                        continue
+                    pedido_id = int(fila["pedido_id"])
+                    pedidos_por_proveedor[decision.proveedor] = pedido_id
+
+                movido = conexion.execute(
+                    _ASIGNAR_RENGLON_DEDUCIDO,
+                    {
+                        "negocio": negocio,
+                        "renglon_id": decision.renglon_id,
+                        "pedido_sugerido_id": pedido_sugerido_id,
+                        "pedido_id": pedido_id,
+                    },
+                ).first()
+                if movido is None:
+                    ok_de[decision.renglon_id] = False
+                    continue
+                pedidos_tocados.add(pedido_id)
+
+            # Paso 2: enviar cada pedido tocado, una sola vez y con todos sus
+            # renglones del lote ya dentro.
+            for pedido_id in pedidos_tocados:
+                enviado = (
+                    conexion.execute(
+                        _ENVIAR_EL_PEDIDO,
+                        {"negocio": negocio, "pedido_id": pedido_id, "quien": firma},
+                    )
+                    .mappings()
+                    .first()
+                )
+                if enviado is not None:
+                    conexion.execute(
+                        _RENGLONES_A_TRANSITO,
+                        {"negocio": negocio, "pedido_id": pedido_id},
+                    )
+
+            # Paso 3: confirmar la recepción de cada renglón que sí se asignó.
+            resultados: list[RenglonConciliado] = []
+            for decision in decisiones:
+                if decision.renglon_id in ok_de:
+                    resultados.append(RenglonConciliado(decision.renglon_id, False))
+                    continue
+                parametros_de_recepcion = {
+                    "negocio": negocio,
+                    "renglon_id": decision.renglon_id,
+                    "compras": list(decision.compras),
+                    "piezas": decision.piezas,
+                    "quien": firma,
+                }
+                if decision.piezas >= decision.piezas_pedidas:
+                    recibido = (
+                        conexion.execute(_CONFIRMAR_LA_RECEPCION, parametros_de_recepcion)
+                        .mappings()
+                        .first()
+                    )
+                else:
+                    recibido = (
+                        conexion.execute(
+                            _RECIBIR_PARCIAL_CON_COMPRAS, parametros_de_recepcion
+                        )
+                        .mappings()
+                        .first()
+                    )
+                resultados.append(RenglonConciliado(decision.renglon_id, recibido is not None))
+
+        return ConciliacionConfirmada(resultados=tuple(resultados))
 
     def productos_atendidos_despues(
         self, negocio: str, pedido_sugerido_id: int
