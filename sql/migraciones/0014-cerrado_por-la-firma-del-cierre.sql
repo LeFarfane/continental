@@ -1,4 +1,4 @@
--- 0013 - cerrado_por, la firma del cierre (decision del dueño, 2026-09-27).
+-- 0014 - cerrado_por, la firma del cierre (decision del dueño, 2026-09-27).
 --
 -- NO CREA NINGUNA TABLA: el esquema `pedidos` sigue teniendo CINCO. Lo que hace
 -- es darle a `pedidos.pedido_sugerido` UNA columna y DOS CHECK:

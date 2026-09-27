@@ -49,7 +49,7 @@ RAIZ = Path(__file__).resolve().parent.parent
 SQL = RAIZ / "sql"
 CREAR_TABLAS = SQL / "crear_tablas.sql"
 VERIFICAR_ROL = SQL / "verificar_rol.sql"
-MIGRACION = SQL / "migraciones" / "0013-cerrado_por-la-firma-del-cierre.sql"
+MIGRACION = SQL / "migraciones" / "0014-cerrado_por-la-firma-del-cierre.sql"
 
 NEGOCIO = "farmacia_01"
 LUNES = dt.date(2026, 9, 14)
@@ -316,7 +316,7 @@ def test_los_check_nuevos_estan_en_los_dos_archivos():
 def test_crear_tablas_trae_la_columna_y_nombra_la_0013():
     sentencias = _sentencias_sql(CREAR_TABLAS)
     assert re.search(r"\n\s+cerrado_por\s+text,", sentencias)
-    assert "0013-cerrado_por-la-firma-del-cierre.sql" in _texto(CREAR_TABLAS)
+    assert "0014-cerrado_por-la-firma-del-cierre.sql" in _texto(CREAR_TABLAS)
 
 
 def test_verificar_rol_mira_la_firma_del_cierre():

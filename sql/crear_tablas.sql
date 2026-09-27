@@ -115,12 +115,17 @@
 --      da a `pedido_sugerido` la firma de la última reapertura -quién deshizo
 --      un cierre y cuándo-. NO crea tabla, y NO rompe el código de antes: las
 --      dos columnas admiten nulos y no tienen DEFAULT.
---  13. `sql/migraciones/0013-cerrado_por-la-firma-del-cierre.sql` (decisión
---      del dueño, 2026-09-27: la lista de ayer se cierra sola al abrirse la
---      de hoy), que le da a `pedido_sugerido` la firma del último cierre
---      -una persona, o 'sistema' si lo disparó el día siguiente-. NO crea
---      tabla, y NO rompe el código de antes: la columna admite nulos y no
---      tiene DEFAULT.
+--  13. `sql/migraciones/0013-nuevo-motivo-ventana-de-sesion-abierta.sql`
+--      (2026-09-23), que ensancha `ck_precio_motivo_conocido` para admitir
+--      `quedó una ventana de sesión abierta`. NO crea tabla y NO agrega
+--      columna: es la ÚNICA de la lista que solo toca un CHECK, y por eso
+--      `forma.py` no la detecta si nadie la corrió -está anotado como
+--      pendiente-.
+--  14. `sql/migraciones/0014-cerrado_por-la-firma-del-cierre.sql` (ADR 0020,
+--      2026-09-27: la lista de ayer se cierra sola al abrirse la de hoy), que
+--      le da a `pedido_sugerido` la firma del último cierre -una persona, o
+--      'sistema' si lo disparó el día siguiente-. NO crea tabla, y NO rompe
+--      el código de antes: la columna admite nulos y no tiene DEFAULT.
 --
 -- Las trece son idempotentes, así que correrlas sobre una base que ya las
 -- tiene -o sobre una recién creada con este archivo- no rompe nada.
