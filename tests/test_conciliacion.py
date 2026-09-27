@@ -207,7 +207,10 @@ class TestBloque1Coincidencias:
         assert c.piezas == 5.0
         assert c.piezas_pedidas == 5
         assert c.compras_ids == (9001,)
-        assert "nadro" in frase_de_la_coincidencia(c)
+        # NADRO y no `nadro`: la clave de Doyle viene en minúsculas y esta
+        # frase la lee una persona. Hasta el 2026-09-27 esta prueba fijaba la
+        # clave cruda, así que el defecto pasaba en verde.
+        assert "NADRO" in frase_de_la_coincidencia(c)
 
     def test_dos_compras_del_mismo_proveedor_se_suman(self):
         renglon = _guardado(1, 100, cantidad=10)

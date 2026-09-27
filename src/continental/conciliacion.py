@@ -92,6 +92,7 @@ from typing import TYPE_CHECKING
 
 from continental.almacen import DiaCalendario, LineaDeCompra
 from continental.almacenamiento import RENGLON_ABIERTO, RenglonGuardado
+from continental.precios import nombre_del_proveedor
 from continental.comparacion import Ganador, elegir_ganador
 from continental.precios import nombre_del_proveedor
 
@@ -520,7 +521,15 @@ def _con_unidad(cantidad: float) -> str:
 
 def frase_de_la_coincidencia(c: Coincidencia) -> str:
     """Con a quién, cuánto y a qué precio — lo que el bloque 1 promete decir."""
-    quien = "un proveedor que SICAR conoce pero Doyle no" if c.proveedor is None else c.proveedor
+    # `nombre_del_proveedor` Y NO LA CLAVE CRUDA. `c.proveedor` es la clave de
+    # Doyle en minúsculas -`nadro`- y esto es una frase que lee una persona:
+    # el resto de la aplicación escribe `NADRO`. Se detectó el 2026-09-27 al
+    # construir la pantalla, con una prueba que fijaba la clave cruda.
+    quien = (
+        "un proveedor que SICAR conoce pero Doyle no"
+        if c.proveedor is None
+        else nombre_del_proveedor(c.proveedor)
+    )
     cuantas = len(c.compras)
     compras = "una compra" if cuantas == 1 else f"{cuantas} compras"
     return (
@@ -550,7 +559,11 @@ def frase_del_sin_comprar(s: SinComprar) -> str:
 
 
 def frase_de_la_compra_suelta(c: CompraSuelta) -> str:
-    quien = "un proveedor sin clave de Doyle" if c.proveedor is None else c.proveedor
+    quien = (
+        "un proveedor sin clave de Doyle"
+        if c.proveedor is None
+        else nombre_del_proveedor(c.proveedor)
+    )
     if c.ambiguo:
         return (
             f"Compra a {quien}, {_con_unidad(c.compra.cantidad)}: el mismo "
