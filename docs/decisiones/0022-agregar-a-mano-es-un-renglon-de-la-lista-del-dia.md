@@ -1,8 +1,8 @@
 # 0022 — Agregar a mano lo que no se vendió es un renglón más de la lista del día
 
 **Fecha:** 2026-09-28  ·  **Estado:** propuesta — no se construye antes del
-primer día real de operación del Pedido, y tiene dos preguntas abiertas al
-final
+primer día real de operación del Pedido. De sus dos preguntas, la primera
+la contestó el dueño el mismo día y cambió la regla 1; la segunda sigue abierta
 **Complementa el ADR 0002** (el pedido sugerido repone lo vendido)
 
 ## Contexto
@@ -34,6 +34,11 @@ Lo que ya fija el esquema, medido en `sql/crear_tablas.sql`:
   aparece una vez por lista.
 - `renglon.producto_id` es `NOT NULL`: todo renglón es de un producto que
   SICAR conoce.
+
+Y un hecho de SICAR, dicho por el dueño el 2026-09-28: **un producto nuevo
+solo se da de alta con su factura en la mano**, y el alta y la compra se
+capturan juntas, con la cantidad que llegó. O sea que un producto que nunca se
+ha manejado **no existe en SICAR hasta que llega**.
 - `cantidad_propuesta` admite el cero —*"de esto no se vendió nada", un hecho
   aritmético sin nadie detrás*— y `cantidad_final` no (`>= 1`), con la firma
   del ajuste (`ajustada_por`, `ajustada_en`).
@@ -62,10 +67,17 @@ Desde ahí es un renglón como cualquier otro: se le consulta el precio en los
 cuatro, se elige a quién, se parte, se captura, se envía, viaja en tránsito y
 se recibe. Cinco reglas más, porque "no se vendió" cambia cinco cosas:
 
-1. **Solo productos del catálogo de SICAR.** El renglón necesita
-   `producto_id`, y la recepción empareja compras por producto. Un producto
-   nuevo se da de alta en SICAR y aparece aquí después de la cadena de esa
-   noche (pregunta abierta 1).
+1. **Un producto que SICAR todavía no conoce entra por su código de barras.**
+   Como el alta solo se hace con la factura (arriba), pedir primero y dar de
+   alta después es el único orden posible. Ese renglón lleva `producto_id`
+   vacío, la clave EAN de 13 dígitos y la descripción tal como las mostró un
+   portal en Buscar (NADRO y LEVIC enseñan el EAN; un resultado que solo trae
+   código interno no se puede agregar así). **La recepción lo encuentra por esa
+   clave**: la noche en que la cadena trae el alta, trae también su compra, y
+   el producto nuevo de `dim_producto` con ese EAN lleva a ella —una noche de
+   retraso, la de siempre—. Al confirmarse la recepción, el renglón gana su
+   `producto_id` y desde ahí es un renglón como cualquiera. Un producto que sí
+   está en SICAR entra por su `producto_id`, como estaba propuesto.
 2. **Solo en una lista abierta**, como toda modificación (glosario, 2026-09-20).
    Si la del día ya se cerró, se reabre (ADR 0016) o se espera a la siguiente.
 3. **Si el producto ya está en la lista, no se agrega: se corrige su
@@ -84,9 +96,10 @@ se recibe. Cinco reglas más, porque "no se vendió" cambia cinco cosas:
    siguiente.
 
 Se agrega desde dos lugares, con una sola ruta detrás
-(`POST /api/pedido-sugerido/{id}/renglon`, `{producto_id, cantidad}`):
+(`POST /api/pedido-sugerido/{id}/renglon`, `{producto_id o clave, cantidad}`):
 desde la pestaña **Pedido**, con el código de barras; y desde un resultado de
-**Buscar** que ya diga que es nuestro.
+**Buscar**: si es nuestro, por su `producto_id`; si no, por el EAN que mostró
+el portal.
 
 ## Razones
 
@@ -119,7 +132,16 @@ desde la pestaña **Pedido**, con el código de barras; y desde un resultado de
 
 - **Una migración que no crea tabla**: `agregado_por` y `agregado_en` en
   `pedidos.renglon`, con su CHECK pareado y el de "agregado a mano implica
-  propuesta cero y cantidad final". `verificar_rol.sql` gana su comprobación.
+  propuesta cero y cantidad final". Y por la regla 1, `producto_id` pasa a
+  admitir nulos **solo** en un renglón agregado a mano con clave de 13 dígitos
+  (un CHECK), con un índice único parcial `(pedido_sugerido_id, clave) where
+  producto_id is null` que hace por esos renglones lo que `ux_renglon_producto`
+  hace por los demás. `verificar_rol.sql` gana sus comprobaciones.
+- **La recepción aprende a buscar por clave.** Hoy empareja por `producto_id`
+  (ADR 0014); para el renglón sin él, pasa primero por `dim_producto` con el
+  EAN. Todo lo demás que se ancla en `producto_id` —la memoria de lo pedido
+  (ADR 0012), lo que faltó (ADR 0015)— empieza a valer para ese renglón en
+  cuanto la recepción le pone su `producto_id`.
 - **La pantalla lo marca**: "agregado a mano por …" en el lugar donde un
   renglón vendido dice su ventana de ventas; sin ventas, los días de cobertura
   no existen y se dice así, no con un cero. La vista "Todo lo vendido" deja de
@@ -127,16 +149,18 @@ desde la pestaña **Pedido**, con el código de barras; y desde un resultado de
 - **La conciliación (ADR 0021) cuenta estos renglones aparte.** Mide qué tan
   bien propone el sistema; lo que agregó una persona no es una propuesta
   acertada ni fallida.
-- **Lo que no se construye con esto**: productos fuera de SICAR, el margen o
-  el precio de venta (eso es el puente), y agregar desde Vigilancia (el aviso
-  manda a Buscar, y de Buscar se agrega).
+- **Lo que no se construye con esto**: el margen o el precio de venta (eso es
+  el puente), un producto nuevo que ningún portal enseña con su EAN, y agregar
+  desde Vigilancia (el aviso manda a Buscar, y de Buscar se agrega).
 
-## Preguntas abiertas para el dueño
+## Preguntas para el dueño
 
-1. **Productos que SICAR no conoce.** Un cliente pide algo que nunca se ha
-   manejado: ¿basta con darlo de alta en SICAR y agregarlo al día siguiente, o
-   hace falta pedirlo el mismo día? Si es lo segundo, esta regla se cae y hace
-   falta un renglón sin `producto_id`, que la recepción no sabría emparejar.
+1. ~~**Productos que SICAR no conoce.** ¿Basta con darlo de alta en SICAR y
+   agregarlo al día siguiente?~~ **Contestada el 2026-09-28: no se puede.** El
+   alta necesita la factura, y la factura llega con el producto. De ahí sale
+   la regla 1 como está arriba. La primera versión de este ADR decía que un
+   renglón sin `producto_id` "la recepción no sabría emparejar"; con el alta y
+   la compra capturadas juntas, sí sabe: por la clave, una noche después.
 2. **Un pedido cancelado de algo agregado a mano**: ¿vuelve solo en la
    siguiente lista (lo que propone la regla 4), o se da por perdido? Volver es
    un clic de descartar si ya no hace falta; perderse es un cliente que se
