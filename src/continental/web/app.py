@@ -68,7 +68,7 @@ from continental.busqueda import (
     motivo_para_no_buscar,
     termino_limpio,
 )
-from continental.lecturas_de_portal import BUSCAR, lecturas_de_portal
+from continental.lecturas_de_portal import AL_ABRIR_SESION, BUSCAR, lecturas_de_portal
 from continental.clasificacion import reglas_configuradas
 from continental.comparacion import (
     comparacion_como_json,
@@ -92,6 +92,7 @@ from continental.consultas import (
     consultar_en_fila,
     consultar_y_congelar,
     lecturas_como_json,
+    proveedores_que_consultan_al_abrir,
     tope_del_completado_segundos,
 )
 from continental.doyle import BusquedaDesconocida, ClienteDeDoyle, VigiladoDesconocido
@@ -3699,6 +3700,9 @@ def confirmar_la_sesion(
     proveedor: str,
     request: Request,
     doyle: ClienteDeDoyle = Depends(obtener_doyle),
+    almacen: LecturaDelAlmacen = Depends(obtener_almacen),
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+    consultas: RegistroDeConsultas = Depends(obtener_consultas),
 ):
     """La otra mitad: la persona ya entró, que Doyle guarde las cookies.
 
@@ -3740,12 +3744,18 @@ def confirmar_la_sesion(
         if confirmada.todavia_parece_login
         else "",
     )
+    disparada = (
+        None
+        if confirmada.todavia_parece_login
+        else _consultar_la_lista_al_abrir(proveedor, almacen, almacenamiento, doyle, consultas)
+    )
     return {
         "ok": True,
         "proveedor": proveedor,
         "nombre": nombre_del_proveedor(proveedor),
         "todavia_parece_login": confirmada.todavia_parece_login,
-        "detalle": (
+        "consulta_disparada": disparada,
+        "detalle": (disparada + " " if disparada else "") + (
             "Doyle guardó la sesión, pero la página SEGUÍA viéndose como un "
             "login. Puede ser que la redirección no hubiera terminado; si el "
             "siguiente precio vuelve a decir «la sesión caducó», ábrela otra "
@@ -3757,6 +3767,75 @@ def confirmar_la_sesion(
             )
         ),
     }
+
+
+def _consultar_la_lista_al_abrir(
+    proveedor: str,
+    almacen: LecturaDelAlmacen,
+    almacenamiento: AlmacenamientoDelPedido,
+    doyle: ClienteDeDoyle,
+    consultas: RegistroDeConsultas,
+) -> str | None:
+    """«Ya entré» en un portal de `pedido.consultar_al_abrir_sesion` (LEVIC):
+    consulta la lista del día **solo en ese portal**, en un hilo, uno tras
+    otro. Devuelve la frase de lo que se lanzó, o `None` si no toca o no hay
+    qué consultar.
+
+    Existe porque la sesión de LEVIC muere a los ~20 minutos sin uso: los
+    minutos justo después de abrirla son los únicos en que se sabe que sirve,
+    y el lote de las 22:00 casi nunca los alcanza. **Nunca tumba la
+    confirmación**: la sesión ya se guardó, y lo que falle aquí va a la
+    bitácora y se dice en la frase.
+    """
+    if proveedor not in proveedores_que_consultan_al_abrir():
+        return None
+    negocio = cargar().negocio
+    nombre = nombre_del_proveedor(proveedor)
+    try:
+        ultima = almacen.ultima_fecha_con_ventas()
+        guardado = None if ultima is None else almacenamiento.leer(negocio, ultima)
+    except Exception as exc:  # noqa: BLE001 — la sesión ya se guardó; esto es un extra
+        log.exception("No se pudo leer la lista del día para consultarla en %s", proveedor)
+        return (
+            f"No se pudo leer la lista del día para consultarla en {nombre} "
+            f"({type(exc).__name__}); consúltala con «Completar»."
+        )
+    if guardado is None or guardado.estado != ABIERTO:
+        return None
+    pendientes = [
+        (r.renglon_id, r.propuesto.clave) for r in guardado.por_repartir if r.propuesto.clave
+    ]
+    if not pendientes:
+        return None
+
+    tope_seg, cada_seg = ajustes_de_la_consulta()
+    tope_total_seg = tope_del_completado_segundos()
+    arranque = time.monotonic()
+    log.info(
+        "Al abrir la sesión de %s: se consultan %d renglón(es) de la lista %s solo en ese portal.",
+        proveedor,
+        len(pendientes),
+        guardado.pedido_sugerido_id,
+    )
+    consultas.lanzar(
+        lambda: consultar_en_fila(
+            pendientes,
+            doyle=doyle,
+            almacenamiento=almacenamiento,
+            registro=consultas,
+            negocio=negocio,
+            tope_seg=tope_seg,
+            cada_seg=cada_seg,
+            se_acabo=lambda: time.monotonic() - arranque >= tope_total_seg,
+            origen=AL_ABRIR_SESION,
+            proveedores=(proveedor,),
+        )
+    )
+    return (
+        f"Aprovechando la sesión recién abierta, se están consultando los "
+        f"{len(pendientes)} renglones de la lista del día solo en {nombre}. "
+        "Los precios van apareciendo solos en la lista."
+    )
 
 
 @app.post("/api/sesion/{proveedor}/cancelar")

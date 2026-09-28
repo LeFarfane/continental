@@ -44,8 +44,10 @@ CONSULTAR = "consultar"
 COMPLETAR = "completar"
 #: La pestaña de Buscar.
 BUSCAR = "buscar"
+#: La consulta de la lista que dispara «Ya entré» en un portal (LEVIC).
+AL_ABRIR_SESION = "al abrir sesión"
 
-ORIGENES: tuple[str, ...] = (LOTE, SONDA_DEL_LOTE, CONSULTAR, COMPLETAR, BUSCAR)
+ORIGENES: tuple[str, ...] = (LOTE, SONDA_DEL_LOTE, CONSULTAR, COMPLETAR, BUSCAR, AL_ABRIR_SESION)
 
 # ------------------------------------------------------ qué le pasó a cada uno
 

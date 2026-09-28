@@ -143,6 +143,7 @@ def consultar_a_doyle(
     dormir: Callable[[float], object] = time.sleep,
     ahora: Callable[[], float] = time.monotonic,
     al_terminar: Callable[[EstadoDeBusqueda, str, bool], object] | None = None,
+    proveedores: tuple[str, ...] = (),
 ) -> ResultadoDeConsulta:
     """Pide la búsqueda, sondea hasta que termine o se acabe el tiempo, y lee.
 
@@ -172,7 +173,11 @@ def consultar_a_doyle(
     salió bien**, que es la falla silenciosa que este repo prohíbe.
     """
     inicio = ahora()
-    pedida = doyle.pedir_busqueda(clave)
+    # Sin filtro se llama como siempre, con un solo argumento: los dobles y
+    # envolturas que ya existen no tienen por qué saber del filtro.
+    pedida = (
+        doyle.pedir_busqueda(clave, proveedores) if proveedores else doyle.pedir_busqueda(clave)
+    )
     if not pedida.job_id:
         raise RuntimeError(
             f"Doyle aceptó la búsqueda de {clave!r} y no devolvió `job_id`. Sin "
@@ -389,6 +394,7 @@ def consultar_y_congelar(
     dormir: Callable[[float], object] = time.sleep,
     ahora: Callable[[], float] = time.monotonic,
     origen: str = CONSULTAR,
+    proveedores: tuple[str, ...] = (),
 ) -> Consulta:
     """La tarea entera: esperar a Doyle, congelar lo que dijo, y anotar cómo fue.
 
@@ -422,6 +428,7 @@ def consultar_y_congelar(
                 termino=consulta.clave,
                 renglon_id=consulta.renglon_id,
             ),
+            proveedores=proveedores,
         )
     except Exception as exc:  # noqa: BLE001 — Doyle caído es un hueco con su motivo
         log.exception(
@@ -521,6 +528,8 @@ def consultar_en_fila(
     se_acabo: Callable[[], bool] = lambda: False,
     dormir: Callable[[float], object] = time.sleep,
     ahora: Callable[[], float] = time.monotonic,
+    origen: str = COMPLETAR,
+    proveedores: tuple[str, ...] = (),
 ) -> Completado:
     """Consulta una lista de renglones **uno tras otro, en este mismo hilo**.
 
@@ -578,7 +587,8 @@ def consultar_en_fila(
             cada_seg=cada_seg,
             dormir=dormir,
             ahora=ahora,
-            origen=COMPLETAR,
+            origen=origen,
+            proveedores=proveedores,
         )
         hecho = replace(hecho, pedidos=hecho.pedidos + 1)
 
@@ -652,6 +662,30 @@ def tope_del_completado_segundos() -> float:
         )
         * 60.0
     )
+
+
+def proveedores_que_consultan_al_abrir() -> tuple[str, ...]:
+    """Los portales cuya sesión, al confirmarse con «Ya entré», dispara una
+    consulta de la lista del día **solo en ese portal** (2026-09-28).
+
+    `pedido.consultar_al_abrir_sesion` del YAML. Existe por LEVIC: su sesión
+    muere a los ~20 minutos sin uso y el lote de las 22:00 la encuentra
+    muerta; los minutos justo después de abrirla son los únicos seguros. Una
+    clave que no es de ningún proveedor se ignora con un aviso en la bitácora
+    (regla 4: se dice, no se calla).
+    """
+    from continental.config import cargar
+    from continental.precios import NOMBRES_DE_PROVEEDOR
+
+    crudo = cargar().pedido.get("consultar_al_abrir_sesion") or []
+    claves = tuple(str(c).strip() for c in crudo if str(c).strip())
+    desconocidas = [c for c in claves if c not in NOMBRES_DE_PROVEEDOR]
+    if desconocidas:
+        log.warning(
+            "pedido.consultar_al_abrir_sesion trae %s, que no es de ningún proveedor: se ignora.",
+            desconocidas,
+        )
+    return tuple(c for c in claves if c in NOMBRES_DE_PROVEEDOR)
 
 
 def _numero_positivo(crudo, omision: float, nombre: str) -> float:

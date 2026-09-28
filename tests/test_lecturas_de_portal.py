@@ -10,6 +10,7 @@ Ninguna prueba toca Postgres, ni Doyle, ni la red, ni duerme.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from decimal import Decimal
@@ -210,14 +211,18 @@ def _en_el_check(sql: str, nombre: str) -> set[str]:
     return set(re.findall(r"'([^']+)'", cuerpo))
 
 
+@pytest.mark.parametrize("ruta", ["sql/crear_tablas.sql", "sql/migraciones/0016-la-consulta-al-abrir-sesion.sql"])
+def test_los_origenes_del_check_son_los_del_codigo(ruta):
+    """La 0015 los estrenó y la 0016 agregó 'al abrir sesión': la base desde
+    cero y la migrada tienen que aceptar los mismos, con su acento."""
+    assert _en_el_check(_texto(ruta), "ck_lectura_origen") == set(ORIGENES)
+
+
 @pytest.mark.parametrize("ruta", ["sql/crear_tablas.sql", "sql/migraciones/0015-lo-que-contesto-cada-portal.sql"])
-def test_los_origenes_y_resultados_del_check_son_los_del_codigo(ruta):
+def test_los_resultados_del_check_son_los_del_codigo(ruta):
     """Con el acento de "no terminó": un CHECK sin él rebotaría el primer
     INSERT de un portal que tardó de más."""
-    sql = _texto(ruta)
-
-    assert _en_el_check(sql, "ck_lectura_origen") == set(ORIGENES)
-    assert _en_el_check(sql, "ck_lectura_resultado") == set(RESULTADOS)
+    assert _en_el_check(_texto(ruta), "ck_lectura_resultado") == set(RESULTADOS)
 
 
 def test_la_fecha_es_el_dia_de_la_farmacia_sin_la_trampa_posix():
@@ -242,3 +247,90 @@ def test_metabase_solo_puede_leer_esta_tabla():
         "GRANT USAGE ON SCHEMA pedidos TO metabase_continental;",
         "GRANT SELECT ON pedidos.lectura_de_portal TO metabase_continental;",
     ]
+
+
+# =========================================================================
+# «YA ENTRÉ» EN LEVIC DISPARA LA LISTA, SOLO EN LEVIC (plan B, 2026-09-28)
+# =========================================================================
+
+import datetime as dt  # noqa: E402
+
+import httpx  # noqa: E402
+
+from continental.almacen import LineaDeVenta, Producto  # noqa: E402
+from continental.consultas import proveedores_que_consultan_al_abrir  # noqa: E402
+from continental.doyle import DoylePorHttp  # noqa: E402
+from continental.lecturas_de_portal import AL_ABRIR_SESION  # noqa: E402
+
+VIERNES = dt.date(2026, 9, 25)
+
+
+def _lista_con_un_renglon(cliente, almacen, doyle):
+    almacen.catalogo_en_memoria = [Producto(
+        producto_id=1, clave=EAN, descripcion="PARACETAMOL", categoria="GRUP4",
+        departamento="MEDICAMENTO", anaquel="GENERICO 1", precio_lista_sin_iva=20.0,
+        costo=8.0, existencia=3, esta_activo=True, es_granel=False,
+    )]
+    almacen.ventas_en_memoria = [LineaDeVenta(fecha=VIERNES, producto_id=1, cantidad=2,
+                                              importe=40, costo=16, utilidad=24)]
+    assert cliente.get("/api/pedido-sugerido").json()["ok"] is True
+    doyle.resultados_por_termino = {EAN: {
+        p: respuesta_lista(p, [(EAN, "20.00", "5")]) for p in ("nadro", "levic", "vicma", "quepharma")
+    }}
+
+
+def test_ya_entre_en_levic_consulta_la_lista_solo_en_levic(cliente, almacen, almacenamiento, doyle):
+    _lista_con_un_renglon(cliente, almacen, doyle)
+    doyle.sesiones_abriendose = ["levic"]
+
+    datos = cliente.post("/api/sesion/levic/confirmar").json()
+
+    assert datos["ok"] is True and "solo en LEVIC" in datos["consulta_disparada"]
+    assert doyle.filtros == [("levic",)]
+    assert {f["proveedor"] for f in almacenamiento.precios} == {"levic"}
+    assert {(f["proveedor"], f["origen"]) for f in almacenamiento.lecturas_de_portal} == {
+        ("levic", AL_ABRIR_SESION)}
+
+
+def test_ya_entre_en_un_portal_que_no_esta_en_el_yaml_no_dispara_nada(cliente, almacen, doyle):
+    _lista_con_un_renglon(cliente, almacen, doyle)
+    doyle.sesiones_abriendose = ["nadro"]
+
+    datos = cliente.post("/api/sesion/nadro/confirmar").json()
+
+    assert datos["consulta_disparada"] is None and doyle.pedidos == []
+
+
+def test_si_la_pagina_seguia_en_el_login_no_se_gasta_la_consulta(cliente, almacen, doyle):
+    _lista_con_un_renglon(cliente, almacen, doyle)
+    doyle.sesiones_abriendose = ["levic"]
+    doyle.sesiones_que_siguen_en_login = ["levic"]
+
+    assert cliente.post("/api/sesion/levic/confirmar").json()["consulta_disparada"] is None
+    assert doyle.pedidos == []
+
+
+def test_sin_lista_abierta_confirmar_funciona_igual(cliente, doyle):
+    doyle.sesiones_abriendose = ["levic"]
+
+    datos = cliente.post("/api/sesion/levic/confirmar").json()
+
+    assert datos["ok"] is True and datos["consulta_disparada"] is None
+
+
+def test_el_filtro_viaja_a_doyle_solo_cuando_hay_filtro():
+    enviados = []
+
+    def contestar(peticion):
+        enviados.append(json.loads(peticion.content))
+        return httpx.Response(200, json={"job_id": "x", "proveedores": ["levic"]})
+
+    doyle = DoylePorHttp(url="http://127.0.0.1:8383", transporte=httpx.MockTransport(contestar))
+    doyle.pedir_busqueda(EAN)
+    doyle.pedir_busqueda(EAN, ("levic",))
+
+    assert enviados == [{"termino": EAN}, {"termino": EAN, "proveedores": ["levic"]}]
+
+
+def test_levic_es_el_que_se_consulta_al_abrir():
+    assert proveedores_que_consultan_al_abrir() == ("levic",)

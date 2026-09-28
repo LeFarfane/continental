@@ -220,18 +220,27 @@ class DoyleFalso:
     vigilados_en_memoria: list[dict] = field(default_factory=list)
     #: Cuántas veces se le pidió «Revisar ahora».
     revisiones: int = 0
+    #: El filtro de proveedores de cada búsqueda pedida, en orden (vacío = los cuatro).
+    filtros: list[tuple[str, ...]] = field(default_factory=list)
     _trabajos: dict[str, str] = field(default_factory=dict)
+    _filtro_del_trabajo: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     def _revisar(self) -> None:
         if self.falla is not None:
             raise self.falla
 
-    def pedir_busqueda(self, termino: str) -> BusquedaPedida:
+    def pedir_busqueda(self, termino: str, proveedores: tuple[str, ...] = ()) -> BusquedaPedida:
         self._revisar()
         self.pedidos.append(termino)
+        self.filtros.append(tuple(proveedores))
         job_id = f"trabajo-{len(self.pedidos)}"
         self._trabajos[job_id] = termino
-        return BusquedaPedida(job_id=job_id, proveedores=self._proveedores(termino))
+        self._filtro_del_trabajo[job_id] = tuple(proveedores)
+        todos = self._proveedores(termino)
+        return BusquedaPedida(
+            job_id=job_id,
+            proveedores=tuple(p for p in todos if not proveedores or p in proveedores),
+        )
 
     def _proveedores(self, termino: str) -> tuple[str, ...]:
         """Los cuatro proveedores del trabajo, salgan de donde salgan.
@@ -266,6 +275,11 @@ class DoyleFalso:
         else:
             proveedores = self.resultados_por_termino.get(termino, {})
 
+        # El filtro de proveedores, igual que el Doyle real: solo contesta
+        # por los que se pidieron.
+        filtro = self._filtro_del_trabajo.get(job_id, ())
+        if filtro:
+            proveedores = {c: r for c, r in proveedores.items() if c in filtro}
         return EstadoDeBusqueda(termino=termino, proveedores=dict(proveedores))
 
     def sesiones(self) -> list[SesionDeProveedor]:

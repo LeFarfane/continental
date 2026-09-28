@@ -1661,7 +1661,8 @@ CREATE TABLE IF NOT EXISTS pedidos.lectura_de_portal (
         CHECK (negocio <> ''),
 
     CONSTRAINT ck_lectura_origen
-        CHECK (origen IN ('lote', 'sonda del lote', 'consultar', 'completar', 'buscar')),
+        CHECK (origen IN ('lote', 'sonda del lote', 'consultar', 'completar', 'buscar',
+                          'al abrir sesión')),
 
     CONSTRAINT ck_lectura_resultado
         CHECK (resultado IN ('con resultados', 'sin resultados', 'sin dato',

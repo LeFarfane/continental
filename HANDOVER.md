@@ -737,6 +737,17 @@ puede hacer `SELECT` sobre esa tabla: medido el 2026-09-28, `pedidos.renglon` y
 `~/.config/continental/metabase_continental` (600), no en el repo. Falta darla
 de alta en Metabase (Admin → Bases de datos → Agregar).
 
+**Y «Ya entré» en LEVIC consulta la lista del día solo en LEVIC** (plan B de
+LEVIC, 2026-09-28). La sesión de LEVIC muere a los ~20 minutos sin uso (13 min
+aguantó, 30 min murió; la medición exacta corre desde las 11:15 del 28 con
+`scripts/medir_la_sesion.py`), así que el lote de las 22:00 casi nunca la
+encuentra viva: los minutos justo después de abrirla son los únicos seguros.
+`pedido.consultar_al_abrir_sesion: [levic]` en el YAML; la consulta va en un
+hilo, renglón por renglón, con el tope de «Completar», y sus lecturas llevan el
+origen `al abrir sesión` (migración 0016). Doyle recibe `proveedores` en `POST
+/api/buscar`; mientras Doyle no lo conozca, lo ignora y busca en los cuatro.
+No se dispara si la página seguía en el login.
+
 **Y la lista del viernes 25 quedó solo con el viernes** (decisión del dueño):
 `sql/mantenimiento/2026-09-28-la-lista-del-viernes-solo-con-el-viernes.sql`,
 corrido una vez. 202 renglones sin venta ese día quedaron descartados con la

@@ -200,6 +200,14 @@ pedido:
   # o con huecos de los tres que se arreglan reintentando- y nunca los que ya
   # tienen precio: eso serían cuatro visitas a portales ajenos para ganar como
   # mucho una cotización más.
+  # LOS PORTALES QUE SE CONSULTAN AL ABRIR SU SESIÓN (2026-09-28). Al darle
+  # «Ya entré» a uno de éstos, Continental consulta la lista del día SOLO en
+  # ese portal, renglón por renglón, con el tope de `completar`. Existe por
+  # LEVIC: su sesión muere a los ~20 minutos sin uso (medido el 2026-09-28) y
+  # el lote de las 22:00 la encuentra muerta; los minutos justo después de
+  # abrirla son los únicos seguros. Vacío: no se dispara nada.
+  consultar_al_abrir_sesion: [levic]
+
   completar:
     # Cuánto puede durar UNA vuelta del botón. Es distinto del tope del lote y
     # a propósito: el lote corre de noche con el horario entero por delante, y

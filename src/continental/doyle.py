@@ -262,8 +262,16 @@ class ClienteDeDoyle(Protocol):
     persona ya entró. Es el mismo reparto que Doyle usa en su propia pantalla.
     """
 
-    def pedir_busqueda(self, termino: str) -> BusquedaPedida:
-        """Lanza la búsqueda en los proveedores y devuelve el acuse."""
+    def pedir_busqueda(
+        self, termino: str, proveedores: tuple[str, ...] = ()
+    ) -> BusquedaPedida:
+        """Lanza la búsqueda en los proveedores y devuelve el acuse.
+
+        `proveedores` vacío es "los cuatro". Con uno o más, Doyle busca solo
+        en ésos (2026-09-28: consultar solo LEVIC al abrir su sesión). Un
+        Doyle que todavía no conozca el filtro lo ignora y busca en los cuatro:
+        más visitas, el mismo resultado.
+        """
         ...
 
     def estado_de_busqueda(self, job_id: str) -> EstadoDeBusqueda:
@@ -369,9 +377,14 @@ class DoylePorHttp:
             base_url=self._url, timeout=self._timeout, transport=self._transporte
         )
 
-    def pedir_busqueda(self, termino: str) -> BusquedaPedida:
+    def pedir_busqueda(
+        self, termino: str, proveedores: tuple[str, ...] = ()
+    ) -> BusquedaPedida:
+        pedido: dict = {"termino": termino}
+        if proveedores:
+            pedido["proveedores"] = list(proveedores)
         with self._cliente() as cliente:
-            cuerpo = cliente.post("/api/buscar", json={"termino": termino})
+            cuerpo = cliente.post("/api/buscar", json=pedido)
         cuerpo.raise_for_status()
         datos = cuerpo.json()
         return BusquedaPedida(
