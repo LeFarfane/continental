@@ -6,7 +6,10 @@ módulos nuevos, detrás de una sola puerta —`farmacia.farfanlab.uk`— para q
 el encargado no tenga que saber que son tres programas distintos.
 
 Repo aparte, con su propio `.git`, igual que Doyle y Marlowe. El porqué está en
-`docs/decisiones/0001-suite-como-cascara-con-modulos-por-http.md`.
+`docs/decisiones/0001-suite-como-cascara-con-modulos-por-http.md`, y su
+enmienda del 2026-09-27 lo confirma: fusionar los repos se pesó aparte de
+fusionar procesos y se pospuso, con los disparadores escritos. **No lo
+vuelvas a proponer sin que uno de ellos se haya cumplido.**
 
 ## Léelo en este orden
 

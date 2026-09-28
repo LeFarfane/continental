@@ -970,6 +970,20 @@ pytest                # 1705 pruebas, 0 saltadas, ~25 s (2026-09-21): 7 nuevas e
    del Pedido: es reescribir una interfaz que ya funciona y no agrega ninguna
    capacidad nueva.
 
+**Entre el 3 y el 4: el puente.** Decidido por el dueño el 2026-09-27
+(enmienda del ADR 0001, término en `CONTEXT.md`). Junta, por producto, el
+precio de proveedor, el nuestro y el de cadena, con un `JOIN` en el almacén
+leído desde Continental. Va **después** del día real de operación del Pedido
+y **antes** del 4. El 4 queda al final a propósito: primero se pule cada
+módulo por separado y después se conectan todos. Los números no se movieron
+porque "paso 4" ya está citado en commits y en ADRs.
+
+Lo primero es medir cuántos productos tienen los tres precios a la vez; la
+primera pregunta que contesta el puente se elige con ese número. Y **"puente"
+todavía nombra otra cosa en el código**: el mapa de clave de Doyle a `pro_id`
+de SICAR (`proveedores.py`, `particion.py`, `conciliacion.py`, y la pantalla
+escribe "sin puente"). Ese uso se renombra. Los pendientes están en Notion.
+
 **Terminado, para el módulo de Pedido**, quiere decir esto y no "ya corre": un
 día de operación real en que la lista se armó sola de noche con las ventas del
 día anterior, trajo precios de los cuatro proveedores, una persona la revisó,
