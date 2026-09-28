@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import datetime as dt
 from collections.abc import Callable, Sequence
+import dataclasses
 from dataclasses import dataclass, field
 
 from continental.almacen import DiaCalendario, LineaDeCompra, LineaDeVenta, Producto
@@ -502,6 +503,8 @@ class AlmacenamientoFalso:
     #: se escribieron. También una LISTA: esa tabla solo crece igual que la del
     #: precio, y `ultima_corrida` elige la más reciente al leer, no al escribir.
     corridas: list[dict] = field(default_factory=list)
+    #: Lo que contestó cada portal (`pedidos.lectura_de_portal`, 2026-09-28).
+    lecturas_de_portal: list[dict] = field(default_factory=list)
     #: Las filas de `pedidos.pedido` (ticket 20). Un diccionario por fila, con
     #: los nombres de las columnas de verdad, igual que las listas y los
     #: renglones: una prueba tiene que poder afirmar sobre lo que **quedó
@@ -2154,6 +2157,21 @@ class AlmacenamientoFalso:
             renglon_id: ultimo_por_proveedor(filas)
             for renglon_id, filas in por_renglon.items()
         }
+
+    def guardar_lecturas_de_portal(self, negocio: str, lecturas) -> int:
+        """El `insert ... on conflict do nothing` de `_GUARDAR_LECTURA_DE_PORTAL`."""
+        self._revisar()
+        llaves = {(f["negocio"], f["trabajo"], f["proveedor"], f["posicion"]) for f in self.lecturas_de_portal}
+        nuevas = 0
+        for lectura in lecturas:
+            fila = {"negocio": negocio, **dataclasses.asdict(lectura)}
+            llave = (negocio, fila["trabajo"], fila["proveedor"], fila["posicion"])
+            if llave in llaves:
+                continue
+            llaves.add(llave)
+            self.lecturas_de_portal.append(fila)
+            nuevas += 1
+        return nuevas
 
     def evidencia_de_las_sesiones(self, negocio: str) -> dict[str, EvidenciaDeLaSesion]:
         """El `group by` de `_EVIDENCIA_DE_LAS_SESIONES`, con sus dos `filter`."""

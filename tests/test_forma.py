@@ -46,6 +46,7 @@ TABLAS = {
     "renglon",
     "precio_de_proveedor",
     "corrida_del_lote",
+    "lectura_de_portal",
 }
 
 

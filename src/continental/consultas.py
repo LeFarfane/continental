@@ -59,7 +59,8 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 
-from continental.doyle import ClienteDeDoyle
+from continental.lecturas_de_portal import COMPLETAR, CONSULTAR, lecturas_de_portal
+from continental.doyle import ClienteDeDoyle, EstadoDeBusqueda
 from continental.precios import LecturaDePrecio, congelar
 
 log = logging.getLogger("continental")
@@ -141,8 +142,15 @@ def consultar_a_doyle(
     cada_seg: float = CADA_POR_OMISION_SEG,
     dormir: Callable[[float], object] = time.sleep,
     ahora: Callable[[], float] = time.monotonic,
+    al_terminar: Callable[[EstadoDeBusqueda, str, bool], object] | None = None,
 ) -> ResultadoDeConsulta:
     """Pide la búsqueda, sondea hasta que termine o se acabe el tiempo, y lee.
+
+    `al_terminar(estado, job_id, se_acabo_el_tiempo)` recibe la respuesta
+    entera de Doyle antes de congelar nada: es por donde `lecturas_de_portal.py` guarda
+    todo lo que contestó cada portal (2026-09-28). **Si falla, la consulta
+    sigue**: guardar de más es una oportunidad, y perderla no puede costar el
+    precio que sí se iba a congelar (ver `_avisar`).
 
     **Las dos llamadas son cortas**: pedir la búsqueda y preguntar cómo va. El
     `timeout_seg` de `config/continental.yml` cubre esas dos y nunca la espera
@@ -175,6 +183,7 @@ def consultar_a_doyle(
     while True:
         estado = doyle.estado_de_busqueda(pedida.job_id)
         if estado.terminada:
+            _avisar(al_terminar, estado, pedida.job_id, False)
             # Se empareja contra la `clave` con la que se pidió la búsqueda, no
             # contra el `termino` que Doyle repite: contra qué se compara no lo
             # decide el otro proceso (ticket 13).
@@ -192,6 +201,7 @@ def consultar_a_doyle(
                     f"Doyle no dijo qué proveedores está consultando en el "
                     f"trabajo {pedida.job_id!r} después de {tope_seg:g} s."
                 )
+            _avisar(al_terminar, estado, pedida.job_id, True)
             return ResultadoDeConsulta(
                 pedida.job_id,
                 congelar(estado, clave),
@@ -203,6 +213,46 @@ def consultar_a_doyle(
             )
 
         dormir(cada_seg)
+
+
+def _avisar(
+    al_terminar: Callable[[EstadoDeBusqueda, str, bool], object] | None,
+    estado: EstadoDeBusqueda,
+    job_id: str,
+    se_acabo_el_tiempo: bool,
+) -> None:
+    """Llama a `al_terminar` y **nunca truena**: su falla va entera a la
+    bitácora y la consulta sigue. Es el mismo trato que el latido del lote."""
+    if al_terminar is None:
+        return
+    try:
+        al_terminar(estado, job_id, se_acabo_el_tiempo)
+    except Exception:  # noqa: BLE001 — guardar de más no puede costar el precio
+        log.exception(
+            "No se pudo guardar lo que contestaron los portales en el trabajo %s", job_id
+        )
+
+
+def guardar_lo_que_contestaron(
+    almacenamiento, negocio: str, *, origen: str, termino: str, renglon_id: int | None = None
+) -> Callable[[EstadoDeBusqueda, str, bool], object]:
+    """El `al_terminar` que guarda en `pedidos.lectura_de_portal` todo lo que
+    contestó cada portal, con de dónde vino la consulta (`lecturas_de_portal.py`)."""
+
+    def guardar(estado: EstadoDeBusqueda, job_id: str, se_acabo_el_tiempo: bool) -> int:
+        return almacenamiento.guardar_lecturas_de_portal(
+            negocio,
+            lecturas_de_portal(
+                estado,
+                origen=origen,
+                termino=termino,
+                trabajo=job_id,
+                renglon_id=renglon_id,
+                incluir_pendientes=se_acabo_el_tiempo,
+            ),
+        )
+
+    return guardar
 
 
 # ----------------------------------------------------- quién lanza el hilo
@@ -338,8 +388,13 @@ def consultar_y_congelar(
     cada_seg: float = CADA_POR_OMISION_SEG,
     dormir: Callable[[float], object] = time.sleep,
     ahora: Callable[[], float] = time.monotonic,
+    origen: str = CONSULTAR,
 ) -> Consulta:
     """La tarea entera: esperar a Doyle, congelar lo que dijo, y anotar cómo fue.
+
+    `origen` dice de dónde vino —el botón del renglón, el de completar o el
+    lote— y viaja con todo lo que contestaron los portales, que se guarda
+    entero además del precio congelado (`lecturas_de_portal.py`, 2026-09-28).
 
     Corre **fuera de la petición HTTP** —en un hilo, o ahí mismo en una prueba—
     así que aquí no hay `Request` ni `JSONResponse`: lo que produce es una fila
@@ -360,6 +415,13 @@ def consultar_y_congelar(
             cada_seg=cada_seg,
             dormir=dormir,
             ahora=ahora,
+            al_terminar=guardar_lo_que_contestaron(
+                almacenamiento,
+                negocio,
+                origen=origen,
+                termino=consulta.clave,
+                renglon_id=consulta.renglon_id,
+            ),
         )
     except Exception as exc:  # noqa: BLE001 — Doyle caído es un hueco con su motivo
         log.exception(
@@ -516,6 +578,7 @@ def consultar_en_fila(
             cada_seg=cada_seg,
             dormir=dormir,
             ahora=ahora,
+            origen=COMPLETAR,
         )
         hecho = replace(hecho, pedidos=hecho.pedidos + 1)
 

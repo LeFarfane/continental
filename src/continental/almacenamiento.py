@@ -54,6 +54,7 @@ import datetime as dt
 import logging
 import math
 from collections.abc import Callable, Collection, Sequence
+import dataclasses
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
@@ -71,6 +72,7 @@ from continental.precios import (
 from continental.sugerido import Renglon
 
 if TYPE_CHECKING:  # pragma: no cover - solo para el tipo
+    from continental.lecturas_de_portal import LecturaDePortal
     # `particion` importa ESTE módulo (necesita `RenglonGuardado` y
     # `PrecioDeProveedor`), así que importarlo aquí de verdad sería un ciclo. La
     # dirección correcta es ésta: el almacenamiento no sabe nada de la regla con
@@ -2929,6 +2931,19 @@ class AlmacenamientoDelPedido(Protocol):
         """
         ...
 
+    def guardar_lecturas_de_portal(
+        self, negocio: str, lecturas: Sequence["LecturaDePortal"]
+    ) -> int:
+        """Escribe lo que contestó cada portal en `pedidos.lectura_de_portal`
+        (`lecturas_de_portal.py`). Devuelve cuántas filas **nuevas** quedaron.
+
+        **Una lectura ya guardada no se repite**: la llave es el trabajo de
+        Doyle, el proveedor y la posición. Buscar pregunta cada segundo y medio
+        y recibe lo mismo de un proveedor que ya terminó; se guarda la primera
+        vez y las demás no hacen nada. Solo escribe: la tabla solo crece.
+        """
+        ...
+
     def elegir_proveedor(
         self, negocio: str, renglon_id: int, proveedor: str, quien: str
     ) -> PedidoSugeridoGuardado | None:
@@ -3902,6 +3917,27 @@ _LEER_PRECIOS = text(
 # que crece de a cuatro filas por renglón consultado. El motivo viaja como
 # parámetro, igual que en el resto del archivo: el texto con su acento vive en
 # `precios.py` y en el CHECK, no copiado aquí.
+# Lo que contestó cada portal (2026-09-28, `lecturas_de_portal.py`). `consultado_en` y
+# `fecha` no se mandan: los pone la base con su `DEFAULT`, del mismo `now()`,
+# así que nunca discrepan. `on conflict do nothing` sobre la llave
+# (negocio, trabajo, proveedor, posicion): lo ya guardado de un trabajo no se
+# repite, que es lo que deja a Buscar mandar lo mismo en cada sondeo.
+_GUARDAR_LECTURA_DE_PORTAL = text(
+    """
+    insert into pedidos.lectura_de_portal
+        (negocio, origen, termino, trabajo, renglon_id, proveedor, resultado,
+         motivo, detalle, total_en_el_portal, posicion, clave, descripcion,
+         precio_como_llego, precio, precio_publico_como_llego, precio_publico,
+         existencia_como_llego, existencia, advertencia)
+    values
+        (:negocio, :origen, :termino, :trabajo, :renglon_id, :proveedor, :resultado,
+         :motivo, :detalle, :total_en_el_portal, :posicion, :clave, :descripcion,
+         :precio_como_llego, :precio, :precio_publico_como_llego, :precio_publico,
+         :existencia_como_llego, :existencia, :advertencia)
+    on conflict (negocio, trabajo, proveedor, posicion) do nothing
+    """
+)
+
 _EVIDENCIA_DE_LAS_SESIONES = text(
     """
     select proveedor,
@@ -5180,6 +5216,17 @@ class AlmacenamientoPostgres:
             renglon_id: tuple(precios)
             for renglon_id, precios in por_renglon.items()
         }
+
+    def guardar_lecturas_de_portal(
+        self, negocio: str, lecturas: Sequence["LecturaDePortal"]
+    ) -> int:
+        if not lecturas:
+            return 0
+        filas = [{"negocio": negocio, **dataclasses.asdict(lectura)} for lectura in lecturas]
+        with self._motor().begin() as conexion:
+            return sum(
+                conexion.execute(_GUARDAR_LECTURA_DE_PORTAL, fila).rowcount for fila in filas
+            )
 
     def evidencia_de_las_sesiones(self, negocio: str) -> dict[str, EvidenciaDeLaSesion]:
         with self._motor().connect() as conexion:

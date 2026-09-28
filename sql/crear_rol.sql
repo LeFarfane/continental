@@ -184,7 +184,12 @@ GRANT SELECT, INSERT, UPDATE ON pedidos.precio_de_proveedor TO continental;
 -- que sí corrió. Es la AUSENCIA de la fila lo que significa eso.
 GRANT SELECT, INSERT, UPDATE ON pedidos.corrida_del_lote   TO continental;
 
--- Sin GRANT sobre secuencias, y no es un olvido: las cinco llaves son
+-- La sexta, desde el 2026-09-28 (`lecturas_de_portal.py`): todo lo que contestó cada
+-- portal en cada consulta. Solo crece, como el precio, y lleva UPDATE por la
+-- misma razón que el precio lleva UPDATE (arriba): un solo GRANT para todas.
+GRANT SELECT, INSERT, UPDATE ON pedidos.lectura_de_portal  TO continental;
+
+-- Sin GRANT sobre secuencias, y no es un olvido: las seis llaves son
 -- `GENERATED ALWAYS AS IDENTITY`, y la secuencia de una columna de identidad
 -- es interna a la tabla -- el INSERT sobre la tabla basta. Con `serial` haría
 -- falta además `USAGE` sobre la secuencia, un permiso extra fácil de olvidar

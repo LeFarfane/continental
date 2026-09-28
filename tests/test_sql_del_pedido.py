@@ -56,6 +56,7 @@ TABLAS = (
     "pedidos.renglon",
     "pedidos.precio_de_proveedor",
     "pedidos.corrida_del_lote",
+    "pedidos.lectura_de_portal",
 )
 
 #: Lo único que Continental lee del almacén. Cinco y ninguna más: `fct_merma`,

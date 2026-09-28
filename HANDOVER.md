@@ -717,6 +717,34 @@ igual que Doyle. (3) Agregar a mano un producto que
 no se vendió —lo que hacía el carrito de «Órdenes» de Doyle— **no existe
 todavía**: está propuesto en el ADR 0022, con dos preguntas para el dueño.
 
+**Y desde el 2026-09-28 se guarda TODO lo que contesta cada portal**
+(`lecturas_de_portal.py`, tabla `pedidos.lectura_de_portal`, migración 0015).
+El dueño pidió tomar cada consulta como una oportunidad, para ver en Metabase
+cómo se mueven los precios de compra. Una fila por cada resultado de cada
+portal, y una fila `posicion 0` por el proveedor que no trajo nada —con su
+resultado: `sin resultados` es "no lo tiene"; `sin dato`, que no se sabe—, con
+`consultado_en`, `fecha` (día de la farmacia) y `origen`: el lote, la sonda del
+lote, «Consultar precio», «Completar» y Buscar. Crudo: no se empareja al
+guardar. **Si guardar falla, el precio se congela igual y la búsqueda se ve
+igual** (`consultas._avisar`). Queda fuera la revisión de Vigilancia de las
+9:30 y 19:30, que corre dentro de Doyle (decisión del dueño).
+
+**Metabase la lee como otra base de datos**, sin pasar por el dbt de
+farmacia-data (decisión del dueño; el ADR 0001 ya había descartado el mart por
+el ciclo). El rol `metabase_continental` (`sql/crear_rol_metabase.sql`) solo
+puede hacer `SELECT` sobre esa tabla: medido el 2026-09-28, `pedidos.renglon` y
+`marts` le dicen *permission denied*. Su contraseña vive en atlas, en
+`~/.config/continental/metabase_continental` (600), no en el repo. Falta darla
+de alta en Metabase (Admin → Bases de datos → Agregar).
+
+**Y la lista del viernes 25 quedó solo con el viernes** (decisión del dueño):
+`sql/mantenimiento/2026-09-28-la-lista-del-viernes-solo-con-el-viernes.sql`,
+corrido una vez. 202 renglones sin venta ese día quedaron descartados con la
+firma del dueño —siguen a la vista—, 12 ajustados a lo del viernes, y los 4 ya
+atendidos conservan lo que cubrían (`ventas_desde` en el 12). La causa era que
+ninguna lista se había cerrado nunca y cada una arrancaba desde el 12; desde el
+cierre automático del 2026-09-27, la siguiente ya sale de un día.
+
 ```bash
 python iniciar.py     # http://127.0.0.1:8585
 python -m continental.verificar   # los datos de producción, no el código (ticket 17)
@@ -979,6 +1007,7 @@ pytest                # 1705 pruebas, 0 saltadas, ~25 s (2026-09-21): 7 nuevas e
 | `src/continental/busqueda.py` | funciones puras de la pestaña Buscar: lo que contestó Doyle + lo nuestro de esas claves -> el JSON con las frases hechas. No empareja: mirar no es pedir |
 | `src/continental/vigilancia.py` | la pestaña de Vigilancia: las frases de cada artículo (puras) y `RegistroDeRevision`, «Revisar ahora» en un hilo |
 | `src/continental/sesiones.py` | funciones puras de la pestaña Sesiones: lo que dice Doyle + la evidencia de las consultas guardadas -> la etiqueta de cada tarjeta (caducada, sirvió, sin probar) y si se puede abrir (un portal a la vez) |
+| `src/continental/lecturas_de_portal.py` | funciones puras: lo que contestó Doyle -> una fila por resultado y una por el proveedor sin resultados, para `pedidos.lectura_de_portal`. Sin emparejar: crudo, para Metabase |
 | `src/continental/web/app.py` | `/api/salud`, `/api/modulos`, el pedido sugerido y su cierre, la portada |
 | `src/continental/web/static/index.html` | la pantalla, solo el marcado: enlaza la hoja y el script (ticket 28) |
 | `src/continental/web/static/continental.css` | la hoja de estilos. **Los colores solo en las dos listas de `:root`** (claro y oscuro); la tabla se apila por debajo de 76rem. El porqué de cada regla va en su comentario |

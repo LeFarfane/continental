@@ -68,6 +68,7 @@ from continental.busqueda import (
     motivo_para_no_buscar,
     termino_limpio,
 )
+from continental.lecturas_de_portal import BUSCAR, lecturas_de_portal
 from continental.clasificacion import reglas_configuradas
 from continental.comparacion import (
     comparacion_como_json,
@@ -3894,6 +3895,7 @@ def como_va_la_busqueda(
     job_id: str,
     almacen: LecturaDelAlmacen = Depends(obtener_almacen),
     doyle: ClienteDeDoyle = Depends(obtener_doyle),
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
 ):
     """Cómo va esa búsqueda, portal por portal, y qué es nuestro de lo encontrado.
 
@@ -3928,6 +3930,19 @@ def como_va_la_busqueda(
             "detalle": f"Doyle no responde ({type(exc).__name__})",
             "que_hacer": _que_hacer(DOYLE),
         }
+
+    # TODO LO QUE CONTESTARON, GUARDADO (2026-09-28, `lecturas_de_portal.py`): cada
+    # búsqueda es una oportunidad de saber a cómo está cada proveedor. Solo
+    # los que ya terminaron; lo repetido de un sondeo a otro no se vuelve a
+    # escribir. Si falla, la búsqueda se ve igual: guardar de más no puede
+    # costar lo que la persona vino a mirar.
+    try:
+        almacenamiento.guardar_lecturas_de_portal(
+            cargar().negocio,
+            lecturas_de_portal(estado, origen=BUSCAR, termino=estado.termino, trabajo=job_id),
+        )
+    except Exception:  # noqa: BLE001 — la captura nunca tumba la búsqueda
+        log.exception("No se pudo guardar lo que contestaron los portales en la búsqueda %s", job_id)
 
     claves = claves_por_cruzar(estado)
     nuestros: list | None = []

@@ -125,12 +125,14 @@ from continental.almacenamiento import (
 )
 from continental.cierre import lo_que_se_perderia
 from continental.clasificacion import reglas_configuradas
+from continental.lecturas_de_portal import LOTE, SONDA_DEL_LOTE
 from continental.consultas import (
     GUARDADA,
     RegistroDeConsultas,
     ajustes_de_la_consulta,
     consultar_a_doyle,
     consultar_y_congelar,
+    guardar_lo_que_contestaron,
 )
 from continental.doyle import ClienteDeDoyle
 from continental.latido import ABAJO, ARRIBA, ResultadoDelLatido, mandar_el_latido
@@ -548,8 +550,12 @@ def _sondear_las_sesiones(
     cada_seg: float,
     dormir: Callable[[float], object],
     ahora: Callable[[], float],
+    al_terminar: Callable | None = None,
 ) -> None:
     """La verificación previa. Truena `SesionesNoSirven` si alguna no sirve.
+
+    `al_terminar` guarda lo que contestaron los portales (`lecturas_de_portal.py`): la
+    sonda es una búsqueda real y también es una oportunidad.
 
     `clave_de_sonda` es la de `config/continental.yml`, o `None` si no está
     configurada: `_clave_de_sonda` decide con qué se sondea de verdad, con su
@@ -596,6 +602,7 @@ def _sondear_las_sesiones(
         cada_seg=cada_seg,
         dormir=dormir,
         ahora=ahora,
+        al_terminar=al_terminar,
     )
     caidas = proveedores_con_sesion_caida(resultado.lecturas)
     if caidas:
@@ -1196,6 +1203,7 @@ def _consultar_un_renglon(
             cada_seg=cada_seg,
             dormir=dormir,
             ahora=ahora,
+            origen=LOTE,
         ),
     )
     # La del registro y no la que se acaba de crear: para cuando se llega aquí
@@ -1454,6 +1462,12 @@ def correr_el_lote(
                 cada_seg=cada_seg,
                 dormir=dormir,
                 ahora=ahora,
+                al_terminar=guardar_lo_que_contestaron(
+                    almacenamiento,
+                    negocio,
+                    origen=SONDA_DEL_LOTE,
+                    termino=_clave_de_sonda(orden, clave_de_sonda) or "",
+                ),
             )
 
         for posicion, renglon in enumerate(orden.renglones):

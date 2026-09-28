@@ -101,21 +101,22 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
                   WHERE nspname = 'pedidos'
                     AND pg_get_userbyid(nspowner) <> 'continental'))),
 
--- CINCO desde el ticket 19, que estrenó `pedidos.corrida_del_lote` (ADR
--- 0007); eran cuatro desde el ticket 12 y tres al principio. El número está
+-- SEIS desde el 2026-09-28, que estrenó `pedidos.lectura_de_portal`; eran cinco
+-- desde el ticket 19 (`pedidos.corrida_del_lote`, ADR 0007), cuatro desde el
+-- ticket 12 y tres al principio. El número está
 -- escrito a mano A PROPÓSITO: si alguien crea una sexta tabla en este esquema
 -- sin pasar por `crear_tablas.sql`, esta comprobación se pone en [MAL] en vez
 -- de darla por buena. El DDL se corre a mano una vez, así que agregar una
 -- tabla es un acto deliberado y debe verse como tal.
 (4,
- 'Las cinco tablas existen y NO las posee continental',
- '5 tablas, con otro propietario',
+ 'Las seis tablas existen y NO las posee continental',
+ '6 tablas, con otro propietario',
  (SELECT format('%s tabla(s): %s', count(*),
                 coalesce(string_agg(c.relname || ' -> ' || pg_get_userbyid(c.relowner),
                                     ', ' ORDER BY c.relname), '--'))
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname = 'pedidos' AND c.relkind = 'r'),
- (SELECT count(*) = 5
+ (SELECT count(*) = 6
          AND count(*) FILTER (WHERE pg_get_userbyid(c.relowner) = 'continental') = 0
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname = 'pedidos' AND c.relkind = 'r')),
@@ -145,7 +146,7 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
 -- "permission denied for table ..." en el primer INSERT -- o, con la quinta, a
 -- las 22:00 y sin nadie mirando.
 (6,
- 'continental puede SELECT, INSERT y UPDATE sus cinco tablas',
+ 'continental puede SELECT, INSERT y UPDATE sus seis tablas',
  'no le falta ninguno',
  (SELECT coalesce(string_agg(x.tabla || ': le falta ' || x.priv, '; '
                              ORDER BY x.tabla, x.priv),

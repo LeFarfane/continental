@@ -447,6 +447,8 @@ def test_las_tablas_de_pedidos_salen_del_mismo_archivo():
         "pedido",
         "precio_de_proveedor",
         "corrida_del_lote",
+        # La sexta, del 2026-09-28: lo que contestó cada portal (`lecturas_de_portal.py`).
+        "lectura_de_portal",
     )
 
 
