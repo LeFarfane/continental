@@ -422,15 +422,15 @@ td.proveedor, th.proveedor { width: 9.5rem; }
    seleccionable, porque "de un clic" no es "doble clic, Ctrl+C". En
    monoespaciada: trece dígitos se leen mejor alineados, y es lo que se
    compara de reojo contra el buscador del portal. */
-.captura .clave {
+.captura .clave, .resultados .clave {
   font: inherit; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
   font-size: .8rem; min-height: 2rem; padding: .2rem .45rem; cursor: pointer;
   color: var(--tinta); background: var(--fondo);
   border: 1px solid var(--linea); border-radius: 4px; white-space: nowrap;
 }
-.captura .clave:hover { border-color: var(--tinta); }
-.captura .clave.hecho { border-color: var(--ok); color: var(--ok); }
-.captura .clave.fallo { border-color: var(--mal); color: var(--mal); white-space: normal; }
+.captura .clave:hover, .resultados .clave:hover { border-color: var(--tinta); }
+.captura .clave.hecho, .resultados .clave.hecho { border-color: var(--ok); color: var(--ok); }
+.captura .clave.fallo, .resultados .clave.fallo { border-color: var(--mal); color: var(--mal); white-space: normal; }
 .captura .clave.sin { font-family: inherit; font-style: italic; color: var(--tenue); cursor: default; border-style: dashed; }
 /* LO TACHADO SE DISTINGUE DE UN VISTAZO (casilla 2), y no solo por color:
    tachado de verdad, atenuado y con fondo. Se ve igual sin distinguir el
@@ -815,4 +815,99 @@ tr.transito.atrasado > td:first-child { border-left: 4px double var(--aviso); }
   td.precios .precio { grid-template-columns: 5.4rem 5.2rem minmax(0, 1fr); font-size: .85rem; }
   .precio .marca-gana, .precio .caro, .precio .precio-motivo { grid-column: 2 / -1; }
   .detalle { display: block; }
+}
+
+/* ------------------------------------------------------------ las pestañas
+
+   Pedido y Buscar (2026-09-28). La activa se distingue por la raya de abajo
+   y la negrita, además del tono: la regla del archivo, nada solo en color.
+   Los paneles no llevan la raya de arriba de las demás secciones: la de las
+   pestañas ya los separa, y dos rayas juntas se leen como un hueco. */
+.pestanas { display: flex; gap: .25rem; border-bottom: 1px solid var(--linea); margin: 0 0 1.25rem; }
+.pestanas button {
+  font: inherit; font-size: .95rem; cursor: pointer; background: none; color: var(--tenue);
+  border: 0; border-bottom: 3px solid transparent; margin-bottom: -1px; padding: .5rem .9rem;
+}
+.pestanas button[aria-selected="true"] { color: var(--tinta); font-weight: 600; border-bottom-color: var(--tinta); }
+.pestanas button:focus-visible { outline: 2px solid var(--tinta); outline-offset: 2px; }
+section[role="tabpanel"] { border-top: 0; padding-top: 0; margin-top: 0; }
+
+/* ------------------------------------------------------------------ Buscar
+
+   Una tarjeta por portal, siempre en el mismo orden y en columnas fijas —no
+   `auto-fit`, que bajaba a QuePharma a una segunda hilera en cuanto su
+   contenido no cabía (la misma lección de la pantalla de Doyle)—. Cuatro a
+   lo ancho, dos en la tableta, una en el teléfono. */
+.buscador { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; max-width: 62rem; margin: 0 0 1rem; }
+.buscador > label { flex: 0 0 100%; font-size: .88rem; color: var(--tenue); }
+/* Solo los campos de texto: las casillas de Vigilancia viven en el mismo
+   formulario y con esta regla se estiraban a lo ancho (recorrido del
+   2026-09-28). */
+.buscador input[type="search"], .buscador input[type="text"] {
+  flex: 1 1 14rem; font: inherit; padding: .45rem .65rem;
+  color: var(--tinta); background: var(--fondo); border: 1px solid var(--linea); border-radius: 6px;
+}
+.buscador input[type="search"]:focus-visible, .buscador input[type="text"]:focus-visible { outline: 2px solid var(--tinta); outline-offset: 1px; }
+.portales { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .9rem; }
+.portal { border: 1px solid var(--linea); border-radius: 8px; padding: .75rem .9rem; min-width: 0; }
+.portal h3 {
+  display: flex; justify-content: space-between; align-items: baseline; gap: .5rem;
+  font-size: .95rem; margin: 0 0 .5rem;
+}
+.estado-portal { font-size: .78rem; font-weight: 400; color: var(--tenue); }
+/* Mientras busca, en cursiva; sin dato, en negrita y con su motivo escrito
+   debajo. El color acompaña a la palabra, no la sustituye. */
+.portal.esperando .estado-portal { font-style: italic; }
+.portal.sin-dato .estado-portal { font-weight: 600; color: var(--aviso); }
+.portal .que-paso { font-size: .88rem; margin: 0 0 .5rem; }
+.portal .fila { display: flex; flex-wrap: wrap; gap: .5rem; margin: 0 0 .5rem; }
+.portal > .detalle { display: block; margin: .5rem 0 0; }
+.resultados li { display: block; padding: .55rem 0; }
+.resultados .descripcion { display: block; font-size: .9rem; margin-bottom: .2rem; }
+.resultados .cifras { display: block; font-size: .85rem; margin-top: .2rem; font-variant-numeric: tabular-nums; }
+/* Sin existencia: la palabra ya lo dice ("Sin existencia"); la negrita es
+   para verlo sin leer, como `.precio .hay.notiene` en la lista. */
+.resultados li.agotado .cifras { font-weight: 600; color: var(--mal); }
+.resultados .advertencia { display: block; font-size: .8rem; color: var(--aviso); }
+.resultados .advertencia::before { content: "!" / ""; font-weight: 700; margin-right: .35rem; }
+.resultados .nuestro { display: block; font-size: .82rem; font-weight: 600; color: var(--ok); margin-top: .2rem; }
+.resultados .nuestro::before { content: "✓" / ""; margin-right: .35rem; }
+@media (max-width: 76rem) {
+  .portales { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 34rem) {
+  .portales { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* -------------------------------------------------------------- Vigilancia
+
+   La pestaña de Vigilancia de Doyle (su ADR 0007). Lo que ya hay lleva una
+   barra y la palabra "ya hay"; el aviso de arriba de las pestañas, su rótulo
+   y su botón. Nada se distingue solo por el color. */
+.avisos-vigilancia { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; border-left: 3px solid currentColor; padding-left: .6rem; }
+.proveedores-vigilancia { flex: 0 0 100%; display: flex; flex-wrap: wrap; gap: .25rem 1.1rem; border: 0; padding: 0; margin: 0; }
+.proveedores-vigilancia legend { font-size: .88rem; color: var(--tenue); padding: 0; margin-bottom: .25rem; }
+.proveedores-vigilancia label { display: inline-flex; align-items: center; gap: .35rem; }
+.revision { display: flex; flex-wrap: wrap; align-items: baseline; gap: .6rem; max-width: 62rem; margin: 0 0 1rem; }
+.vigilados { max-width: 62rem; }
+.vigilados li { display: block; padding: .7rem 0; }
+.vigilados .termino { font-weight: 600; }
+.vigilados .estado-vigilado { font-size: .8rem; color: var(--tenue); margin-left: .35rem; }
+.vigilados li.disponible { border-left: 3px solid var(--ok); padding-left: .7rem; }
+.vigilados li.disponible .estado-vigilado { color: var(--ok); font-weight: 700; }
+.vigilados li.disponible .estado-vigilado::before { content: "✓" / ""; margin-right: .25rem; }
+.vigilados .detalle, .vigilados .error-vigilado { display: block; margin-top: .2rem; }
+.vigilados .error-vigilado { font-size: .85rem; color: var(--aviso); }
+.vigilados .error-vigilado::before { content: "!" / ""; font-weight: 700; margin-right: .35rem; }
+.vigilados .fila { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .45rem; }
+
+/* ---------------------------------------------------------------- Sesiones
+
+   Las tarjetas reusan las de Buscar (`.portal`): una por portal, en el mismo
+   orden. "Caducada" y "sin sesión" van como `sin-dato` —negrita y ámbar, con
+   la palabra escrita—. Con cuatro pestañas, en el teléfono se aprietan un
+   poco en vez de empujar la página hacia los lados. */
+.portal > .detalle { font-size: .82rem; }
+@media (max-width: 34rem) {
+  .pestanas button { padding: .5rem .5rem; font-size: .9rem; }
 }

@@ -62,7 +62,12 @@ import sqlalchemy
 from sqlalchemy import text
 
 from continental.clasificacion import ABARROTE, MEDICAMENTO, SIN_CLASIFICAR
-from continental.precios import MOTIVOS, LecturaDePrecio, nombre_del_proveedor
+from continental.precios import (
+    MOTIVOS,
+    SESION_CADUCADA,
+    LecturaDePrecio,
+    nombre_del_proveedor,
+)
 from continental.sugerido import Renglon
 
 if TYPE_CHECKING:  # pragma: no cover - solo para el tipo
@@ -2028,6 +2033,29 @@ def pedido_desde_columnas(fila) -> PedidoGuardado:
 
 
 @dataclass(frozen=True, slots=True)
+class EvidenciaDeLaSesion:
+    """Lo que las lecturas guardadas dicen de la sesión de un proveedor.
+
+    La pestaña de Sesiones (2026-09-28) no le cree al `guardada` de Doyle: es
+    un marcador en disco que sobrevive a que el portal caduque la sesión —el
+    2026-09-19 los cuatro decían `guardada` con las cuatro caducadas—. Lo que
+    sí prueba algo está en `pedidos.precio_de_proveedor`:
+
+    - `dio_precio_en`: la última lectura **con precio**. Un precio solo llega
+      con la sesión viva, así que es la prueba de que sirvió entonces.
+    - `caduco_en`: la última lectura con motivo `la sesión caducó`: el portal
+      mandó al login.
+
+    Las demás lecturas —sin resultados, no empareja, el portal no contestó—
+    no prueban ni lo uno ni lo otro y no cuentan.
+    """
+
+    proveedor: str
+    dio_precio_en: dt.datetime | None = None
+    caduco_en: dt.datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class PrecioDeProveedor:
     """Lo que un proveedor dijo de un renglón, **con el instante de la lectura**.
 
@@ -2889,6 +2917,15 @@ class AlmacenamientoDelPedido(Protocol):
         de aparecer con una tupla vacía: "no está" y "está vacío" quieren decir
         lo mismo aquí y tener dos maneras de decirlo invita a que alguien
         compruebe solo una.
+        """
+        ...
+
+    def evidencia_de_las_sesiones(self, negocio: str) -> dict[str, EvidenciaDeLaSesion]:
+        """Por proveedor, cuándo trajo precio por última vez y cuándo dijo por
+        última vez que la sesión caducó (ver `EvidenciaDeLaSesion`).
+
+        Un proveedor que nunca se consultó **no aparece**, igual que en
+        `precios_de_la_lista`. Es una lectura: no escribe nada.
         """
         ...
 
@@ -3855,6 +3892,24 @@ _LEER_PRECIOS = text(
        and r.pedido_sugerido_id = :pedido_sugerido_id
      order by p.renglon_id, p.proveedor,
               p.consultado_en desc, p.precio_de_proveedor_id desc
+    """
+)
+
+# La pestaña de Sesiones (2026-09-28): por proveedor, la última lectura CON
+# precio —prueba de que la sesión servía— y la última que dijo "la sesión
+# caducó". Sobre la tabla entera del negocio y no sobre una lista: la sesión es
+# del portal, no del día. Sin índice nuevo: es un `group by` sobre una tabla
+# que crece de a cuatro filas por renglón consultado. El motivo viaja como
+# parámetro, igual que en el resto del archivo: el texto con su acento vive en
+# `precios.py` y en el CHECK, no copiado aquí.
+_EVIDENCIA_DE_LAS_SESIONES = text(
+    """
+    select proveedor,
+           max(consultado_en) filter (where precio is not null) as dio_precio_en,
+           max(consultado_en) filter (where motivo = :caducada) as caduco_en
+      from pedidos.precio_de_proveedor
+     where negocio = :negocio
+     group by proveedor
     """
 )
 
@@ -5124,6 +5179,25 @@ class AlmacenamientoPostgres:
         return {
             renglon_id: tuple(precios)
             for renglon_id, precios in por_renglon.items()
+        }
+
+    def evidencia_de_las_sesiones(self, negocio: str) -> dict[str, EvidenciaDeLaSesion]:
+        with self._motor().connect() as conexion:
+            filas = (
+                conexion.execute(
+                    _EVIDENCIA_DE_LAS_SESIONES,
+                    {"negocio": negocio, "caducada": SESION_CADUCADA},
+                )
+                .mappings()
+                .all()
+            )
+        return {
+            f["proveedor"]: EvidenciaDeLaSesion(
+                proveedor=f["proveedor"],
+                dio_precio_en=f["dio_precio_en"],
+                caduco_en=f["caduco_en"],
+            )
+            for f in filas
         }
 
     # --------------------------------------------------------- escritura

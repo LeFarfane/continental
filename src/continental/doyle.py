@@ -95,6 +95,18 @@ class RespuestaDeProveedor:
         return self.estado != "listo" or not self.filas
 
 
+class BusquedaDesconocida(LookupError):
+    """Doyle no tiene ese `job_id`: contestó 404 a `GET /api/buscar/{job_id}`.
+
+    Doyle guarda sus búsquedas **en memoria** (su `app.py`, `_trabajos`), así
+    que esto pasa en cuanto se reinicia a la mitad de una —un despliegue, o
+    systemd levantándolo tras una caída—. No es "Doyle no contesta": Doyle
+    contestó, y lo que dijo es que esa búsqueda ya no existe. Se arregla
+    buscando otra vez, no levantando nada, y por eso tiene su propio tipo en
+    vez de viajar como un `HTTPStatusError` cualquiera.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class BusquedaPedida:
     """Lo que se recibe al pedir una búsqueda: un acuse, no un resultado."""
@@ -180,14 +192,63 @@ class SesionConfirmada:
     todavia_parece_login: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class ArticuloVigilado:
+    """Un renglón de la lista de vigilancia de Doyle (su ADR 0007), tal cual.
+
+    La lista, el reloj que la revisa (9:30 y 19:30) y las búsquedas son de
+    Doyle: viven en su SQLite y en su hilo. Continental solo la dibuja.
+
+    `estado` es el vocabulario de Doyle sin traducir —`pendiente` (nunca
+    revisado), `disponible`, `agotado`—; lo que se lee en la pantalla lo
+    decide `vigilancia.py`. `agotado` en Doyle quiere decir que **ninguno de
+    los que contestaron** lo tiene disponible, no que se sepa de todos.
+
+    Los instantes (`ultima_revision`, `disponible_desde`) llegan como Doyle los
+    escribe: texto ISO **sin zona**, en la hora de la máquina donde corre
+    —`America/Mexico_City` en atlas, medido el 2026-09-28—. No se convierten
+    aquí: quien los dice en palabras sabe de qué zona son.
+    """
+
+    articulo_id: int
+    termino: str
+    #: Vacío quiere decir "los cuatro", como en Doyle.
+    proveedores: tuple[str, ...] = ()
+    estado: str = "pendiente"
+    avisado: bool = False
+    disponible_desde: str | None = None
+    ultima_revision: str | None = None
+    ultimo_error: str | None = None
+
+
+class VigiladoDesconocido(LookupError):
+    """Doyle no tiene ese artículo en la vigilancia: contestó 404.
+
+    Pasa cuando dos pestañas lo quitan a la vez, o con una pantalla vieja. No
+    es un Doyle caído, y se dice distinto.
+    """
+
+
+#: Cuánto se espera a que Doyle termine «Revisar ahora». Doyle **bloquea la
+#: petición** mientras revisa (su `revisar_vigilancia_ahora`): artículo por
+#: artículo, cada uno en sus proveedores, ~9 s por visita. Veinte artículos en
+#: cuatro portales son ~12 minutos; media hora cubre eso con holgura. Por eso
+#: esta llamada NO usa el `timeout_seg` corto del YAML, y por eso Continental
+#: la hace en un hilo (`vigilancia.RegistroDeRevision`) y no dentro de la
+#: petición del navegador, que el túnel corta a los 100 s.
+TOPE_DE_LA_REVISION_SEG = 30 * 60
+
+
 # --------------------------------------------------------------- interfaz
 
 
 @runtime_checkable
 class ClienteDeDoyle(Protocol):
-    """El borde hacia Doyle. Cinco verbos y ninguno más.
+    """El borde hacia Doyle. Once verbos y ninguno más.
 
-    Eran tres hasta el ticket 19. Los dos nuevos —`abrir_sesion` y
+    Eran cinco hasta el 2026-09-28, cuando Continental absorbió las pestañas
+    de Vigilancia (cinco verbos, al final) y de Sesiones (`cancelar_sesion`)
+    de Doyle. Eran tres hasta el ticket 19. Los dos nuevos —`abrir_sesion` y
     `confirmar_sesion`— son las dos mitades de un solo acto del encargado, y
     **no rompen la regla 1 de `CLAUDE.md`**: Continental sigue sin tocar un
     navegador. Lo que hace es pedírselo a Doyle por HTTP, que es exactamente
@@ -206,7 +267,11 @@ class ClienteDeDoyle(Protocol):
         ...
 
     def estado_de_busqueda(self, job_id: str) -> EstadoDeBusqueda:
-        """Cómo va esa búsqueda. Llamada corta: no espera a que termine."""
+        """Cómo va esa búsqueda. Llamada corta: no espera a que termine.
+
+        Levanta `BusquedaDesconocida` si Doyle ya no la tiene —se reinició a
+        la mitad—, que es distinto de que Doyle no conteste.
+        """
         ...
 
     def sesiones(self) -> list[SesionDeProveedor]:
@@ -233,6 +298,44 @@ class ClienteDeDoyle(Protocol):
         """
         ...
 
+    def cancelar_sesion(self, proveedor: str) -> None:
+        """Cierra la ventana que `abrir_sesion` dejó esperando, **sin guardar
+        nada** (2026-09-28, pestaña de Sesiones).
+
+        Es la salida que el ADR 0018 dejó escrita para cuando el candado de
+        una-ventana-a-la-vez estorbara: una ventana abandonada bloqueaba a los
+        otros tres portales hasta confirmar o reiniciar Doyle. Doyle contesta
+        400 si no había ventana de ese proveedor.
+        """
+        ...
+
+    # -------------------------------------------- la vigilancia (2026-09-28)
+    #
+    # Cinco verbos más, uno por cada botón de la pestaña que Doyle tenía (su
+    # ADR 0007). Ninguno visita un portal salvo `revisar_la_vigilancia`, y ése
+    # lo hace Doyle, igual que a las 9:30 y a las 19:30.
+
+    def vigilados(self) -> list[ArticuloVigilado]:
+        """La lista de vigilancia entera, lo más nuevo primero (como Doyle)."""
+        ...
+
+    def vigilar(self, termino: str, proveedores: tuple[str, ...]) -> ArticuloVigilado:
+        """Agrega un artículo. `proveedores` vacío es "los cuatro"."""
+        ...
+
+    def dejar_de_vigilar(self, articulo_id: int) -> None:
+        """Lo quita. `VigiladoDesconocido` si Doyle ya no lo tenía."""
+        ...
+
+    def marcar_visto(self, articulo_id: int) -> None:
+        """Apaga el aviso de "ya hay" de ese artículo sin tocar su estado."""
+        ...
+
+    def revisar_la_vigilancia(self) -> None:
+        """Le pide a Doyle la revisión de las 9:30 **ahora**. Tarda minutos:
+        vuelve cuando Doyle terminó (ver `TOPE_DE_LA_REVISION_SEG`)."""
+        ...
+
 
 # --------------------------------------------------------- implementación
 
@@ -247,14 +350,24 @@ class DoylePorHttp:
     bucle.
     """
 
-    def __init__(self, url: str, timeout_seg: float = 10.0):
+    def __init__(
+        self,
+        url: str,
+        timeout_seg: float = 10.0,
+        transporte: httpx.BaseTransport | None = None,
+    ):
         self._url = url.rstrip("/")
         self._timeout = timeout_seg
+        # Solo para pruebas: un `httpx.MockTransport` que contesta lo que Doyle
+        # contestaría, sin red. `None` es el transporte de verdad.
+        self._transporte = transporte
 
     def _cliente(self) -> httpx.Client:
         # Por llamada, no en `__init__`: construir este objeto no debe abrir
         # nada, ni siquiera un pool de conexiones ocioso.
-        return httpx.Client(base_url=self._url, timeout=self._timeout)
+        return httpx.Client(
+            base_url=self._url, timeout=self._timeout, transport=self._transporte
+        )
 
     def pedir_busqueda(self, termino: str) -> BusquedaPedida:
         with self._cliente() as cliente:
@@ -269,6 +382,8 @@ class DoylePorHttp:
     def estado_de_busqueda(self, job_id: str) -> EstadoDeBusqueda:
         with self._cliente() as cliente:
             respuesta = cliente.get(f"/api/buscar/{job_id}")
+        if respuesta.status_code == 404:
+            raise BusquedaDesconocida(job_id)
         respuesta.raise_for_status()
         datos = respuesta.json()
         return EstadoDeBusqueda(
@@ -315,6 +430,68 @@ class DoylePorHttp:
             proveedor=proveedor,
             todavia_parece_login=bool(datos.get("todavia_parece_login")),
         )
+
+    def cancelar_sesion(self, proveedor: str) -> None:
+        with self._cliente() as cliente:
+            respuesta = cliente.post(f"/api/sesion/{proveedor}/cancelar")
+        respuesta.raise_for_status()
+
+    def vigilados(self) -> list[ArticuloVigilado]:
+        with self._cliente() as cliente:
+            respuesta = cliente.get("/api/vigilancia")
+        respuesta.raise_for_status()
+        return [_leer_vigilado(crudo) for crudo in (respuesta.json() or {}).get("items") or ()]
+
+    def vigilar(self, termino: str, proveedores: tuple[str, ...]) -> ArticuloVigilado:
+        with self._cliente() as cliente:
+            respuesta = cliente.post(
+                "/api/vigilancia", json={"termino": termino, "proveedores": list(proveedores)}
+            )
+        respuesta.raise_for_status()
+        return _leer_vigilado(respuesta.json() or {})
+
+    def dejar_de_vigilar(self, articulo_id: int) -> None:
+        with self._cliente() as cliente:
+            respuesta = cliente.delete(f"/api/vigilancia/{int(articulo_id)}")
+        if respuesta.status_code == 404:
+            raise VigiladoDesconocido(articulo_id)
+        respuesta.raise_for_status()
+
+    def marcar_visto(self, articulo_id: int) -> None:
+        with self._cliente() as cliente:
+            respuesta = cliente.post(f"/api/vigilancia/{int(articulo_id)}/visto")
+        if respuesta.status_code == 404:
+            raise VigiladoDesconocido(articulo_id)
+        respuesta.raise_for_status()
+
+    def revisar_la_vigilancia(self) -> None:
+        # Su propio cliente con el tope largo: el de `_cliente` es el corto del
+        # YAML, y aquí Doyle no contesta hasta haber visitado cada portal.
+        with httpx.Client(
+            base_url=self._url, timeout=TOPE_DE_LA_REVISION_SEG, transport=self._transporte
+        ) as cliente:
+            respuesta = cliente.post("/api/vigilancia/revisar")
+        respuesta.raise_for_status()
+
+
+def _leer_vigilado(crudo: dict) -> ArticuloVigilado:
+    """Una fila de la tabla `vigilancia` de Doyle, como la devuelve su API.
+
+    `proveedores` llega como texto separado por comas (vacío = los cuatro) y
+    `avisado` como 0/1 de SQLite.
+    """
+    return ArticuloVigilado(
+        articulo_id=int(crudo.get("id") or 0),
+        termino=str(crudo.get("termino") or ""),
+        proveedores=tuple(
+            p.strip() for p in str(crudo.get("proveedores") or "").split(",") if p.strip()
+        ),
+        estado=str(crudo.get("estado") or "pendiente"),
+        avisado=bool(crudo.get("avisado")),
+        disponible_desde=crudo.get("disponible_desde") or None,
+        ultima_revision=crudo.get("ultima_revision") or None,
+        ultimo_error=crudo.get("ultimo_error") or None,
+    )
 
 
 def _leer_respuesta(proveedor: str, crudo: dict) -> RespuestaDeProveedor:

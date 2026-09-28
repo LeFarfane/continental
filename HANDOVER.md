@@ -673,6 +673,50 @@ pedido a nadie; lo pone el ticket 21 al enviar. (3) **El total de un pedido es
 parcial se compara contra la factura del proveedor, no cuadra, y nadie sabe si
 falta mercancía o falta un precio. El parcial viaja aparte con su conteo.
 
+**Y desde el 2026-09-28 la pantalla tiene pestañas: Pedido, Buscar, Vigilancia
+y Sesiones.** Las tres últimas son las que Doyle tenía en su propia
+web y que nadie podía ver desde el 2026-09-21: Doyle se mudó a atlas sin
+interfaz (su ADR 0008) y escucha en loopback. Continental las dibuja; **quien
+busca y quien vigila sigue siendo Doyle**, por su API de siempre. La pestaña se
+llama *Pedido* y no «Órdenes» (decisión del dueño; el glosario lo anota).
+
+- **Buscar** (`busqueda.py`, `POST /api/buscar` y `GET /api/buscar/{job_id}`):
+  un producto en los cuatro portales a la vez, por código o por nombre, con las
+  cifras tal como las dio cada portal y **qué es nuestro** de lo encontrado —la
+  octava lectura del almacén, `productos_por_clave`, acotada a las claves de los
+  resultados—. **Mirar no es pedir**: nada se guarda ni se empareja. Una sesión
+  caducada ofrece los mismos «Abrir sesión» y «Ya entré» de la lista, que
+  salieron de `cargarPedido` para poder reusarse. Una búsqueda que Doyle olvidó
+  al reiniciarse (`BusquedaDesconocida`, su 404) no se lee como Doyle caído.
+- **Vigilancia** (`vigilancia.py`, cinco rutas bajo `/api/vigilancia`): la lista
+  de lo que falta, que Doyle revisa a las 9:30 y 19:30, con el aviso de "ya hay"
+  **arriba de las pestañas** para que se vea sin abrir la de Vigilancia.
+  **«Revisar ahora» corre en un hilo de Continental** (`RegistroDeRevision`, el
+  patrón de `consultas.py`): Doyle bloquea esa petición minutos enteros, más de
+  lo que el túnel aguanta. Medido en atlas el 2026-09-28: la lista está vacía
+  (0 artículos) y atlas corre en `America/Mexico_City`, así que las horas de
+  Doyle son las de la farmacia.
+- **Sesiones** (`sesiones.py`, `GET /api/sesiones` y `POST
+  /api/sesion/{proveedor}/cancelar`): el «Inicio» de Doyle, una tarjeta por
+  portal con «Abrir sesión», «Ya entré» y **«Cancelar»** —la salida que el ADR
+  0018 dejó prevista para una ventana abandonada—. **La etiqueta no es el
+  `guardada` de Doyle**: se cruza con lo que vieron las consultas guardadas
+  (`evidencia_de_las_sesiones`, una lectura nueva de `precio_de_proveedor`) y
+  dice *caducada*, *sirvió* o *sin probar*. El `guardada_en` de Doyle viene sin
+  zona y en hora de la farmacia; la evidencia, con zona: la comparación cuida
+  las seis horas.
+
+**Lo que conviene no redescubrir.** (1) Cambiar solo el `#` de la URL no recarga
+la página: sin escuchar `hashchange`, la dirección decía Buscar con el pedido a
+la vista (lo cazó el recorrido del navegador). (2) `DoyleFalso` contestaba una
+búsqueda vacía a un `job_id` que no tenía, y el Doyle real contesta 404.
+**Puede contar como el segundo doble alejado del real** de la condición de
+revisión del ADR 0001 (el primero fue `ESTADOS_PENDIENTES`), aunque esta vez
+se cazó leyendo y sin que mordiera; pesarlo es del dueño. Ya se comporta
+igual que Doyle. (3) Agregar a mano un producto que
+no se vendió —lo que hacía el carrito de «Órdenes» de Doyle— **no existe
+todavía**: está propuesto en el ADR 0022, con dos preguntas para el dueño.
+
 ```bash
 python iniciar.py     # http://127.0.0.1:8585
 python -m continental.verificar   # los datos de producción, no el código (ticket 17)
@@ -931,6 +975,10 @@ pytest                # 1705 pruebas, 0 saltadas, ~25 s (2026-09-21): 7 nuevas e
 | `src/continental/recepcion.py` | funciones puras: lo que está en tránsito + las compras de SICAR -> propuestas de *probablemente recibido* con su evidencia, y los renglones sin propuesta con su motivo (seis). Empareja por proveedor, producto y día; **nunca por folio**. Ahí viven las frases de la recepción, el aviso de la noche de retraso y la regla de la cantidad (ticket 26, ADR 0014). Desde el 27, también **las piezas escritas a mano** (`piezas_escritas`), el estado que sale de ellas, **el estado del pedido calculado** (`estado_del_pedido`) y las frases de lo recibido a mano y parcial (ADR 0015) |
 | `sql/migraciones/` | **doce** archivos numerados: lo que le falta a una base donde las tablas YA existen: `crear_tablas.sql` usa `CREATE TABLE IF NOT EXISTS` y calla si la tabla ya está con otra forma. También a mano y con credenciales de dueño |
 | `config/continental.yml` | puertos de los módulos y los parámetros del pedido |
+| `docs/decisiones/0022` | **propuesta**: agregar a mano un producto que no se vendió es un renglón más de la lista del día (propuesta cero, cantidad firmada, `agregado_por`), y no el carrito de Doyle ni un pedido suelto. Dos preguntas abiertas para el dueño |
+| `src/continental/busqueda.py` | funciones puras de la pestaña Buscar: lo que contestó Doyle + lo nuestro de esas claves -> el JSON con las frases hechas. No empareja: mirar no es pedir |
+| `src/continental/vigilancia.py` | la pestaña de Vigilancia: las frases de cada artículo (puras) y `RegistroDeRevision`, «Revisar ahora» en un hilo |
+| `src/continental/sesiones.py` | funciones puras de la pestaña Sesiones: lo que dice Doyle + la evidencia de las consultas guardadas -> la etiqueta de cada tarjeta (caducada, sirvió, sin probar) y si se puede abrir (un portal a la vez) |
 | `src/continental/web/app.py` | `/api/salud`, `/api/modulos`, el pedido sugerido y su cierre, la portada |
 | `src/continental/web/static/index.html` | la pantalla, solo el marcado: enlaza la hoja y el script (ticket 28) |
 | `src/continental/web/static/continental.css` | la hoja de estilos. **Los colores solo en las dos listas de `:root`** (claro y oscuro); la tabla se apila por debajo de 76rem. El porqué de cada regla va en su comentario |

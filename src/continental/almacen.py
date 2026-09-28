@@ -239,13 +239,14 @@ class DiaCalendario:
 class LecturaDelAlmacen(Protocol):
     """El borde de lectura. Solo `SELECT`, y solo datos de salida.
 
-    Siete lecturas y ninguna más: las tres que el módulo de Pedido necesitaba,
+    Ocho lecturas y ninguna más: las tres que el módulo de Pedido necesitaba,
     el ancla temporal, desde el ticket 26 la quinta —qué productos han
     aparecido alguna vez en una compra—, desde el 2026-09-27 la sexta —si un
     día es domingo o festivo oficial, para no armar lista ese día— y su
     hermana de rango, la séptima, que la conciliación diaria del mismo día
-    necesita para contar días hábiles. Si hace falta una octava, entra aquí y
-    no por una conexión prestada.
+    necesita para contar días hábiles. La octava, del 2026-09-28, es de la
+    pantalla de Buscar: qué productos nuestros llevan tal código de barras. Si
+    hace falta una novena, entra aquí y no por una conexión prestada.
     """
 
     def ventas(self, desde: dt.date, hasta: dt.date) -> list[LineaDeVenta]:
@@ -257,6 +258,22 @@ class LecturaDelAlmacen(Protocol):
 
         Nada se filtra aquí: quien decide qué se muestra es la clasificación,
         y filtrar en el borde escondería mercancía sin dejar rastro.
+        """
+        ...
+
+    def productos_por_clave(self, claves: Collection[str]) -> list[Producto]:
+        """Los productos del catálogo cuya clave (EAN) está entre `claves`.
+
+        La octava lectura, de la pantalla de Buscar (2026-09-28): cada
+        resultado de un portal dice si ese código de barras es de un producto
+        nuestro. Acotada a lo que se pregunta —a lo más 80 claves, veinte por
+        proveedor— y no `catalogo()` entero, porque la pantalla sondea cada
+        segundo y medio mientras los portales contestan: serían 3,429 filas
+        cada vez para contestar por unas decenas.
+
+        Devuelve una lista y no un diccionario por clave: SICAR deja guardar
+        el mismo EAN en dos artículos, y quien pregunta tiene que poder ver que
+        son dos en vez de que uno tape al otro.
         """
         ...
 
@@ -353,7 +370,7 @@ _COLUMNAS_DEL_CATALOGO = (
 COLUMNA_DE_LA_CLASE_ABC = "clase_abc"
 
 
-def _sql_del_catalogo(con_la_clase: bool) -> str:
+def _sql_del_catalogo(con_la_clase: bool, por_clave: bool = False) -> str:
     """El `select` del catálogo, con o sin la columna de la clase.
 
     Se arma y no se escribe dos veces entero por la razón de siempre: dos
@@ -363,6 +380,14 @@ def _sql_del_catalogo(con_la_clase: bool) -> str:
 
     No es SQL armado con datos de nadie: los nombres son constantes de este
     archivo y el booleano sale de otra constante de este archivo.
+
+    `por_clave` es la octava lectura (Buscar, 2026-09-28): las mismas columnas
+    y la misma conversión, con un `where` sobre la clave. Por eso se arma aquí
+    y no se escribe aparte — un producto buscado por su EAN tiene que llegar
+    igual que uno leído del catálogo entero. Las claves viajan como parámetro
+    (`:claves`), nunca pegadas al texto. `trim` porque `catalogo()` ya hace
+    `.strip()` al leer: SICAR guarda claves con espacios, y sin esto un EAN
+    con un espacio al final no empataría aquí y sí en la lista del día.
     """
     columnas = list(_COLUMNAS_DEL_CATALOGO)
     if con_la_clase:
@@ -370,11 +395,15 @@ def _sql_del_catalogo(con_la_clase: bool) -> str:
     return (
         f"select {', '.join(columnas)}\n"
         "from marts.dim_producto\n"
-        "order by producto_id"
+        + ("where trim(clave) = any(:claves)\n" if por_clave else "")
+        + "order by producto_id"
     )
 
 
 _CATALOGO = text(_sql_del_catalogo(LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO))
+_PRODUCTOS_POR_CLAVE = text(
+    _sql_del_catalogo(LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO, por_clave=True)
+)
 
 _COMPRAS = text(
     """
@@ -432,6 +461,29 @@ _DIAS_ENTRE = text(
 )
 
 
+def _producto_de(f) -> Producto:
+    """Una fila de `_sql_del_catalogo` → `Producto`. La usan las dos lecturas."""
+    return Producto(
+        producto_id=int(f.producto_id),
+        clave=(f.clave or "").strip(),
+        descripcion=(f.descripcion or "").strip(),
+        categoria=(f.categoria or "").strip(),
+        departamento=(f.departamento or "").strip(),
+        anaquel=(f.ubicacion or "").strip(),
+        precio_lista_sin_iva=float(f.precio_lista_sin_iva or 0),
+        costo=float(f.costo or 0),
+        existencia=float(f.existencia or 0),
+        esta_activo=bool(f.esta_activo),
+        es_granel=bool(f.es_granel),
+        # La consulta pide la columna desde el 2026-09-20
+        # (`LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO = True`); NULL —los
+        # productos sin ventas en 365 días— queda en `SIN_CLASE_ABC`.
+        # `getattr` y no `f.clase_abc` para que, si el interruptor se
+        # apaga y la fila no la trae, esto siga valiendo "no se sabe".
+        clase_abc=clase_abc_normalizada(getattr(f, COLUMNA_DE_LA_CLASE_ABC, None)),
+    )
+
+
 class AlmacenPostgres:
     """`LecturaDelAlmacen` contra el Postgres de `farmacia-data`.
 
@@ -470,29 +522,14 @@ class AlmacenPostgres:
         ]
 
     def catalogo(self) -> list[Producto]:
+        return [_producto_de(f) for f in self._filas(_CATALOGO)]
+
+    def productos_por_clave(self, claves: Collection[str]) -> list[Producto]:
+        limpias = sorted({c.strip() for c in claves if c and c.strip()})
+        if not limpias:
+            return []
         return [
-            Producto(
-                producto_id=int(f.producto_id),
-                clave=(f.clave or "").strip(),
-                descripcion=(f.descripcion or "").strip(),
-                categoria=(f.categoria or "").strip(),
-                departamento=(f.departamento or "").strip(),
-                anaquel=(f.ubicacion or "").strip(),
-                precio_lista_sin_iva=float(f.precio_lista_sin_iva or 0),
-                costo=float(f.costo or 0),
-                existencia=float(f.existencia or 0),
-                esta_activo=bool(f.esta_activo),
-                es_granel=bool(f.es_granel),
-                # La consulta pide la columna desde el 2026-09-20
-                # (`LA_CLASE_ABC_ESTA_EN_DIM_PRODUCTO = True`); NULL —los
-                # productos sin ventas en 365 días— queda en `SIN_CLASE_ABC`.
-                # `getattr` y no `f.clase_abc` para que, si el interruptor se
-                # apaga y la fila no la trae, esto siga valiendo "no se sabe".
-                clase_abc=clase_abc_normalizada(
-                    getattr(f, COLUMNA_DE_LA_CLASE_ABC, None)
-                ),
-            )
-            for f in self._filas(_CATALOGO)
+            _producto_de(f) for f in self._filas(_PRODUCTOS_POR_CLAVE, claves=limpias)
         ]
 
     def compras_desde(self, fecha: dt.date) -> list[LineaDeCompra]:

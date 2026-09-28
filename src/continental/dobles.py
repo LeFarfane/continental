@@ -39,6 +39,7 @@ from continental.almacenamiento import (
     VENCIDO,
     ConciliacionConfirmada,
     CorridaDelLote,
+    EvidenciaDeLaSesion,
     LoYaPedido,
     PedidoCancelado,
     PedidoEnviado,
@@ -72,6 +73,8 @@ from continental.almacenamiento import (
     ultimo_por_proveedor,
 )
 from continental.doyle import (
+    ArticuloVigilado,
+    BusquedaDesconocida,
     BusquedaPedida,
     EstadoDeBusqueda,
     FilaDeProveedor,
@@ -79,8 +82,9 @@ from continental.doyle import (
     SesionAbriendose,
     SesionConfirmada,
     SesionDeProveedor,
+    VigiladoDesconocido,
 )
-from continental.precios import LecturaDePrecio
+from continental.precios import SESION_CADUCADA, LecturaDePrecio
 from continental.transiciones import (
     motivo_para_no_cancelar,
     motivo_para_no_corregir,
@@ -119,6 +123,11 @@ class AlmacenFalso:
     def catalogo(self) -> list[Producto]:
         self._revisar()
         return list(self.catalogo_en_memoria)
+
+    def productos_por_clave(self, claves) -> list[Producto]:
+        self._revisar()
+        buscadas = {c.strip() for c in claves if c and c.strip()}
+        return [p for p in self.catalogo_en_memoria if p.clave.strip() in buscadas]
 
     def compras_desde(self, fecha: dt.date) -> list[LineaDeCompra]:
         self._revisar()
@@ -191,6 +200,8 @@ class DoyleFalso:
     #: Los que se confirmaron, en orden. Sirve para afirmar "se le pidió a
     #: Doyle que guardara la sesión de LEVIC" sin mirar dentro de la ruta.
     sesiones_confirmadas: list[str] = field(default_factory=list)
+    #: Las que se cerraron sin guardar, en orden (pestaña de Sesiones).
+    sesiones_canceladas: list[str] = field(default_factory=list)
     #: Para los que se prepara el aviso honesto de Doyle: se confirmó y la
     #: página seguía viéndose como un login. Es la diferencia entre "ya está" y
     #: "vuelve a intentarlo", y sin poder prepararla no se puede probar que la
@@ -204,6 +215,10 @@ class DoyleFalso:
     #: permite afirmar "sondeó tres veces" sin mirar dentro de la
     #: implementación.
     consultas: list[str] = field(default_factory=list)
+    #: La lista de vigilancia: dicts con los campos de `ArticuloVigilado`.
+    vigilados_en_memoria: list[dict] = field(default_factory=list)
+    #: Cuántas veces se le pidió «Revisar ahora».
+    revisiones: int = 0
     _trabajos: dict[str, str] = field(default_factory=dict)
 
     def _revisar(self) -> None:
@@ -231,8 +246,15 @@ class DoyleFalso:
 
     def estado_de_busqueda(self, job_id: str) -> EstadoDeBusqueda:
         self._revisar()
-        termino = self._trabajos.get(job_id, "")
         self.consultas.append(job_id)
+        if job_id not in self._trabajos:
+            # El Doyle real contesta 404 a un trabajo que no tiene —guarda sus
+            # búsquedas en memoria y un reinicio las borra—, y el cliente lo
+            # convierte en `BusquedaDesconocida`. Hasta el 2026-09-28 el doble
+            # contestaba una búsqueda vacía: otro doble alejándose del real
+            # (condición de revisión del ADR 0001, enmienda del 2026-09-27).
+            raise BusquedaDesconocida(job_id)
+        termino = self._trabajos[job_id]
 
         vueltas = self.vueltas_por_termino.get(termino)
         if vueltas:
@@ -299,6 +321,52 @@ class DoyleFalso:
             proveedor=proveedor,
             todavia_parece_login=proveedor in self.sesiones_que_siguen_en_login,
         )
+
+    def cancelar_sesion(self, proveedor: str) -> None:
+        self._revisar()
+        if proveedor not in self.sesiones_abriendose:
+            # El 400 del Doyle real (`sesiones._tomar`): no hay ventana que cerrar.
+            raise ValueError(f"No hay una sesión de {proveedor!r} abriéndose.")
+        self.sesiones_abriendose.remove(proveedor)
+        self.sesiones_canceladas.append(proveedor)
+
+    # ----------------------------------------- la vigilancia (2026-09-28)
+    #
+    # La tabla `vigilancia` de Doyle, en una lista. Rechaza lo mismo que el
+    # Doyle real —404 para un id que no tiene— y ordena igual: lo más nuevo
+    # primero.
+
+    def vigilados(self) -> list[ArticuloVigilado]:
+        self._revisar()
+        return [ArticuloVigilado(**v) for v in reversed(self.vigilados_en_memoria)]
+
+    def vigilar(self, termino: str, proveedores: tuple[str, ...]) -> ArticuloVigilado:
+        self._revisar()
+        nuevo = {
+            "articulo_id": max((v["articulo_id"] for v in self.vigilados_en_memoria), default=0) + 1,
+            "termino": termino,
+            "proveedores": tuple(proveedores),
+        }
+        self.vigilados_en_memoria.append(nuevo)
+        return ArticuloVigilado(**nuevo)
+
+    def _vigilado(self, articulo_id: int) -> dict:
+        for v in self.vigilados_en_memoria:
+            if v["articulo_id"] == articulo_id:
+                return v
+        raise VigiladoDesconocido(articulo_id)
+
+    def dejar_de_vigilar(self, articulo_id: int) -> None:
+        self._revisar()
+        self.vigilados_en_memoria.remove(self._vigilado(articulo_id))
+
+    def marcar_visto(self, articulo_id: int) -> None:
+        self._revisar()
+        self._vigilado(articulo_id)["avisado"] = True
+
+    def revisar_la_vigilancia(self) -> None:
+        self._revisar()
+        self.revisiones += 1
 
 
 def respuesta_lista(
@@ -2086,6 +2154,20 @@ class AlmacenamientoFalso:
             renglon_id: ultimo_por_proveedor(filas)
             for renglon_id, filas in por_renglon.items()
         }
+
+    def evidencia_de_las_sesiones(self, negocio: str) -> dict[str, EvidenciaDeLaSesion]:
+        """El `group by` de `_EVIDENCIA_DE_LAS_SESIONES`, con sus dos `filter`."""
+        self._revisar()
+        por_proveedor: dict[str, dict] = {}
+        for f in self.precios:
+            if f["negocio"] != negocio:
+                continue
+            e = por_proveedor.setdefault(f["proveedor"], {"dio_precio_en": None, "caduco_en": None})
+            if f.get("precio") is not None:
+                e["dio_precio_en"] = max(filter(None, (e["dio_precio_en"], f["consultado_en"])))
+            if f.get("motivo") == SESION_CADUCADA:
+                e["caduco_en"] = max(filter(None, (e["caduco_en"], f["consultado_en"])))
+        return {p: EvidenciaDeLaSesion(proveedor=p, **e) for p, e in por_proveedor.items()}
 
     # ------------------------------------------ la corrida del lote (19)
 

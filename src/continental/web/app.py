@@ -14,6 +14,7 @@ import dataclasses
 import datetime as dt
 import logging
 import time
+from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -56,6 +57,17 @@ from continental.cierre import (
     lo_que_se_perderia,
     reapertura as boton_de_reabrir,
 )
+from continental.busqueda import (
+    BUSQUEDA_OLVIDADA,
+    QUE_HACER_CON_EL_TERMINO,
+    QUE_HACER_CON_LA_OLVIDADA,
+    acuse_como_json,
+    busqueda_como_json,
+    claves_por_cruzar,
+    job_id_valido,
+    motivo_para_no_buscar,
+    termino_limpio,
+)
 from continental.clasificacion import reglas_configuradas
 from continental.comparacion import (
     comparacion_como_json,
@@ -81,7 +93,7 @@ from continental.consultas import (
     lecturas_como_json,
     tope_del_completado_segundos,
 )
-from continental.doyle import ClienteDeDoyle
+from continental.doyle import BusquedaDesconocida, ClienteDeDoyle, VigiladoDesconocido
 from continental.exportar import (
     TIPO_DEL_ARCHIVO,
     csv_del_pedido,
@@ -144,6 +156,7 @@ from continental.recepcion import (
     recepcion_como_json,
     recepcion_con_hueco,
 )
+from continental.sesiones import sesiones_como_json
 from continental.sugerido import armar_la_lista
 from continental.transiciones import (
     motivo_para_no_cancelar,
@@ -176,12 +189,22 @@ from continental.transito import (
     memoria_de_lo_pedido,
     vendido_desde_que_se_pidio,
 )
+from continental.vigilancia import (
+    FRASE_SIN_ARTICULOS,
+    RegistroDeRevision,
+    articulo_como_json,
+    frase_de_los_avisos,
+    motivo_de_proveedores_desconocidos,
+    proveedores_para_elegir,
+    revision_como_json,
+)
 from continental.vistas import VISTAS
 from continental.web.dependencias import (
     obtener_almacen,
     obtener_almacenamiento,
     obtener_consultas,
     obtener_doyle,
+    obtener_revision,
     reloj,
 )
 
@@ -3732,6 +3755,350 @@ def confirmar_la_sesion(
                 "a ese proveedor."
             )
         ),
+    }
+
+
+@app.post("/api/sesion/{proveedor}/cancelar")
+def cancelar_la_sesion(
+    proveedor: str,
+    request: Request,
+    doyle: ClienteDeDoyle = Depends(obtener_doyle),
+):
+    """Cierra la ventana que quedó esperando, sin guardar nada.
+
+    Es la salida que el ADR 0018 dejó prevista: con una ventana abandonada,
+    el candado de una-a-la-vez no dejaba abrir ningún otro portal hasta
+    confirmar o reiniciar Doyle. Llegó con la pestaña de Sesiones.
+    """
+    try:
+        doyle.cancelar_sesion(proveedor)
+    except Exception as exc:  # noqa: BLE001 — Doyle caído es un hueco, no un 500
+        log.exception("Doyle no pudo cerrar la ventana de sesión de %s", proveedor)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "detalle": (
+                    f"Doyle no pudo cerrar la ventana de {nombre_del_proveedor(proveedor)} "
+                    f"({type(exc).__name__}). Puede que ya estuviera cerrada: vuelve a "
+                    "cargar las sesiones para ver cómo quedaron."
+                ),
+                "que_hacer": _que_hacer(DOYLE),
+            },
+        )
+    log.info("%s cerró sin guardar la ventana de sesión de %s.", quien(request), proveedor)
+    return {
+        "ok": True,
+        "detalle": (
+            f"Se cerró la ventana de {nombre_del_proveedor(proveedor)} sin guardar "
+            "nada. Ya se puede abrir la de otro portal."
+        ),
+    }
+
+
+@app.get("/api/sesiones")
+def las_sesiones(
+    doyle: ClienteDeDoyle = Depends(obtener_doyle),
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+):
+    """Una tarjeta por portal: lo que dice Doyle, cruzado con lo que vieron las
+    consultas guardadas (`sesiones.py`).
+
+    Dos bordes, y cada uno cae por separado: sin Doyle no hay tarjetas y es un
+    `ok: false`; sin la tabla de precios, las tarjetas dicen solo lo de Doyle
+    y avisan que su «guardada» no quiere decir que sirva.
+    """
+    try:
+        sesiones = doyle.sesiones()
+    except Exception as exc:  # noqa: BLE001 — Doyle caído es un hueco, no un 500
+        log.exception("Doyle no contestó las sesiones")
+        return _doyle_no_responde(type(exc))
+
+    evidencia_sin_leer = None
+    try:
+        evidencia = almacenamiento.evidencia_de_las_sesiones(cargar().negocio)
+    except Exception as exc:  # noqa: BLE001 — sin la evidencia, las tarjetas se ven igual
+        log.exception("No se pudieron leer las consultas guardadas para las sesiones")
+        evidencia = None
+        evidencia_sin_leer = {
+            "detalle": f"no se pudieron leer las consultas guardadas ({type(exc).__name__})",
+            "que_hacer": _que_hacer(AL_LEER),
+        }
+
+    return {
+        "ok": True,
+        "sesiones": sesiones_como_json(sesiones, evidencia),
+        "evidencia_sin_leer": evidencia_sin_leer,
+        "visor": cargar().visor_de_doyle,
+    }
+
+
+# ------------------------------------------------------------------ Buscar
+#
+# La pestaña «Buscar» que Doyle tenía en su propia web, dibujada aquí (su ADR
+# 0008: Doyle sin interfaz propia; esa pestaña quedó sin nadie que la viera
+# desde el 2026-09-21). Dos rutas, como el contrato de Doyle: se pide, y se
+# pregunta cómo va. Las dos son `def` por lo mismo que `bordes`: el cliente de
+# Doyle y el almacén son síncronos.
+#
+# **Mirar no es pedir**: nada de lo que se busca aquí se guarda ni entra a la
+# lista del día. Ver el docstring de `busqueda.py` y el ADR 0022.
+
+
+class BusquedaNueva(BaseModel):
+    termino: str
+
+
+@app.post("/api/buscar")
+def pedir_una_busqueda(
+    cuerpo: BusquedaNueva,
+    request: Request,
+    doyle: ClienteDeDoyle = Depends(obtener_doyle),
+):
+    """Le pide a Doyle que busque en los cuatro portales. Vuelve de inmediato.
+
+    Lo que devuelve es el acuse —el `job_id`, cada cuánto preguntar y hasta
+    cuándo— con las cuatro tarjetas en espera, para que la pantalla las pinte
+    antes de la primera respuesta. Doyle caído es un hueco con su motivo, el
+    **tipo** de la falla y nunca su texto (regla 5).
+    """
+    termino = termino_limpio(cuerpo.termino)
+    motivo = motivo_para_no_buscar(termino)
+    if motivo is not None:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "detalle": motivo, "que_hacer": QUE_HACER_CON_EL_TERMINO},
+        )
+
+    try:
+        pedida = doyle.pedir_busqueda(termino)
+    except Exception as exc:  # noqa: BLE001 — Doyle caído es un hueco, no un 500
+        log.exception("Doyle no pudo empezar la búsqueda de %r", termino)
+        return {
+            "ok": False,
+            "detalle": f"Doyle no responde ({type(exc).__name__})",
+            "que_hacer": _que_hacer(DOYLE),
+        }
+
+    log.info(
+        "%s buscó %r en los portales (trabajo %s de Doyle).",
+        quien(request),
+        termino,
+        pedida.job_id,
+    )
+    return acuse_como_json(pedida, termino)
+
+
+@app.get("/api/buscar/{job_id}")
+def como_va_la_busqueda(
+    job_id: str,
+    almacen: LecturaDelAlmacen = Depends(obtener_almacen),
+    doyle: ClienteDeDoyle = Depends(obtener_doyle),
+):
+    """Cómo va esa búsqueda, portal por portal, y qué es nuestro de lo encontrado.
+
+    Dos bordes, y cada uno cae por separado: sin Doyle no hay nada que enseñar
+    y es un `ok: false`; sin el almacén, los resultados se enseñan igual y lo
+    único que falta es decir cuáles son nuestros — se dice que no se pudo, en
+    vez de callar (que se leería "ninguno es nuestro").
+    """
+    if not job_id_valido(job_id):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "ok": False,
+                "detalle": "Eso no es una búsqueda que Doyle haya empezado.",
+                "que_hacer": QUE_HACER_CON_LA_OLVIDADA,
+            },
+        )
+
+    try:
+        estado = doyle.estado_de_busqueda(job_id)
+    except BusquedaDesconocida:
+        log.warning("Doyle ya no tiene la búsqueda %s (¿se reinició?).", job_id)
+        return {
+            "ok": False,
+            "detalle": BUSQUEDA_OLVIDADA,
+            "que_hacer": QUE_HACER_CON_LA_OLVIDADA,
+        }
+    except Exception as exc:  # noqa: BLE001 — Doyle caído es un hueco, no un 500
+        log.exception("Doyle no contestó cómo va la búsqueda %s", job_id)
+        return {
+            "ok": False,
+            "detalle": f"Doyle no responde ({type(exc).__name__})",
+            "que_hacer": _que_hacer(DOYLE),
+        }
+
+    claves = claves_por_cruzar(estado)
+    nuestros: list | None = []
+    catalogo_sin_leer = None
+    if claves:
+        try:
+            nuestros = almacen.productos_por_clave(claves)
+        except Exception as exc:  # noqa: BLE001 — sin catálogo, los resultados se ven igual
+            log.exception("No se pudo cruzar la búsqueda %s con el catálogo", job_id)
+            nuestros = None
+            catalogo_sin_leer = {
+                "detalle": f"no se pudo leer nuestro catálogo ({type(exc).__name__})",
+                "frase": (
+                    "Los resultados de los portales se ven igual, pero no se "
+                    "sabe cuáles son productos nuestros: que ninguno lo diga no "
+                    "quiere decir que no lo sean."
+                ),
+                "que_hacer": _que_hacer(AL_LEER),
+            }
+
+    return busqueda_como_json(estado, nuestros, catalogo_sin_leer)
+
+
+# -------------------------------------------------------------- Vigilancia
+#
+# La pestaña de Vigilancia de Doyle (su ADR 0007), dibujada aquí por lo mismo
+# que Buscar. La lista, el reloj de las 9:30 y 19:30 y las búsquedas siguen en
+# Doyle; estas rutas le piden cada cosa por HTTP y dicen lo que contestó. Nada
+# se guarda en `pedidos`. Ver `vigilancia.py`.
+
+
+def _doyle_no_responde(tipo: type) -> dict:
+    """El hueco de siempre cuando Doyle no contesta. Recibe el TIPO de la
+    falla y no la excepción: así ni por descuido viaja su texto (regla 5, y
+    `test_la_excepcion_solo_se_usa_para_su_tipo`)."""
+    return {
+        "ok": False,
+        "detalle": f"Doyle no responde ({tipo.__name__})",
+        "que_hacer": _que_hacer(DOYLE),
+    }
+
+
+#: Un artículo que Doyle ya no tiene (`VigiladoDesconocido`).
+YA_NO_SE_VIGILA = (
+    "Ese artículo ya no está en la vigilancia: alguien lo quitó desde otra "
+    "pantalla, o ésta es de hace rato."
+)
+QUE_HACER_CON_LA_LISTA_VIEJA = "Vuelve a cargar la página para ver la lista como está."
+
+
+@app.get("/api/vigilancia")
+def la_vigilancia(
+    doyle: ClienteDeDoyle = Depends(obtener_doyle),
+    revision: RegistroDeRevision = Depends(obtener_revision),
+):
+    """La lista de vigilancia, el aviso de lo que ya hay, y cómo va «Revisar ahora».
+
+    Lo de «Revisar ahora» viaja también cuando Doyle no contesta: es memoria
+    de Continental, y "está revisando" sigue siendo verdad aunque la lista no
+    se pueda leer en este momento.
+    """
+    como_va = revision_como_json(revision.ultima(), _que_hacer(DOYLE))
+    try:
+        articulos = doyle.vigilados()
+    except Exception as exc:  # noqa: BLE001 — Doyle caído es un hueco, no un 500
+        log.exception("Doyle no contestó la lista de vigilancia")
+        return {**_doyle_no_responde(type(exc)), "revision": como_va}
+    return {
+        "ok": True,
+        "articulos": [articulo_como_json(a) for a in articulos],
+        "frase": None if articulos else FRASE_SIN_ARTICULOS,
+        "avisos": frase_de_los_avisos(articulos),
+        "proveedores": proveedores_para_elegir(),
+        "revision": como_va,
+    }
+
+
+class ArticuloNuevo(BaseModel):
+    termino: str
+    #: Vacío es "los cuatro", como en Doyle.
+    proveedores: list[str] = []
+
+
+@app.post("/api/vigilancia")
+def vigilar_un_articulo(
+    cuerpo: ArticuloNuevo,
+    request: Request,
+    doyle: ClienteDeDoyle = Depends(obtener_doyle),
+):
+    """Agrega un artículo a la vigilancia. El término sigue las reglas de
+    Buscar: es lo mismo que Doyle va a teclear en los portales."""
+    termino = termino_limpio(cuerpo.termino)
+    motivo = motivo_para_no_buscar(termino) or motivo_de_proveedores_desconocidos(
+        cuerpo.proveedores
+    )
+    if motivo is not None:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "detalle": motivo, "que_hacer": QUE_HACER_CON_EL_TERMINO},
+        )
+    try:
+        articulo = doyle.vigilar(termino, tuple(dict.fromkeys(cuerpo.proveedores)))
+    except Exception as exc:  # noqa: BLE001 — Doyle caído es un hueco, no un 500
+        log.exception("Doyle no pudo agregar %r a la vigilancia", termino)
+        return _doyle_no_responde(type(exc))
+    log.info("%s puso %r en la vigilancia.", quien(request), termino)
+    return {"ok": True, "articulo": articulo_como_json(articulo)}
+
+
+def _sobre_un_articulo(accion: Callable[[], None], que: str, articulo_id: int, firma: str):
+    """Quitar y «Ya lo vi»: la misma forma, la misma manera de fallar."""
+    try:
+        accion()
+    except VigiladoDesconocido:
+        log.warning("%s: Doyle ya no tiene el artículo %s de la vigilancia.", que, articulo_id)
+        return JSONResponse(
+            status_code=404,
+            content={
+                "ok": False,
+                "detalle": YA_NO_SE_VIGILA,
+                "que_hacer": QUE_HACER_CON_LA_LISTA_VIEJA,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 — Doyle caído es un hueco, no un 500
+        log.exception("%s: Doyle no contestó sobre el artículo %s", que, articulo_id)
+        return _doyle_no_responde(type(exc))
+    log.info("%s: %s el artículo %s de la vigilancia.", firma, que, articulo_id)
+    return {"ok": True}
+
+
+@app.delete("/api/vigilancia/{articulo_id}")
+def dejar_de_vigilar(
+    articulo_id: int,
+    request: Request,
+    doyle: ClienteDeDoyle = Depends(obtener_doyle),
+):
+    return _sobre_un_articulo(
+        lambda: doyle.dejar_de_vigilar(articulo_id), "quitó", articulo_id, quien(request)
+    )
+
+
+@app.post("/api/vigilancia/{articulo_id}/visto")
+def ya_lo_vi(
+    articulo_id: int,
+    request: Request,
+    doyle: ClienteDeDoyle = Depends(obtener_doyle),
+):
+    """Apaga el aviso de "ya hay" de ese artículo. Su estado no cambia."""
+    return _sobre_un_articulo(
+        lambda: doyle.marcar_visto(articulo_id), "vio el aviso de", articulo_id, quien(request)
+    )
+
+
+@app.post("/api/vigilancia/revisar")
+def revisar_ahora(
+    request: Request,
+    doyle: ClienteDeDoyle = Depends(obtener_doyle),
+    revision: RegistroDeRevision = Depends(obtener_revision),
+):
+    """«Revisar ahora»: la revisión de las 9:30, sin esperar al reloj.
+
+    Vuelve de inmediato. Doyle bloquea esa petición minutos enteros, así que
+    la hace un hilo de Continental (`vigilancia.RegistroDeRevision`) y la
+    pantalla pregunta cómo va con `GET /api/vigilancia`. Si ya hay una en
+    curso no se lanza otra: dos clics serían dos pasadas por los portales.
+    """
+    como_va, nueva = revision.pedir(quien(request), doyle.revisar_la_vigilancia)
+    return {
+        "ok": True,
+        "nueva": nueva,
+        "revision": revision_como_json(revision.ultima() or como_va, _que_hacer(DOYLE)),
     }
 
 

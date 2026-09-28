@@ -64,6 +64,7 @@ from continental.fallas import (
 )
 from continental.precios import LecturaDePrecio
 from continental.transito import ZONA_DE_LA_FARMACIA
+from continental.vigilancia import RegistroDeRevision
 from continental.web import app as modulo_app
 from continental.web.app import app
 from continental.web.dependencias import (
@@ -71,6 +72,7 @@ from continental.web.dependencias import (
     obtener_almacenamiento,
     obtener_consultas,
     obtener_doyle,
+    obtener_revision,
 )
 
 RAIZ = Path(__file__).resolve().parent.parent
@@ -685,6 +687,8 @@ CUERPOS = {
     "ComprasVistas": {"compras": [1]},
     "PiezasRecibidas": {"piezas": 2},
     "LoteDeConciliacion": {"renglones": [{"renglon_id": 1, "compras": [1]}]},
+    "BusquedaNueva": {"termino": "7501000000001"},
+    "ArticuloNuevo": {"termino": "7501000000001", "proveedores": ["nadro"]},
 }
 
 #: Con qué se prueba cada parámetro de ruta. Se prueban todos y la ruta se
@@ -701,6 +705,12 @@ VALORES = {
     # lecturas de más adentro -- igual que `pedido_sugerido_id` usa el id que
     # `semilla` sí arma, y no uno cualquiera.
     "fecha": ("2026-09-21",),
+    # La búsqueda que `semilla` deja empezada en Doyle (Buscar, 2026-09-28): con
+    # un trabajo que Doyle no tiene, la ruta se queda en el primer borde y
+    # nunca llega a cruzar los resultados con el catálogo.
+    "job_id": ("trabajo-1",),
+    # El artículo que `semilla` deja en la vigilancia de Doyle (2026-09-28).
+    "articulo_id": (1,),
 }
 
 RUTAS = [r for r in app.routes if isinstance(r, APIRoute)]
@@ -795,6 +805,7 @@ def semilla(cliente_sin_relanzar):
         obtener_almacenamiento: lambda: almacenamiento,
         obtener_doyle: lambda: doyle,
         obtener_consultas: lambda: registro,
+        obtener_revision: lambda: RegistroDeRevision(lanzar=lambda tarea: tarea()),
     })
     try:
         c = cliente_sin_relanzar
@@ -809,6 +820,10 @@ def semilla(cliente_sin_relanzar):
         assert partida["ok"] is True, partida
         [nadro] = [p for p in partida["pedidos"] if p["proveedor"] == "nadro"]
         assert c.post(f"/api/pedido/{nadro['pedido_id']}/enviar", headers=FIRMA).json()["ok"]
+        # Una búsqueda de la pestaña Buscar, ya empezada: `trabajo-1` en `VALORES`.
+        assert c.post("/api/buscar", json={"termino": "7501000000001"}).json()["job_id"] == "trabajo-1"
+        # Un artículo en la vigilancia de Doyle: `articulo_id` 1 en `VALORES`.
+        assert c.post("/api/vigilancia", json={"termino": "7501000000001"}).json()["ok"]
     finally:
         app.dependency_overrides.clear()
     return almacen, almacenamiento, doyle
@@ -854,6 +869,7 @@ def _llamar(cliente, ruta, camino, semilla, caido=None, falla_en=None):
         obtener_almacenamiento: lambda: cuentas["almacenamiento"],
         obtener_doyle: lambda: cuentas["doyle"],
         obtener_consultas: lambda: registro,
+        obtener_revision: lambda: RegistroDeRevision(lanzar=lambda tarea: tarea()),
     })
     try:
         [metodo] = sorted(ruta.methods)
@@ -943,7 +959,9 @@ def test_una_excepcion_no_atrapada_sale_como_500_generico(
     def truena():
         raise RuntimeError(CADENA_CON_SECRETO)
 
-    for dependencia in (obtener_almacen, obtener_almacenamiento, obtener_doyle, obtener_consultas):
+    for dependencia in (
+        obtener_almacen, obtener_almacenamiento, obtener_doyle, obtener_consultas, obtener_revision
+    ):
         app.dependency_overrides[dependencia] = truena
     try:
         with caplog.at_level(logging.ERROR, logger="continental"):
@@ -1000,7 +1018,9 @@ def test_un_cuerpo_invalido_contesta_en_espanol_y_sin_repetir_lo_mandado(cliente
 #: Los módulos cuyo texto llega al navegador. `lote.py`, `verificar.py` y
 #: `latido.py` escriben en la consola del servidor y en el journal, que es
 #: justo a donde el detalle tiene que ir.
-QUE_LLEGAN_AL_NAVEGADOR = ("web/app.py", "web/dependencias.py", "consultas.py")
+QUE_LLEGAN_AL_NAVEGADOR = (
+    "web/app.py", "web/dependencias.py", "consultas.py", "busqueda.py", "vigilancia.py",
+)
 
 
 @pytest.mark.parametrize("nombre", QUE_LLEGAN_AL_NAVEGADOR)

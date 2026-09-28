@@ -442,8 +442,13 @@ class LecturaDePrecio:
 _LARGO_DEL_DETALLE = 200
 
 
-def _recortar(mensaje: str) -> str:
-    """La primera línea del mensaje de Doyle, acotada. `""` si no dijo nada."""
+def recortar_el_mensaje(mensaje: str) -> str:
+    """La primera línea del mensaje de Doyle, acotada. `""` si no dijo nada.
+
+    Pública desde el 2026-09-28: la pantalla de Buscar (`busqueda.py`) enseña
+    el mismo mensaje con el mismo recorte, y dos recortes distintos del mismo
+    texto serían dos respuestas a la misma pregunta.
+    """
     primera = (mensaje or "").strip().splitlines()
     if not primera:
         return ""
@@ -583,7 +588,7 @@ class Emparejamiento:
         return self.fila is not None
 
 
-def _motivo_del_error(mensaje: str) -> str:
+def motivo_del_error(mensaje: str) -> str:
     """El `estado: error` de Doyle → uno de tres motivos, y no siempre el mismo uno.
 
     Hasta el 2026-09-22 todo `error` sin la palabra "sesión" se leía como
@@ -646,7 +651,7 @@ def emparejar(respuesta: RespuestaDeProveedor, clave: str) -> Emparejamiento:
         return Emparejamiento(motivo=SIN_TIEMPO)
 
     if respuesta.estado == "error":
-        return Emparejamiento(motivo=_motivo_del_error(respuesta.mensaje or ""))
+        return Emparejamiento(motivo=motivo_del_error(respuesta.mensaje or ""))
 
     if respuesta.estado == "reconocimiento":
         return Emparejamiento(motivo=SIN_SELECTORES)
@@ -814,7 +819,7 @@ def leer_el_precio(respuesta: RespuestaDeProveedor, clave: str) -> LecturaDePrec
     devuelva `precio=None, motivo=None`: eso sería el `NULL` mudo.
     """
     proveedor = respuesta.proveedor
-    detalle = _recortar(respuesta.mensaje)
+    detalle = recortar_el_mensaje(respuesta.mensaje)
     elegido = emparejar(respuesta, clave)
 
     if elegido.fila is None:
@@ -834,7 +839,7 @@ def leer_el_precio(respuesta: RespuestaDeProveedor, clave: str) -> LecturaDePrec
     # tachar, por ejemplo— viaja aunque el precio se haya podido leer: un dato
     # con reserva es información, un dato limpio que no lo era es una decisión
     # mal tomada (docstring de `FilaDeProveedor`).
-    con_reserva = _recortar(fila.advertencia) or detalle
+    con_reserva = recortar_el_mensaje(fila.advertencia) or detalle
 
     return LecturaDePrecio(
         proveedor=proveedor,

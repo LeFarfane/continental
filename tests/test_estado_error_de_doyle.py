@@ -27,7 +27,7 @@ de arriba caían los tres en el segundo cajón, y ahí se rompía la regla 4 de
 genérica— porque un hueco permanente (1 y 2) y un problema nuestro (3) le
 pedían al encargado la misma acción equivocada: esperar y reintentar.
 
-Este archivo prueba `precios._motivo_del_error`, la función que ahora separa
+Este archivo prueba `precios.motivo_del_error`, la función que ahora separa
 los tres, con los textos EXACTOS que Doyle devolvió ese día — no unos
 parecidos: una prueba escrita contra un texto inventado diría que el caso se
 reconoce cuando en realidad no. Las pruebas del final pasan por `TestClient`,
@@ -61,7 +61,7 @@ from continental.precios import (
     SESION_CADUCADA,
     SIN_RESULTADOS,
     VENTANA_DE_SESION_ABIERTA,
-    _motivo_del_error,  # función privada: es justo lo que este archivo prueba
+    motivo_del_error,  # pública desde que Buscar también la usa (2026-09-28)
     emparejar,
     explicacion_del_motivo,
     leer_el_precio,
@@ -135,7 +135,7 @@ def _texto(ruta: Path) -> str:
 
 
 # ====================================================================
-# `_motivo_del_error`: la función pura que separa los tres casos
+# `motivo_del_error`: la función pura que separa los tres casos
 # ====================================================================
 
 
@@ -156,9 +156,9 @@ def test_los_tres_casos_reales_del_2026_09_23_dejan_tres_motivos_distintos(
     ninguno menciona la palabra "sesión". Que hoy salgan tres motivos
     distintos es exactamente lo que estaba roto.
     """
-    assert _motivo_del_error(mensaje) == motivo, (
+    assert motivo_del_error(mensaje) == motivo, (
         f"El caso real de {caso} debía dar {motivo!r} y dio "
-        f"{_motivo_del_error(mensaje)!r}."
+        f"{motivo_del_error(mensaje)!r}."
     )
 
 
@@ -169,7 +169,7 @@ def test_sesion_caducada_le_gana_a_los_otros_dos_si_algun_dia_coinciden():
     pero si algún día uno lo hiciera, "se arregla en dos clics abriendo
     sesión" sigue siendo la lectura más útil de las cuatro posibles.
     """
-    assert _motivo_del_error("la sesión de nadro caducó") == SESION_CADUCADA
+    assert motivo_del_error("la sesión de nadro caducó") == SESION_CADUCADA
 
 
 def test_un_mensaje_que_no_calza_con_ningun_patron_sigue_siendo_reintentable():
@@ -179,7 +179,7 @@ def test_un_mensaje_que_no_calza_con_ningun_patron_sigue_siendo_reintentable():
     Doyle que estrene mañana un texto nuevo cae en `el portal no contestó`, el
     motivo por omisión, y no en un hueco mudo.
     """
-    assert _motivo_del_error("algo que Doyle todavía no dijo nunca") == (
+    assert motivo_del_error("algo que Doyle todavía no dijo nunca") == (
         PORTAL_SIN_CONTESTAR
     )
 
@@ -193,8 +193,8 @@ def test_la_ventana_ocupada_no_se_confunde_con_una_sesion_caducada():
     abierta -de más- en vez de cerrarla. Esta prueba existe para que ese
     cambio se note aquí primero.
     """
-    assert _motivo_del_error(MENSAJE_VENTANA_OCUPADA) != SESION_CADUCADA
-    assert _motivo_del_error(MENSAJE_VENTANA_OCUPADA) == VENTANA_DE_SESION_ABIERTA
+    assert motivo_del_error(MENSAJE_VENTANA_OCUPADA) != SESION_CADUCADA
+    assert motivo_del_error(MENSAJE_VENTANA_OCUPADA) == VENTANA_DE_SESION_ABIERTA
 
 
 # ====================================================================

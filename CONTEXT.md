@@ -51,6 +51,41 @@ puede sugerir.
 > todavía llama "puente" a la correspondencia —y la pantalla que escribe "sin
 > puente"— está mal nombrado.
 
+**Buscar** — preguntarles a los portales de los proveedores, todos a la vez,
+por un producto: su precio de compra, el público y la existencia, tal como
+cada portal los dice. Por código de barras o por nombre.
+
+> **Buscar es mirar, no pedir.** Nada de lo que se busca entra a la lista ni
+> se guarda, y por eso no empareja por clave: una persona está leyendo cada
+> resultado con su descripción a la vista.
+
+**Sesión** — la entrada de Doyle a un portal de proveedor con la cuenta del
+dueño. Sin ella, ese portal no da precios. La abre una persona, tecleando en el
+portal mismo, nunca en Continental.
+
+- `sin sesión` — Doyle no tiene ninguna guardada.
+- `esperando a que alguien entre` — la ventana del portal está abierta en el
+  visor. **Una a la vez**: mientras una espera, las otras no se abren.
+- `caducada` — una consulta encontró que el portal mandaba al login.
+- `sirvió` — dio precio después de guardarse. No afirma que siga sirviendo.
+- `guardada, sin probar` — se guardó y ninguna consulta la ha usado desde
+  entonces.
+
+> **Guardada no quiere decir que sirva.** Doyle llama *guardada* a una sesión
+> que alguien confirmó alguna vez, y lo sigue diciendo después de que el
+> portal la caduca. Lo que dice si sirve es el portal: dio precio, o mandó al
+> login.
+
+**Vigilancia** — la lista de productos que hacen falta y hoy no tiene ningún
+proveedor. Doyle los busca solo, a las 9:30 y a las 19:30, y avisa cuando
+alguno aparece.
+
+- `sin revisar` — todavía no le toca su primera revisión.
+- `ya hay` — al menos un proveedor lo tiene. **No dice cuál ni a cómo**: eso
+  lo contesta buscar.
+- `no hay` — ninguno de los proveedores que contestaron lo tiene. Si ninguno
+  contestó, se queda lo que decía la revisión anterior, y se avisa.
+
 ## El pedido
 
 **Pedido sugerido** — la lista de un día: qué conviene comprar, armada por el
@@ -193,6 +228,10 @@ pedido: pasa a `cancelado`.
 **Pedido** — lo que se le pide a **un** proveedor: nace de renglones de un
 pedido sugerido. Un pedido sugerido puede repartirse en varios pedidos, uno por
 proveedor.
+
+> **No "orden".** «Órdenes» era la pestaña de Doyle —un carrito aparte—; aquí
+> la pestaña se llama *Pedido* y lo que se le pide a un proveedor es un pedido
+> (decisión del dueño, 2026-09-28).
 
 - `borrador` — se está armando. Todavía **no se le pidió a nadie**, así que se
   puede cambiar: mover un renglón a otro proveedor, corregir una cantidad,

@@ -1996,79 +1996,6 @@ async function cargarPedido(fecha) {
     (respuesta.faltantes.renglones || []).forEach(f => sondear(f.renglon_id));
   }
 
-  // ABRIR LA SESIÓN DE UN PROVEEDOR, en dos pasos y sin salir de aquí
-  // (ticket 19, tercera casilla).
-  //
-  // **Continental no abre el navegador y no podría** (regla 1 de CLAUDE.md):
-  // se lo pide a Doyle por HTTP, y Doyle lo abre en la máquina donde Doyle
-  // corre. Lo que esta pantalla evita es tener que ir a OTRA aplicación a
-  // disparar los dos pasos; lo que no puede evitar es que alguien tenga que
-  // teclear la contraseña en esa ventana, que es de lo que se trata.
-  async function abrirSesion(sesion, boton) {
-    boton.disabled = true;
-    nota('pedido-accion', '');
-
-    const respuesta = await respuestaDe(fetch('/api/sesion/' + sesion.proveedor + '/abrir',
-                                     { method: 'POST' }), 'al_guardar');
-
-    boton.disabled = false;
-    if (!respuesta.ok) {
-      notaDeFalla('pedido-accion', respuesta);
-      return;
-    }
-    // LO QUE FALTA, DICHO, y por eso no se escribe "listo": lo que hay es una
-    // ventana esperando. Un botón que contesta "listo" sobre una sesión que
-    // sigue caducada es la falla silenciosa que la regla 4 prohíbe.
-    const texto = respuesta.detalle + ' ' + respuesta.siguiente;
-
-    // SIN VISOR CONFIGURADO no se inventa a dónde mandar a nadie. El texto
-    // que arma el servidor ya dice qué falta en el YAML.
-    if (!respuesta.visor) {
-      nota('pedido-accion', texto, 'aviso');
-      return;
-    }
-
-    // EL POPUP, y el enlace detrás como seguro. `window.open` desde el
-    // manejador de un clic es gesto de usuario legítimo, así que ningún
-    // bloqueador razonable lo estorba; si aun así devuelve null —bloqueado, o
-    // un navegador endurecido—, el enlace sigue ahí y la persona llega igual.
-    //
-    // Ventana aparte y no un iframe, a propósito: el visor vive en otro
-    // origen y detrás de Cloudflare Access, que manda encabezados que impiden
-    // embeberlo, y noVNC necesita el teclado en exclusiva —dentro de un
-    // iframe se lo pelea con esta página, que es justo donde una contraseña
-    // se escribe a medias en el lugar equivocado.
-    //
-    // El nombre de ventana es fijo: darle otra vez al botón reusa la misma
-    // pestaña del visor en vez de sembrar copias.
-    const ventana = window.open(respuesta.visor, 'visor-doyle');
-    notaConEnlace(
-      'pedido-accion',
-      ventana ? texto : texto + ' El navegador bloqueó la ventana del visor.',
-      respuesta.visor,
-      ventana ? 'Volver a abrir el visor' : 'Abrir el visor',
-      'aviso');
-  }
-
-  async function confirmarSesion(sesion, boton) {
-    boton.disabled = true;
-    nota('pedido-accion', '');
-
-    const respuesta = await respuestaDe(fetch('/api/sesion/' + sesion.proveedor + '/confirmar',
-                                     { method: 'POST' }), 'al_guardar');
-
-    boton.disabled = false;
-    if (!respuesta.ok) {
-      notaDeFalla('pedido-accion', respuesta);
-      return;
-    }
-    // El aviso honesto de Doyle —"la página seguía viéndose como un login"— se
-    // escribe en ámbar y no en verde: es la diferencia entre "ya está" y
-    // "vuelve a intentarlo".
-    nota('pedido-accion', respuesta.detalle,
-      respuesta.todavia_parece_login ? 'aviso' : '');
-  }
-
   // Lo que llega del servidor se mete DENTRO del renglón, que es donde vive el
   // precio congelado en todo lo demás. Nada se deduce aquí: ni el motivo, ni
   // la fecha, ni si hay dato — todo eso viene calculado de Python, que es
@@ -3641,6 +3568,528 @@ const moverRenglon = async (id, ruta, control, alTerminar, cuerpo, alFallar) => 
   alTerminar(datos);
 };
 
+// ------------------------------------------- las sesiones de los portales
+
+// Viven FUERA de `cargarPedido` desde el 2026-09-28: la pestaña de Buscar
+// ofrece los mismos dos botones cuando un portal le contesta que la sesión
+// caducó. Son las mismas dos funciones y el mismo candado del servidor (ADR
+// 0018: un portal esperando a la vez); lo único que cambia es la nota donde
+// se escribe el resultado, `idNota`. Y la pestaña de Sesiones pasa
+// `alTerminar` para volver a pintar sus tarjetas cuando el paso salió bien.
+
+// ABRIR LA SESIÓN DE UN PROVEEDOR, en dos pasos y sin salir de aquí
+// (ticket 19, tercera casilla).
+//
+// **Continental no abre el navegador y no podría** (regla 1 de CLAUDE.md):
+// se lo pide a Doyle por HTTP, y Doyle lo abre en la máquina donde Doyle
+// corre. Lo que esta pantalla evita es tener que ir a OTRA aplicación a
+// disparar los dos pasos; lo que no puede evitar es que alguien tenga que
+// teclear la contraseña en esa ventana, que es de lo que se trata.
+async function abrirSesion(sesion, boton, idNota = 'pedido-accion', alTerminar = null) {
+  boton.disabled = true;
+  nota(idNota, '');
+
+  const respuesta = await respuestaDe(fetch('/api/sesion/' + sesion.proveedor + '/abrir',
+                                   { method: 'POST' }), 'al_guardar');
+
+  boton.disabled = false;
+  if (!respuesta.ok) {
+    notaDeFalla(idNota, respuesta);
+    return;
+  }
+  // LO QUE FALTA, DICHO, y por eso no se escribe "listo": lo que hay es una
+  // ventana esperando. Un botón que contesta "listo" sobre una sesión que
+  // sigue caducada es la falla silenciosa que la regla 4 prohíbe.
+  const texto = respuesta.detalle + ' ' + respuesta.siguiente;
+
+  // SIN VISOR CONFIGURADO no se inventa a dónde mandar a nadie. El texto
+  // que arma el servidor ya dice qué falta en el YAML.
+  if (!respuesta.visor) {
+    nota(idNota, texto, 'aviso');
+    if (alTerminar) alTerminar();
+    return;
+  }
+
+  // EL POPUP, y el enlace detrás como seguro. `window.open` desde el
+  // manejador de un clic es gesto de usuario legítimo, así que ningún
+  // bloqueador razonable lo estorba; si aun así devuelve null —bloqueado, o
+  // un navegador endurecido—, el enlace sigue ahí y la persona llega igual.
+  //
+  // Ventana aparte y no un iframe, a propósito: el visor vive en otro
+  // origen y detrás de Cloudflare Access, que manda encabezados que impiden
+  // embeberlo, y noVNC necesita el teclado en exclusiva —dentro de un
+  // iframe se lo pelea con esta página, que es justo donde una contraseña
+  // se escribe a medias en el lugar equivocado.
+  //
+  // El nombre de ventana es fijo: darle otra vez al botón reusa la misma
+  // pestaña del visor en vez de sembrar copias.
+  const ventana = window.open(respuesta.visor, 'visor-doyle');
+  notaConEnlace(
+    idNota,
+    ventana ? texto : texto + ' El navegador bloqueó la ventana del visor.',
+    respuesta.visor,
+    ventana ? 'Volver a abrir el visor' : 'Abrir el visor',
+    'aviso');
+  if (alTerminar) alTerminar();
+}
+
+async function confirmarSesion(sesion, boton, idNota = 'pedido-accion', alTerminar = null) {
+  boton.disabled = true;
+  nota(idNota, '');
+
+  const respuesta = await respuestaDe(fetch('/api/sesion/' + sesion.proveedor + '/confirmar',
+                                   { method: 'POST' }), 'al_guardar');
+
+  boton.disabled = false;
+  if (!respuesta.ok) {
+    notaDeFalla(idNota, respuesta);
+    return;
+  }
+  // El aviso honesto de Doyle —"la página seguía viéndose como un login"— se
+  // escribe en ámbar y no en verde: es la diferencia entre "ya está" y
+  // "vuelve a intentarlo".
+  nota(idNota, respuesta.detalle,
+    respuesta.todavia_parece_login ? 'aviso' : '');
+  if (alTerminar) alTerminar();
+}
+
+// ------------------------------------------------------------- las pestañas
+
+// DOS PESTAÑAS, Pedido y Buscar (2026-09-28), con los nombres del glosario.
+// La que se ve va en la URL (`#buscar`): recargar deja a la persona donde
+// estaba, y un enlace puede mandar directo a Buscar. `replaceState` y no
+// `location.hash =`: cambiar de pestaña no es navegar, y la flecha de "atrás"
+// no debe ponerse a recorrer pestañas.
+const PESTANAS = ['pedido', 'buscar', 'vigilancia', 'sesiones'];
+
+// Un nombre que no es de ninguna pestaña —un `#loquesea` pegado a mano— cae
+// en el pedido, que es la pantalla de siempre: nunca una página en blanco.
+const mostrarPestana = (nombre, enfocar) => {
+  const elegida = PESTANAS.includes(nombre) ? nombre : 'pedido';
+  PESTANAS.forEach(p => {
+    const activa = p === elegida;
+    const boton = document.getElementById('pestana-' + p);
+    boton.setAttribute('aria-selected', activa ? 'true' : 'false');
+    boton.tabIndex = activa ? 0 : -1;
+    document.getElementById('panel-' + p).hidden = !activa;
+  });
+  if (enfocar) document.getElementById('pestana-' + elegida).focus();
+  // Las sesiones se leen al abrir su pestaña y no al cargar la página: son
+  // una pregunta a Doyle que solo hace falta cuando alguien las va a mirar.
+  if (elegida === 'sesiones') cargarSesiones();
+  return elegida;
+};
+
+const iniciarPestanas = () => {
+  PESTANAS.forEach((p, i) => {
+    const boton = document.getElementById('pestana-' + p);
+    boton.onclick = () => {
+      mostrarPestana(p);
+      history.replaceState(null, '', '#' + p);
+      if (p === 'buscar') document.getElementById('buscar-termino').focus();
+    };
+    // Las flechas pasan de una pestaña a otra, como en cualquier lista de
+    // pestañas: con el teclado se llega a la que no está a la vista sin
+    // recorrer la página entera con Tab (la de fuera tiene `tabindex=-1`).
+    boton.onkeydown = (e) => {
+      if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+      e.preventDefault();
+      const paso = e.key === 'ArrowRight' ? 1 : PESTANAS.length - 1;
+      const otra = PESTANAS[(i + paso) % PESTANAS.length];
+      mostrarPestana(otra, true);
+      history.replaceState(null, '', '#' + otra);
+    };
+  });
+  // Un cambio de `#` sin recargar —un enlace a `#buscar`, o la URL editada a
+  // mano— no vuelve a correr la carga: sin esto la dirección diría Buscar con
+  // el pedido a la vista. Lo cazó el recorrido del navegador (2026-09-28).
+  // `replaceState` no dispara este evento, así que los clics no pasan dos veces.
+  window.addEventListener('hashchange', () => mostrarPestana(location.hash.slice(1)));
+  mostrarPestana(location.hash.slice(1));
+};
+
+// ------------------------------------------------------------------ Buscar
+
+// LA PESTAÑA QUE DOYLE TENÍA (2026-09-28). Se pide la búsqueda y se pregunta
+// cómo va cada `sondeo_ms`, hasta que todos los portales terminan o pasa
+// `tope_segundos`. Los dos números y la frase del tope llegan del servidor
+// (`busqueda.py`), igual que cada frase de las tarjetas: aquí solo se pinta.
+//
+// Una búsqueda nueva deja huérfana a la anterior: `BUSQUEDA_ACTUAL` sube y el
+// sondeo viejo lo ve y se detiene. Sin esto, dos sondeos pintarían las mismas
+// tarjetas con resultados de dos términos distintos, alternándose.
+let BUSQUEDA_ACTUAL = 0;
+
+const esperar = (ms) => new Promise(listo => setTimeout(listo, ms));
+
+// Un resultado de un portal. Las cifras llegan dichas —"Compra $86.05",
+// "Existencia: NO DISPONIBLE"— y se juntan con un punto medio; ni un número
+// se lee ni se convierte aquí. La clave es un botón que la copia, el mismo de
+// la captura (ticket 22): es lo que se pega en el portal.
+const filaDeResultado = (f) => {
+  const li = document.createElement('li');
+  if (f.sin_existencia) li.className = 'agotado';
+  const descripcion = document.createElement('span');
+  descripcion.className = 'descripcion';
+  descripcion.textContent = f.descripcion;
+  const clave = document.createElement('button');
+  clave.type = 'button';
+  clave.className = 'clave';
+  clave.textContent = f.clave;
+  clave.title = 'Copiar el código';
+  clave.onclick = () => copiarClave(f.clave, clave);
+  const cifras = document.createElement('span');
+  cifras.className = 'cifras';
+  cifras.textContent = f.cifras.join(' · ');
+  li.append(descripcion, clave, cifras);
+  if (f.advertencia) {
+    const aviso = document.createElement('span');
+    aviso.className = 'advertencia';
+    aviso.textContent = f.advertencia;
+    li.append(aviso);
+  }
+  // Lo nuestro se dice cuando se sabe; su ausencia NO se escribe como "no es
+  // nuestro": QuePharma y VICMA muestran código interno y casi nunca empatan.
+  if (f.nuestro) {
+    const nuestro = document.createElement('span');
+    nuestro.className = 'nuestro';
+    nuestro.textContent = f.nuestro.frase;
+    li.append(nuestro);
+  }
+  return li;
+};
+
+const tarjetaDePortal = (p) => {
+  const tarjeta = document.createElement('article');
+  tarjeta.className = 'portal' + (p.terminado ? '' : ' esperando') + (p.motivo ? ' sin-dato' : '');
+  const titulo = document.createElement('h3');
+  const estado = document.createElement('span');
+  estado.className = 'estado-portal';
+  estado.textContent = p.etiqueta;
+  titulo.append(p.nombre, ' ', estado);
+  tarjeta.append(titulo);
+
+  if (p.que_paso) {
+    const que = document.createElement('p');
+    que.className = 'que-paso';
+    que.textContent = p.que_paso;
+    if (p.detalle) {
+      const dijo = document.createElement('span');
+      dijo.className = 'detalle';
+      dijo.textContent = ' Doyle dijo: ' + p.detalle;
+      que.append(dijo);
+    }
+    tarjeta.append(que);
+  }
+  // LA SESIÓN CADUCADA, con los mismos dos botones de la lista (ADR 0018).
+  // Sale de un portal que mandó al login, nunca del `guardada` de Doyle.
+  if (p.sesion_caducada) {
+    const fila = document.createElement('div');
+    fila.className = 'fila';
+    fila.append(
+      botonDeAccion('Abrir sesión', (b) => abrirSesion(p, b, 'buscar-accion')),
+      botonDeAccion('Ya entré', (b) => confirmarSesion(p, b, 'buscar-accion')));
+    tarjeta.append(fila);
+  }
+  if (p.filas && p.filas.length) {
+    const lista = document.createElement('ul');
+    lista.className = 'resultados';
+    lista.append(...p.filas.map(filaDeResultado));
+    tarjeta.append(lista);
+  }
+  if (p.frase_del_total) {
+    const total = document.createElement('p');
+    total.className = 'detalle';
+    total.textContent = p.frase_del_total;
+    tarjeta.append(total);
+  }
+  return tarjeta;
+};
+
+const pintarBusqueda = (datos) => {
+  nota('buscar-frase', datos.frase || '');
+  nota('buscar-nuestro', datos.lo_buscado ? datos.lo_buscado.frase : '');
+  // Sin catálogo los resultados se ven igual, y se dice que no se sabe qué es
+  // nuestro: que ninguna fila lo diga no puede leerse como "nada es nuestro".
+  if (datos.catalogo_sin_leer) notaDeFalla('buscar-catalogo', datos.catalogo_sin_leer);
+  else nota('buscar-catalogo', '');
+  const caja = document.getElementById('buscar-resultados');
+  caja.replaceChildren(...(datos.proveedores || []).map(tarjetaDePortal));
+  caja.hidden = false;
+};
+
+const buscar = async () => {
+  const esta = ++BUSQUEDA_ACTUAL;
+  const boton = document.getElementById('buscar-boton');
+  nota('buscar-falla', '');
+  nota('buscar-accion', '');
+  boton.disabled = true;
+
+  // El término va tal cual lo escribió la persona: limpiarlo y decidir si se
+  // puede buscar es del servidor, que contesta con el motivo y qué hacer.
+  const acuse = await respuestaDe(fetch('/api/buscar', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ termino: document.getElementById('buscar-termino').value }),
+  }));
+  boton.disabled = false;
+  if (esta !== BUSQUEDA_ACTUAL) return;
+  if (!acuse.ok) {
+    notaDeFalla('buscar-falla', acuse);
+    return;
+  }
+  pintarBusqueda(acuse);
+
+  const hasta = Date.now() + acuse.tope_segundos * 1000;
+  for (;;) {
+    await esperar(acuse.sondeo_ms);
+    if (esta !== BUSQUEDA_ACTUAL) return;
+    const datos = await respuestaDe(fetch('/api/buscar/' + encodeURIComponent(acuse.job_id)));
+    if (esta !== BUSQUEDA_ACTUAL) return;
+    // Una falla deja las tarjetas como estaban: lo que ya contestó sigue
+    // siendo cierto, y lo que no, la nota lo dice con su qué hacer.
+    if (!datos.ok) {
+      notaDeFalla('buscar-falla', datos);
+      return;
+    }
+    pintarBusqueda(datos);
+    if (datos.terminada) return;
+    if (Date.now() > hasta) {
+      nota('buscar-falla', acuse.frase_al_tope, 'aviso');
+      return;
+    }
+  }
+};
+
+const iniciarBuscar = () => {
+  document.getElementById('buscar-forma').onsubmit = (e) => {
+    e.preventDefault();
+    buscar();
+  };
+};
+
+// Desde otra pestaña: pone el término en el campo y busca. Lo usa Vigilancia,
+// porque Doyle solo guarda SI ya hay y no EN CUÁL ni a cómo: eso lo contesta
+// una búsqueda, con los cuatro portales a la vista.
+const buscarDesdeOtraPestana = (termino) => {
+  document.getElementById('buscar-termino').value = termino;
+  mostrarPestana('buscar');
+  history.replaceState(null, '', '#buscar');
+  buscar();
+};
+
+// -------------------------------------------------------------- Vigilancia
+
+// LA PESTAÑA DE VIGILANCIA DE DOYLE (su ADR 0007), dibujada aquí. La lista y
+// el reloj de las 9:30 y 19:30 son de Doyle; lo que se ve llega hecho del
+// servidor (`vigilancia.py`). Se carga también al abrir la página, aunque
+// nadie abra la pestaña: el aviso de "ya hay" va arriba de las pestañas y es
+// la mitad del punto de vigilar.
+//
+// «Revisar ahora» tarda minutos. El servidor contesta de inmediato y dice si
+// sigue `en_curso`; mientras siga, esto vuelve a preguntar cada `sondeo_ms`
+// —número del servidor—, con UN solo temporizador vivo a la vez.
+let SONDEO_DE_LA_VIGILANCIA = null;
+
+const pintarAvisosDeVigilancia = (frase) => {
+  const p = document.getElementById('avisos-vigilancia');
+  if (!frase) {
+    p.hidden = true;
+    p.replaceChildren();
+    return;
+  }
+  const ver = botonDeAccion('Ver', () => {
+    mostrarPestana('vigilancia');
+    history.replaceState(null, '', '#vigilancia');
+  });
+  p.replaceChildren(frase + ' ', ver);
+  p.hidden = false;
+};
+
+// Las casillas se pintan UNA vez: repintarlas en cada sondeo desmarcaría lo
+// que la persona está eligiendo mientras Doyle revisa.
+const pintarCasillas = (proveedores) => {
+  const caja = document.getElementById('vigilancia-proveedores');
+  if (caja.querySelector('input') || !proveedores) return;
+  proveedores.forEach(p => {
+    const etiqueta = document.createElement('label');
+    const casilla = document.createElement('input');
+    casilla.type = 'checkbox';
+    casilla.value = p.proveedor;
+    casilla.checked = true;
+    etiqueta.append(casilla, ' ' + p.nombre);
+    caja.append(etiqueta);
+  });
+};
+
+const pintarRevision = (revision) => {
+  const boton = document.getElementById('vigilancia-revisar');
+  const detalle = document.getElementById('vigilancia-revision');
+  boton.disabled = !!(revision && revision.en_curso);
+  if (!revision) {
+    detalle.textContent = '';
+    return;
+  }
+  detalle.textContent = revision.ok === false ? fallaEnUnaLinea(revision) : revision.frase;
+};
+
+// Lo que pasa después de cualquier botón de la lista: si falló se dice, y si
+// no, se vuelve a leer la lista entera. Nada se deduce aquí de lo que se
+// apretó: la lista es de Doyle y lo que dice es lo que Doyle contestó.
+const trasTocarLaVigilancia = async (peticion, boton) => {
+  if (boton) boton.disabled = true;
+  const datos = await peticion;
+  if (boton) boton.disabled = false;
+  if (!datos.ok) {
+    notaDeFalla('vigilancia-falla', datos);
+    return false;
+  }
+  await cargarVigilancia();
+  return true;
+};
+
+const vigilado = (a) => {
+  const li = document.createElement('li');
+  if (a.disponible) li.className = 'disponible';
+  const termino = document.createElement('b');
+  termino.className = 'termino';
+  termino.textContent = a.termino;
+  const estado = document.createElement('span');
+  estado.className = 'estado-vigilado';
+  estado.textContent = a.etiqueta;
+  const frase = document.createElement('span');
+  frase.className = 'detalle';
+  frase.textContent = a.frase;
+  li.append(termino, ' ', estado, frase);
+  if (a.error) {
+    const error = document.createElement('span');
+    error.className = 'error-vigilado';
+    error.textContent = a.error;
+    li.append(error);
+  }
+  const botones = document.createElement('div');
+  botones.className = 'fila';
+  if (a.aviso_pendiente) {
+    botones.append(botonDeAccion('Ya lo vi', (b) => trasTocarLaVigilancia(
+      respuestaDe(fetch('/api/vigilancia/' + a.articulo_id + '/visto', { method: 'POST' }), 'al_guardar'), b)));
+  }
+  botones.append(
+    botonDeAccion('Buscarlo', () => buscarDesdeOtraPestana(a.termino)),
+    botonDeAccion('Quitar', (b) => trasTocarLaVigilancia(
+      respuestaDe(fetch('/api/vigilancia/' + a.articulo_id, { method: 'DELETE' }), 'al_guardar'), b)));
+  li.append(botones);
+  return li;
+};
+
+const cargarVigilancia = async () => {
+  clearTimeout(SONDEO_DE_LA_VIGILANCIA);
+  const datos = await respuestaDe(fetch('/api/vigilancia'));
+  pintarRevision(datos.revision);
+  if (datos.revision && datos.revision.en_curso) {
+    SONDEO_DE_LA_VIGILANCIA = setTimeout(cargarVigilancia, datos.revision.sondeo_ms);
+  }
+  if (!datos.ok) {
+    notaDeFalla('vigilancia-falla', datos);
+    pintarAvisosDeVigilancia(null);
+    return;
+  }
+  nota('vigilancia-falla', '');
+  pintarCasillas(datos.proveedores);
+  nota('vigilancia-vacia', datos.frase || '');
+  document.getElementById('vigilancia-lista').replaceChildren(...datos.articulos.map(vigilado));
+  pintarAvisosDeVigilancia(datos.avisos);
+};
+
+const iniciarVigilancia = () => {
+  const campo = document.getElementById('vigilancia-termino');
+  document.getElementById('vigilancia-forma').onsubmit = async (e) => {
+    e.preventDefault();
+    const casillas = [...document.querySelectorAll('#vigilancia-proveedores input')];
+    const marcadas = casillas.filter(c => c.checked).map(c => c.value);
+    // Todas marcadas se manda vacío, que para Doyle es "los cuatro": así la
+    // frase del renglón dice "en los cuatro proveedores" y no la lista entera.
+    const proveedores = marcadas.length === casillas.length ? [] : marcadas;
+    const listo = await trasTocarLaVigilancia(respuestaDe(fetch('/api/vigilancia', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ termino: campo.value, proveedores }),
+    }), 'al_guardar'));
+    if (listo) campo.value = '';
+  };
+  const revisar = document.getElementById('vigilancia-revisar');
+  revisar.onclick = () => trasTocarLaVigilancia(
+    respuestaDe(fetch('/api/vigilancia/revisar', { method: 'POST' }), 'al_guardar'), revisar);
+  cargarVigilancia();
+};
+
+// ---------------------------------------------------------------- Sesiones
+
+// EL «INICIO» DE DOYLE (2026-09-28), con una diferencia a propósito: la
+// etiqueta de cada tarjeta NO es el `guardada` de Doyle —que sobrevive a que
+// el portal caduque la sesión—, sino lo que vieron las consultas guardadas:
+// caducada, sirvió o sin probar. Todo llega dicho del servidor (`sesiones.py`),
+// incluido si el botón de abrir se puede apretar (un portal a la vez, ADR 0018).
+
+async function cancelarSesion(sesion, boton, idNota, alTerminar) {
+  boton.disabled = true;
+  nota(idNota, '');
+  const respuesta = await respuestaDe(fetch('/api/sesion/' + sesion.proveedor + '/cancelar',
+                                   { method: 'POST' }), 'al_guardar');
+  boton.disabled = false;
+  if (!respuesta.ok) {
+    notaDeFalla(idNota, respuesta);
+    return;
+  }
+  nota(idNota, respuesta.detalle);
+  if (alTerminar) alTerminar();
+}
+
+const tarjetaDeSesion = (s) => {
+  const tarjeta = document.createElement('article');
+  tarjeta.className = 'portal' + (s.hay_que_abrirla ? ' sin-dato' : '');
+  const titulo = document.createElement('h3');
+  const estado = document.createElement('span');
+  estado.className = 'estado-portal';
+  estado.textContent = s.etiqueta;
+  titulo.append(s.nombre, ' ', estado);
+  const frase = document.createElement('p');
+  frase.className = 'que-paso';
+  frase.textContent = s.frase;
+  const botones = document.createElement('div');
+  botones.className = 'fila';
+  if (s.se_puede_confirmar) {
+    botones.append(
+      botonDeAccion('Ya entré', (b) => confirmarSesion(s, b, 'sesiones-accion', cargarSesiones)),
+      botonDeAccion('Cancelar', (b) => cancelarSesion(s, b, 'sesiones-accion', cargarSesiones)));
+  } else {
+    const abrir = botonDeAccion(s.rotulo_de_abrir,
+      (b) => abrirSesion(s, b, 'sesiones-accion', cargarSesiones));
+    abrir.disabled = !s.se_puede_abrir;
+    botones.append(abrir);
+  }
+  tarjeta.append(titulo, frase, botones);
+  if (s.por_que_no_se_abre) {
+    const porQue = document.createElement('p');
+    porQue.className = 'detalle';
+    porQue.textContent = s.por_que_no_se_abre;
+    tarjeta.append(porQue);
+  }
+  return tarjeta;
+};
+
+const cargarSesiones = async () => {
+  const caja = document.getElementById('sesiones-tarjetas');
+  const datos = await respuestaDe(fetch('/api/sesiones'));
+  if (!datos.ok) {
+    notaDeFalla('sesiones-falla', datos);
+    caja.replaceChildren();
+    return;
+  }
+  if (datos.evidencia_sin_leer) notaDeFalla('sesiones-falla', datos.evidencia_sin_leer);
+  else nota('sesiones-falla', '');
+  caja.replaceChildren(...datos.sesiones.map(tarjetaDeSesion));
+};
+
 // ------------------------------------------------------------- el esqueleto
 
 async function cargar() {
@@ -3684,6 +4133,9 @@ async function revisarDoyle() {
   document.getElementById('pedido-doyle').hidden = true;
 }
 
+iniciarPestanas();
+iniciarBuscar();
+iniciarVigilancia();
 cargarPedido();
 revisarDoyle();
 cargar();

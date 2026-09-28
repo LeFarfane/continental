@@ -11,7 +11,23 @@
   <h1>Continental</h1>
   <p class="sub">La suite de operación de la farmacia.</p>
 
-  <section>
+  <!-- LAS PESTAÑAS (2026-09-28). Los nombres son los del glosario: "Pedido" y
+       no "Órdenes", decisión del dueño. Buscar es la pestaña que Doyle tenía
+       en su propia web y que nadie podía ver desde que se mudó a atlas sin
+       interfaz (su ADR 0008). La que se ve va en la URL (#buscar), y
+       `mostrarPestana` decide al cargar; sin JavaScript se ve el pedido. -->
+  <nav class="pestanas" role="tablist" aria-label="Qué se muestra">
+    <button type="button" role="tab" id="pestana-pedido" aria-controls="panel-pedido" aria-selected="true">Pedido</button>
+    <button type="button" role="tab" id="pestana-buscar" aria-controls="panel-buscar" aria-selected="false" tabindex="-1">Buscar</button>
+    <button type="button" role="tab" id="pestana-vigilancia" aria-controls="panel-vigilancia" aria-selected="false" tabindex="-1">Vigilancia</button>
+    <button type="button" role="tab" id="pestana-sesiones" aria-controls="panel-sesiones" aria-selected="false" tabindex="-1">Sesiones</button>
+  </nav>
+  <!-- EL AVISO DE LA VIGILANCIA, fuera de las pestañas: se tiene que ver
+       aunque nadie abra la de Vigilancia, que es la mitad del punto del aviso
+       (lo mismo que hacía el banner de Doyle, su ADR 0007). -->
+  <p class="nota aviso avisos-vigilancia" id="avisos-vigilancia" hidden></p>
+
+  <section id="panel-pedido" role="tabpanel" aria-labelledby="pestana-pedido">
     <h2>Pedido sugerido</h2>
     <!-- EL CONTENEDOR DE NAVEGACIÓN (decisión del dueño, 2026-09-27): la
          fecha al centro, una flecha a cada lado, y cada lista es un día.
@@ -132,6 +148,73 @@
          solo hace falta cuando alguien abre este bloque del día. Nace
          escondido: `cargarConciliacion` la enseña sola en cuanto contesta. -->
     <div class="en-camino conciliacion" id="conciliacion" hidden></div>
+  </section>
+
+  <section id="panel-buscar" role="tabpanel" aria-labelledby="pestana-buscar" hidden>
+    <h2>Buscar en los proveedores</h2>
+    <!-- MIRAR NO ES PEDIR. Lo que se encuentra aquí no entra a la lista ni se
+         guarda: agregar a mano un producto que no se vendió es otra decisión,
+         con su ADR (0022). La frase lo dice para que nadie busque aquí
+         creyendo que está armando el pedido. -->
+    <p class="nota">Pregunta por un producto en los portales de los proveedores, todos a
+      la vez, con el código de barras o parte del nombre. Tarda alrededor de medio
+      minuto. Lo que encuentres aquí no entra a la lista del día: es para mirar.</p>
+    <!-- `maxlength` es comodidad y no la defensa: el tope de verdad lo pone el
+         servidor (`busqueda.LARGO_MAXIMO_DEL_TERMINO`) y dice por qué. -->
+    <form class="buscador" id="buscar-forma" role="search">
+      <label for="buscar-termino">Código de barras o nombre</label>
+      <input id="buscar-termino" type="search" autocomplete="off" maxlength="100">
+      <button type="submit" class="accion" id="buscar-boton">Buscar</button>
+    </form>
+    <!-- Lo que salió mal al buscar, y lo que contestaron los botones de sesión:
+         dos notas porque son dos cosas —una describe la búsqueda, la otra un
+         clic—, igual que `pedido-nota` y `pedido-accion`. -->
+    <p class="nota" id="buscar-falla" hidden></p>
+    <p class="nota" id="buscar-accion" hidden></p>
+    <p class="nota" id="buscar-frase" hidden></p>
+    <p class="nota" id="buscar-nuestro" hidden></p>
+    <p class="nota" id="buscar-catalogo" hidden></p>
+    <div class="portales" id="buscar-resultados" hidden></div>
+  </section>
+
+  <section id="panel-vigilancia" role="tabpanel" aria-labelledby="pestana-vigilancia" hidden>
+    <h2>Vigilancia</h2>
+    <!-- La lista, el reloj y las búsquedas son de Doyle (su ADR 0007); esto
+         la dibuja. Tampoco entra a la lista del día. -->
+    <p class="nota">Productos que hacen falta y hoy no tiene ningún proveedor. Doyle los
+      busca solo a las 9:30 y a las 19:30, y avisa arriba de las pestañas en cuanto
+      alguno aparece. Nada de esto entra a la lista del día.</p>
+    <form class="buscador" id="vigilancia-forma">
+      <label for="vigilancia-termino">Código de barras o nombre</label>
+      <input id="vigilancia-termino" type="text" autocomplete="off" maxlength="100">
+      <!-- Las casillas las pinta `pintarCasillas` con la lista del servidor:
+           cuáles son los proveedores y cómo se escriben vive en Python. -->
+      <fieldset class="proveedores-vigilancia" id="vigilancia-proveedores">
+        <legend>En qué proveedores</legend>
+      </fieldset>
+      <button type="submit" class="accion">Vigilar</button>
+    </form>
+    <div class="revision">
+      <button type="button" class="accion" id="vigilancia-revisar">Revisar ahora</button>
+      <span class="detalle" id="vigilancia-revision"></span>
+    </div>
+    <p class="nota" id="vigilancia-falla" hidden></p>
+    <p class="nota" id="vigilancia-vacia" hidden></p>
+    <ul class="vigilados" id="vigilancia-lista"></ul>
+  </section>
+
+  <section id="panel-sesiones" role="tabpanel" aria-labelledby="pestana-sesiones" hidden>
+    <h2>Sesiones de los portales</h2>
+    <!-- El «Inicio» de Doyle (2026-09-28). La contraseña se teclea en el
+         portal, dentro del visor, nunca aquí: Continental no la ve y Doyle
+         tampoco (ADR 0001 de Doyle). -->
+    <p class="nota">Para traer precios, Doyle necesita una sesión abierta en cada portal.
+      Se abre en dos pasos: «Abrir sesión» abre el portal en el visor, ahí tecleas el
+      usuario y la contraseña —nunca en esta página—, y vuelves a darle a «Ya entré».
+      De un portal a la vez.</p>
+    <p class="nota" id="sesiones-accion" hidden></p>
+    <p class="nota" id="sesiones-falla" hidden></p>
+    <div class="portales" id="sesiones-tarjetas"></div>
   </section>
 
   <section>

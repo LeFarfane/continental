@@ -20,6 +20,7 @@ from continental.almacenamiento import AlmacenamientoDelPedido, AlmacenamientoPo
 from continental.config import cargar
 from continental.consultas import RegistroDeConsultas
 from continental.doyle import ClienteDeDoyle, DoylePorHttp
+from continental.vigilancia import RegistroDeRevision
 
 
 def obtener_almacen() -> LecturaDelAlmacen:
@@ -106,6 +107,18 @@ def obtener_consultas() -> RegistroDeConsultas:
     y el `ahora` de `consultas.consultar_a_doyle`.
     """
     return _CONSULTAS
+
+
+#: «Revisar ahora» de la vigilancia, **para todo el proceso**, por lo mismo que
+#: `_CONSULTAS`: existe para recordar que ya hay una revisión en curso, y uno
+#: por petición no recordaría nada.
+_REVISION = RegistroDeRevision()
+
+
+def obtener_revision() -> RegistroDeRevision:
+    """El registro de «Revisar ahora». Se sustituye en pruebas por uno cuyo
+    `lanzar` ejecuta ahí mismo: ninguna prueba arranca un hilo."""
+    return _REVISION
 
 
 def reloj() -> dt.datetime:

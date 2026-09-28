@@ -390,7 +390,16 @@ def test_la_pantalla_pinta_la_existencia_del_renglon_y_no_la_vuelve_a_buscar(cli
     # confirmar el lote (`confirmarLoteDeConciliacion`), que al terminar
     # también vuelve a `cargarPedido` en vez de repintarse a mano. El total
     # sube de 17 a 19.
-    assert portada.count("fetch('/api/") == 19
+    #
+    # Las dos de Buscar (2026-09-28): pedir la búsqueda (`POST /api/buscar`) y
+    # preguntar cómo va (`GET /api/buscar/{job_id}`). El total sube de 19 a 21.
+    #
+    # Las cinco de Vigilancia (2026-09-28), una por botón: leer la lista,
+    # agregar, quitar, «Ya lo vi» y «Revisar ahora». Sube de 21 a 26.
+    #
+    # Las dos de Sesiones (2026-09-28): leer las tarjetas y «Cancelar».
+    # Abrir y «Ya entré» son las de siempre. Sube de 26 a 28.
+    assert portada.count("fetch('/api/") == 28
 
 
 # ------------------------------------------------------- la función, directo

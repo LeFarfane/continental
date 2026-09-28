@@ -403,11 +403,13 @@ from fastapi.testclient import TestClient
 
 from continental.consultas import RegistroDeConsultas
 from continental.dobles import AlmacenamientoFalso, AlmacenFalso, DoyleFalso
+from continental.vigilancia import RegistroDeRevision
 from continental.web.app import app
 from continental.web.dependencias import (
     obtener_almacen,
     obtener_almacenamiento,
     obtener_consultas,
+    obtener_revision,
     obtener_doyle,
 )
 
@@ -576,6 +578,14 @@ def consultas() -> RegistroDeConsultas:
     return RegistroDeConsultas(lanzar=lambda tarea: tarea())
 
 
+@pytest.fixture
+def revision() -> RegistroDeRevision:
+    """El registro de «Revisar ahora» de la vigilancia, **sin hilos**: por lo
+    mismo que `consultas`, `lanzar` ejecuta la tarea ahí mismo y la revisión
+    ya terminó cuando la petición vuelve."""
+    return RegistroDeRevision(lanzar=lambda tarea: tarea())
+
+
 @pytest.fixture(scope="session")
 def cliente_de_sesion():
     """Un solo `TestClient` —y un solo bucle de eventos— para todo el suite.
@@ -621,6 +631,7 @@ def cliente(
     doyle: DoyleFalso,
     almacenamiento: AlmacenamientoFalso,
     consultas: RegistroDeConsultas,
+    revision: RegistroDeRevision,
 ):
     """La aplicación real con los cuatro bordes sustituidos.
 
@@ -640,5 +651,6 @@ def cliente(
     app.dependency_overrides[obtener_doyle] = lambda: doyle
     app.dependency_overrides[obtener_almacenamiento] = lambda: almacenamiento
     app.dependency_overrides[obtener_consultas] = lambda: consultas
+    app.dependency_overrides[obtener_revision] = lambda: revision
     yield cliente_de_sesion
     app.dependency_overrides.clear()
