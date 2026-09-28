@@ -42,9 +42,14 @@ lo único con lo que se empareja un producto nuestro con el suyo.
 **Puente** — el cruce de los tres precios de un producto: lo que nos cuesta con
 cada proveedor, lo que cobramos nosotros y lo que cobran las cadenas.
 
-> **Puente es solo eso.** El mapa de la clave de un proveedor en Doyle a su
-> proveedor en SICAR —lo que la pantalla hoy escribe "sin puente"— es otra cosa,
-> y el código que todavía lo llama así está mal nombrado.
+**Correspondencia** — qué proveedor de SICAR es cada proveedor tal como lo
+nombra Doyle. Puede faltar, y entonces se pide igual pero la recepción no se
+puede sugerir.
+
+> **Puente no es correspondencia.** El puente cruza precios de un producto; la
+> correspondencia empata dos nombres de un mismo proveedor. El código que
+> todavía llama "puente" a la correspondencia —y la pantalla que escribe "sin
+> puente"— está mal nombrado.
 
 ## El pedido
 

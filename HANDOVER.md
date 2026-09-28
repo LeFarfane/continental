@@ -982,7 +982,8 @@ Lo primero es medir cuántos productos tienen los tres precios a la vez; la
 primera pregunta que contesta el puente se elige con ese número. Y **"puente"
 todavía nombra otra cosa en el código**: el mapa de clave de Doyle a `pro_id`
 de SICAR (`proveedores.py`, `particion.py`, `conciliacion.py`, y la pantalla
-escribe "sin puente"). Ese uso se renombra. Los pendientes están en Notion.
+escribe "sin puente"). Ese uso se renombra a **correspondencia**, confirmado
+por el dueño el 2026-09-27. Los pendientes están en Notion.
 
 **Terminado, para el módulo de Pedido**, quiere decir esto y no "ya corre": un
 día de operación real en que la lista se armó sola de noche con las ventas del

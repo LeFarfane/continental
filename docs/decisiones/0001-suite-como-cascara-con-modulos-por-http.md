@@ -169,7 +169,8 @@ todavía no hay uno validado contra una compra.
 **"Puente" ya nombraba otra cosa** en el código: el mapa de la clave de
 proveedor de Doyle al proveedor de SICAR (ADR 0008), que la pantalla escribe
 "sin puente". El dueño eligió el nombre para el cruce, así que ese uso viejo
-se renombra.
+se renombra a **correspondencia**, confirmado el mismo día. La palabra ya era
+la del título del ADR 0008.
 
 ### Condiciones de revisión nuevas
 
