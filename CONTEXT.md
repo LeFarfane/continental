@@ -68,8 +68,8 @@ portal mismo, nunca en Continental.
   visor. **Una a la vez**: mientras una espera, las otras no se abren.
 - `caducada` — una consulta encontró que el portal mandaba al login.
 - `sirvió` — dio precio después de guardarse. No afirma que siga sirviendo.
-- `guardada, sin probar` — se guardó y ninguna consulta la ha usado desde
-  entonces.
+- `guardada, sin probar` — se guardó y, desde entonces, ninguna consulta ha
+  traído precio de ese portal ni lo ha encontrado mandando al login.
 
 > **Guardada no quiere decir que sirva.** Doyle llama *guardada* a una sesión
 > que alguien confirmó alguna vez, y lo sigue diciendo después de que el

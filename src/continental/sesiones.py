@@ -124,8 +124,12 @@ def estado_de_la_sesion(
             "Pudo caducar desde entonces: la siguiente consulta lo dice."
         )
     return SIN_PROBAR, (
-        f"{cuando_se_guardo} Ninguna consulta la ha usado desde entonces, así "
-        "que todavía no se sabe si el portal la acepta."
+        # "Ninguna consulta la ha usado" decía hasta el 2026-09-28, y en atlas
+        # era falso para QuePharma: se le consulta, y contesta sin precio
+        # porque no empareja por EAN. Lo que no hubo es ni un precio ni un login.
+        f"{cuando_se_guardo} Desde entonces ninguna consulta ha traído precio "
+        "de este portal ni lo ha encontrado mandando al login, así que todavía "
+        "no se sabe si la acepta."
     )
 
 
