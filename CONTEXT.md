@@ -28,14 +28,23 @@ saber si estamos caros: Guadalajara, Similares, del Ahorro, Benavides, San
 Pablo. No tienen relación con nosotros y publican precio al público.
 
 > Proveedor y cadena nunca son lo mismo. El precio de un proveedor es lo que
-> pagamos; el de una cadena es lo que cobra alguien más. Compararlos entre sí no
-> significa nada.
+> pagamos; el de una cadena es lo que cobra alguien más. **No se restan como si
+> fueran el mismo precio**, pero leídos juntos —en contexto y en la misma base
+> de IVA— dicen lo que ninguno dice solo: cuánto margen cabe sin afectar al
+> cliente. Eso es lo que contesta el **puente**.
 
 **Producto** — un artículo del catálogo de la farmacia.
 
 **Clave** — el código de barras del producto (EAN de 13 dígitos). Es lo único
 que significa lo mismo en nuestro catálogo y en el de un proveedor, y por eso es
 lo único con lo que se empareja un producto nuestro con el suyo.
+
+**Puente** — el cruce de los tres precios de un producto: lo que nos cuesta con
+cada proveedor, lo que cobramos nosotros y lo que cobran las cadenas.
+
+> **Puente es solo eso.** El mapa de la clave de un proveedor en Doyle a su
+> proveedor en SICAR —lo que la pantalla hoy escribe "sin puente"— es otra cosa,
+> y el código que todavía lo llama así está mal nombrado.
 
 ## El pedido
 
