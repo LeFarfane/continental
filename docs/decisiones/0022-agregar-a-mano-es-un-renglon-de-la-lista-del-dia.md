@@ -1,8 +1,8 @@
 # 0022 — Agregar a mano lo que no se vendió es un renglón más de la lista del día
 
 **Fecha:** 2026-09-28  ·  **Estado:** propuesta — no se construye antes del
-primer día real de operación del Pedido. De sus dos preguntas, la primera
-la contestó el dueño el mismo día y cambió la regla 1; la segunda sigue abierta
+primer día real de operación del Pedido. Sus dos preguntas las contestó el
+dueño el mismo día: la primera cambió la regla 1, la segunda confirmó la 4
 **Complementa el ADR 0002** (el pedido sugerido repone lo vendido)
 
 ## Contexto
@@ -89,7 +89,8 @@ se recibe. Cinco reglas más, porque "no se vendió" cambia cinco cosas:
    "contado desde el principio de lo que el renglón cubría" (ADR 0013), y un
    renglón agregado a mano no cubría ninguna venta: sin esta regla, volvería
    *cero*. Así que vuelve como vuelve lo que faltó de un parcial (ADR 0015):
-   sus piezas, sumadas a la siguiente lista (pregunta abierta 2). Lo que llegó
+   sus piezas, sumadas a la siguiente lista (confirmado por el dueño el
+   2026-09-28, pregunta 2). Lo que llegó
    de menos ya funciona sin tocar nada: son las piezas que faltaron.
 5. **Cerrar sin pedirlo avisa que se pierde**, igual que lo que faltó de un
    parcial: entra a `cierre.lo_que_se_perderia`. No pasa a la lista
@@ -161,7 +162,7 @@ el portal.
    la regla 1 como está arriba. La primera versión de este ADR decía que un
    renglón sin `producto_id` "la recepción no sabría emparejar"; con el alta y
    la compra capturadas juntas, sí sabe: por la clave, una noche después.
-2. **Un pedido cancelado de algo agregado a mano**: ¿vuelve solo en la
-   siguiente lista (lo que propone la regla 4), o se da por perdido? Volver es
-   un clic de descartar si ya no hace falta; perderse es un cliente que se
-   quedó esperando.
+2. ~~**Un pedido cancelado de algo agregado a mano**: ¿vuelve solo en la
+   siguiente lista, o se da por perdido?~~ **Contestada el 2026-09-28: vuelve
+   en la siguiente lista.** Es la regla 4 como estaba propuesta: si ya no hace
+   falta, se descarta con un clic; perderse era un cliente esperando.
