@@ -508,6 +508,34 @@ Access desde la primera petición**.
       que la aplicación de Access quedó sobre otro dominio que el del Public
       Hostname.
 
+### B.4 — Que Cloudflare respete el `no-cache` de la hoja y el script — ✅ **2026-10-01**
+
+- [x] **Caching → Configuration → Browser Cache TTL → "Respect Existing
+      Headers"**, en la zona `farfanlab.uk`.
+
+Continental manda `Cache-Control: no-cache` en `index.html`,
+`continental.css` y `continental.js`: el navegador puede guardarlos, pero
+pregunta antes de usarlos (el porqué está en `EstaticosQueSeRevalidan`, en
+`web/app.py`). Con el valor de fábrica de esa opción, Cloudflare **reescribe**
+la cabecera de los `.css` y `.js` a `max-age=14400` y deja intacta la del HTML.
+Medido el 2026-10-01, el día después de desplegar el diseño del ADR 0023: el
+HTML nuevo llegaba, pero el navegador siguió hasta 4 horas con la hoja y el
+script de antes. El resultado era la pantalla vieja, o una mezcla rota. Lo
+arreglaba un Ctrl + Shift + R, pero eso nadie lo sabe en el mostrador.
+
+Para comprobarlo, en la consola del navegador con la pantalla abierta:
+
+```js
+(await fetch('/static/continental.js', {cache: 'no-store'})).headers.get('cache-control')
+```
+
+Tiene que decir `no-cache`. Si dice `max-age=14400`, la opción volvió al valor
+de fábrica, por ejemplo porque se recreó la zona.
+
+Se descartó volver a poner versión en las rutas (`continental.css?v=…`): es
+lo que ya se había descartado en `app.py`, porque obliga a plantillar el HTML,
+que hoy se sirve tal cual.
+
 ---
 
 ## Parte C — a partir de aquí, desplegar es un comando
@@ -873,6 +901,7 @@ D.2, aplicada al segundo monitor.
 | La unidad no arranca: "Cannot assign requested address" | Se recreó la red `borde` y el gateway ya no es `172.19.0.1` (A.7) |
 | `active (running)` pero nada contesta en el 8585 | Arrancó en otro puerto. **No debería poder**: `--servicio` se niega. Si pasa, mirar `ExecStart` |
 | La pantalla dice `sin-identificar` entrando por el túnel | Falta la aplicación de Access, o está sobre otro dominio (B.3) |
+| Después de desplegar se sigue viendo la pantalla de antes, o una mezcla rota | Cloudflare volvió a reescribir el `Cache-Control` de los `.css`/`.js` (B.4). Ctrl + Shift + R lo arregla en esa máquina, no en las demás |
 | El despliegue se detiene en "1/7 git pull" | No hay remoto configurado (A.1) |
 | Los rótulos dicen otro total de pasos que el script que acabas de empujar | Corrió la versión vieja del script: el pull la cambió debajo de bash. Desde el 2026-09-21 se relanza sola; si no viste "me vuelvo a lanzar", la que corrió aún no sabía hacerlo: vuelve a correrlo (Parte C) |
 | El paso 1 dice "sin git pull" y no trajo nada | Tienes `CONTINENTAL_DESPLEGAR_RELANZADO` exportada en tu sesión con el hash exacto de este archivo (coincidencia real, no debería pasar sola). `unset` y vuelve a correr. Si el valor NO coincide, el script ya lo detecta solo: avisa y jala igual, no hace falta tocar nada |
