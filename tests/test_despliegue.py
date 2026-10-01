@@ -161,6 +161,11 @@ def test_como_servicio_no_se_abre_ningun_navegador(iniciar, monkeypatch, tmp_pat
 
     Se sustituyen `uvicorn.run` y `webbrowser.open` para que `main()` haga todo
     su trabajo sin levantar un servidor ni abrir nada.
+
+    `puerto_libre` también se sustituye: lo que se prueba aquí es el navegador,
+    no el puerto. El 2026-09-29 falló a las 02:11 porque en la torre había un
+    túnel `ssh -L 8585:...` hacia atlas escuchando en ese puerto, y en modo
+    `--servicio` eso es (con razón) un `SystemExit`.
     """
     abiertos = []
     servidos = {}
@@ -169,6 +174,7 @@ def test_como_servicio_no_se_abre_ningun_navegador(iniciar, monkeypatch, tmp_pat
     monkeypatch.setattr(iniciar.sys, "argv", ["iniciar.py", "--servicio"])
     monkeypatch.setenv("CONTINENTAL_HOST", "127.0.0.1")
     monkeypatch.setattr(iniciar, "RAIZ", tmp_path)
+    monkeypatch.setattr(iniciar, "puerto_libre", lambda host, puerto: True)
 
     iniciar.main()
 
