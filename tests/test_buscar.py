@@ -564,13 +564,21 @@ def _script() -> str:
 
 def test_las_pestanas_se_llaman_como_el_glosario():
     """"Pedido" y no "Órdenes": el glosario manda sobre el nombre (decisión
-    del dueño, 2026-09-28)."""
+    del dueño, 2026-09-28).
+
+    Desde el diseño del 2026-09-30 las pestañas van en una barra lateral, en
+    dos grupos: "Pedido" —la lista del día y lo que viene en camino— y
+    "Proveedores". Más el estado, abajo, que no lleva rótulo de texto suelto
+    sino su tarjeta."""
     pantalla = pantalla_completa()
 
     [pestanas] = re.findall(r'<nav class="pestanas" role="tablist".*?</nav>', pantalla, re.S)
-    rotulos = re.findall(r'role="tab"[^>]*>([^<]+)</button>', pestanas)
+    rotulos = re.findall(r'role="tab"[^>]*>([^<]+)', pestanas)
+    grupos = re.findall(r'data-grupo="([^"]+)"', pestanas)
 
-    assert rotulos == ["Pedido", "Buscar", "Vigilancia", "Sesiones"]
+    assert rotulos == ["Lista del día", "En camino", "Buscar", "Vigilancia", "Sesiones"]
+    assert grupos == ["Pedido", "Proveedores"]
+    assert "rdenes" not in pestanas
 
 
 def test_la_pestana_de_buscar_nace_escondida_y_la_del_pedido_no():

@@ -7,226 +7,356 @@
 <link rel="stylesheet" href="/static/continental.css">
 </head>
 <body>
-<main>
-  <h1>Continental</h1>
-  <p class="sub">La suite de operación de la farmacia.</p>
+<!-- LA CÁSCARA DEL DISEÑO DEL 2026-09-30 (ADR 0023): una barra lateral con las
+     secciones a la izquierda y el trabajo a la derecha, en vez de las pestañas
+     de arriba. El diseño viene de Cupertino UI; aquí está traducido a HTML,
+     CSS y JS planos —sin React, sin fuentes de fuera—, por las mismas razones
+     del ticket 28. -->
+<div class="app">
 
-  <!-- LAS PESTAÑAS (2026-09-28). Los nombres son los del glosario: "Pedido" y
-       no "Órdenes", decisión del dueño. Buscar es la pestaña que Doyle tenía
-       en su propia web y que nadie podía ver desde que se mudó a atlas sin
-       interfaz (su ADR 0008). La que se ve va en la URL (#buscar), y
-       `mostrarPestana` decide al cargar; sin JavaScript se ve el pedido. -->
-  <nav class="pestanas" role="tablist" aria-label="Qué se muestra">
-    <button type="button" role="tab" id="pestana-pedido" aria-controls="panel-pedido" aria-selected="true">Pedido</button>
-    <button type="button" role="tab" id="pestana-buscar" aria-controls="panel-buscar" aria-selected="false" tabindex="-1">Buscar</button>
-    <button type="button" role="tab" id="pestana-vigilancia" aria-controls="panel-vigilancia" aria-selected="false" tabindex="-1">Vigilancia</button>
-    <button type="button" role="tab" id="pestana-sesiones" aria-controls="panel-sesiones" aria-selected="false" tabindex="-1">Sesiones</button>
-  </nav>
-  <!-- EL AVISO DE LA VIGILANCIA, fuera de las pestañas: se tiene que ver
-       aunque nadie abra la de Vigilancia, que es la mitad del punto del aviso
-       (lo mismo que hacía el banner de Doyle, su ADR 0007). -->
-  <p class="nota aviso avisos-vigilancia" id="avisos-vigilancia" hidden></p>
+  <aside class="lateral">
+    <div class="marca-app">
+      <span class="nombre-app">Continental</span>
+      <span class="lema-app">Farmacia · mostrador</span>
+    </div>
+    <!-- LAS SECCIONES. Siguen siendo pestañas de verdad —`role="tab"`, las
+         flechas pasan de una a otra, la que se ve va en la URL (#buscar)—,
+         ahora en vertical. Los dos grupos, "Pedido" y "Proveedores", los
+         escribe la hoja con `data-grupo`: son rótulos para el ojo, y el lector
+         de pantalla ya sabe en qué pestaña está. "Pedido" sigue siendo el
+         nombre del dueño (2026-09-28): es el grupo de la lista del día y de lo
+         que viene en camino. -->
+    <nav class="pestanas" role="tablist" aria-label="Qué se muestra" aria-orientation="vertical">
+      <button type="button" role="tab" id="pestana-pedido" aria-controls="panel-pedido" aria-selected="true" data-grupo="Pedido">Lista del día<span class="cuenta-pestana" id="cuenta-pedido" hidden></span></button>
+      <button type="button" role="tab" id="pestana-camino" aria-controls="panel-camino" aria-selected="false" tabindex="-1">En camino<span class="cuenta-pestana" id="cuenta-camino" hidden></span></button>
+      <button type="button" role="tab" id="pestana-buscar" aria-controls="panel-buscar" aria-selected="false" tabindex="-1" data-grupo="Proveedores">Buscar</button>
+      <button type="button" role="tab" id="pestana-vigilancia" aria-controls="panel-vigilancia" aria-selected="false" tabindex="-1">Vigilancia<span class="cuenta-pestana" id="cuenta-vigilancia" hidden></span></button>
+      <button type="button" role="tab" id="pestana-sesiones" aria-controls="panel-sesiones" aria-selected="false" tabindex="-1">Sesiones<span class="cuenta-pestana" id="cuenta-sesiones" hidden></span></button>
+      <!-- EL ESTADO, abajo y como tarjeta: se ve sin abrirlo si algo no
+           contesta, y al apretarlo se ve el detalle. -->
+      <button type="button" role="tab" id="pestana-estado" class="estado-lateral" aria-controls="panel-estado" aria-selected="false" tabindex="-1"><span class="oculto">Estado: </span><span class="estado-lateral-titulo"><span class="punto" id="estado-lateral-punto"></span><span id="estado-lateral-texto">Consultando…</span></span><span class="estado-lateral-detalle" id="estado-lateral-detalle"></span></button>
+    </nav>
+  </aside>
 
-  <section id="panel-pedido" role="tabpanel" aria-labelledby="pestana-pedido">
-    <h2>Pedido sugerido</h2>
-    <!-- EL CONTENEDOR DE NAVEGACIÓN (decisión del dueño, 2026-09-27): la
-         fecha al centro, una flecha a cada lado, y cada lista es un día.
-         Nace escondido: sin una fecha que mostrar -un almacén sin una sola
-         venta todavía- no hay nada que navegar. Las flechas nacen sin
-         `hidden` propio -esconder el contenedor ya las esconde a las dos- y
-         `pintarNavegacion` decide en cada carga si cada una se enseña. -->
-    <div class="navegacion" id="pedido-navegacion" hidden>
-      <button type="button" class="accion" id="pedido-navegacion-anterior" aria-label="Día anterior">&larr;</button>
-      <span id="pedido-navegacion-fecha"></span>
-      <button type="button" class="accion" id="pedido-navegacion-siguiente" aria-label="Día siguiente">&rarr;</button>
-    </div>
-    <p class="corte" id="corte">Armando la lista…</p>
-    <!-- QUÉ TAN RECIENTES SON LAS VENTAS (ticket 29). Pegado al corte porque
-         lo explica: la lista del viernes vista un lunes por la mañana dice si
-         eso es lo normal o si falta algo que ya debía haber llegado. -->
-    <p class="nota" id="pedido-ventas" hidden></p>
-    <!-- DOYLE NO CONTESTA (ticket 29). Arriba de la tabla y no abajo en
-         "Módulos", que es donde se decía antes: quien trabaja la lista tiene
-         que saber que los precios no están disponibles antes de mirarlos. -->
-    <p class="nota" id="pedido-doyle" hidden></p>
-    <!-- Lo que no se pudo leer y NO tumbó la lista: los precios o los pedidos
-         guardados. Sin esto su vacío se leería como un dato. -->
-    <div id="pedido-avisos" hidden></div>
-    <p class="armado" id="armado" hidden></p>
-    <div class="cierre" id="cierre" hidden>
-      <button type="button" id="cerrar">Cerrar la lista</button>
-      <!-- DESHACER EL CIERRE (ADR 0016). Nace escondido y solo se enseña cuando
-           el servidor dice que se puede: un botón que contestaría 409 es un
-           botón muerto. Su rótulo y la frase de al lado llegan de Python. -->
-      <button type="button" id="reabrir" hidden>Reabrir</button>
-      <span class="detalle" id="cierre-detalle"></span>
-    </div>
-    <!-- LA CONFIRMACIÓN ANTES DE CERRAR (ADR 0016). Un <dialog> propio y no la
-         ventanita del navegador: con showModal() atrapa el foco, Esc lo cierra sin
-         cerrar la lista, y "Volver" funciona aun sin JavaScript (method=dialog).
-         Todo lo que dice llega hecho del servidor (`cierre.al_cerrar`); lo de
-         aquí es el esqueleto con rótulos por omisión. -->
-    <dialog id="confirmar-cierre" class="confirmar-cierre" aria-labelledby="confirmar-cierre-titulo">
-      <form method="dialog">
-        <h3 id="confirmar-cierre-titulo">¿Cerrar la lista?</h3>
-        <p id="confirmar-cierre-frase"></p>
-        <div class="aviso" id="confirmar-cierre-perdidas" hidden>
-          <p><b class="rotulo">Ojo:</b> <span id="confirmar-cierre-aviso"></span></p>
-          <ul class="se-perderia" id="confirmar-cierre-lista"></ul>
-          <p id="confirmar-cierre-que-hacer"></p>
+  <main class="contenido">
+    <!-- EL AVISO DE LA VIGILANCIA, fuera de las secciones: se tiene que ver
+         aunque nadie abra la de Vigilancia, que es la mitad del punto del aviso
+         (lo mismo que hacía el banner de Doyle, su ADR 0007). La barra lateral
+         lo cuenta además en su insignia. -->
+    <p class="nota aviso avisos-vigilancia" id="avisos-vigilancia" hidden></p>
+
+    <section id="panel-pedido" class="panel panel-pedido" role="tabpanel" aria-labelledby="pestana-pedido">
+      <h2>Pedido sugerido</h2>
+
+      <!-- LA BARRA DEL DÍA: la fecha con sus flechas, el estado de la lista,
+           los tres pasos y lo que se hace con la lista entera. -->
+      <header class="barra-dia">
+        <div class="dia">
+          <!-- EL CONTENEDOR DE NAVEGACIÓN (decisión del dueño, 2026-09-27): la
+               fecha al centro, una flecha a cada lado, y cada lista es un día.
+               Nace escondido: sin una fecha que mostrar -un almacén sin una
+               sola venta todavía- no hay nada que navegar. Las flechas nacen
+               sin `hidden` propio y `pintarNavegacion` decide en cada carga si
+               cada una se enseña. -->
+          <div class="navegacion" id="pedido-navegacion" hidden>
+            <button type="button" class="accion" id="pedido-navegacion-anterior" aria-label="Día anterior">‹</button>
+            <span id="pedido-navegacion-fecha"></span>
+            <button type="button" class="accion" id="pedido-navegacion-siguiente" aria-label="Día siguiente">›</button>
+          </div>
+          <!-- De qué días son las ventas de la lista. Debajo de la fecha y en
+               chico: la fecha dice qué lista es, esto dice qué ventas trae. -->
+          <p class="corte" id="corte">Armando la lista…</p>
         </div>
-        <p class="deshacer" id="confirmar-cierre-deshacer" hidden></p>
-        <div class="botones">
-          <button value="volver" id="confirmar-cierre-volver">Volver a la lista</button>
-          <button value="cerrar" id="confirmar-cierre-cerrar">Cerrar la lista</button>
+        <span class="insignia" id="pedido-estado" hidden></span>
+        <!-- LOS TRES PASOS de una lista abierta: revisar renglón por renglón,
+             repartir en pedidos y capturar cada pedido en su portal. Son
+             botones y no pestañas: dicen en qué paso se está
+             (`aria-current="step"`) y llevan a otro. -->
+        <ol class="pasos" id="pasos" aria-label="Pasos de la lista" hidden>
+          <li><button type="button" data-paso="revisar"><span class="paso-numero">1</span><span class="paso-nombre">Revisar</span></button></li>
+          <li><button type="button" data-paso="repartir"><span class="paso-numero">2</span><span class="paso-nombre">Repartir</span></button></li>
+          <li><button type="button" data-paso="capturar"><span class="paso-numero">3</span><span class="paso-nombre">Capturar y enviar</span></button></li>
+        </ol>
+        <div class="cierre" id="cierre" hidden>
+          <button type="button" id="cerrar">Cerrar la lista</button>
+          <!-- DESHACER EL CIERRE (ADR 0016). Nace escondido y solo se enseña
+               cuando el servidor dice que se puede: un botón que contestaría
+               409 es un botón muerto. Su rótulo llega de Python. -->
+          <button type="button" id="reabrir" hidden>Reabrir</button>
         </div>
+        <button type="button" class="accion" id="ir-a-hoy" hidden>Ir a hoy</button>
+      </header>
+
+      <!-- CÓMO ESTÁ LA LISTA: cuándo se armó, quién la cerró, y qué implica
+           cerrarla o si se puede reabrir. Todo en una franja: es lo que deja
+           auditar la lista, no lo que decide qué se compra. -->
+      <div class="barra-estado">
+        <p class="armado" id="armado" hidden></p>
+        <span class="detalle" id="cierre-detalle"></span>
+      </div>
+
+      <!-- LO QUE HAY QUE SABER ANTES DE TRABAJAR LA LISTA, juntado en una
+           franja que se abre. Cada renglón es una de las notas de siempre
+           —las ventas, Doyle, lo que no se pudo leer, los sin anaquel, el
+           conteo de precios, el lote de anoche y el botón de completar— con
+           su mismo `id` y su misma frase del servidor. La franja se abre sola
+           si hay una falla: lo que falla no se esconde detrás de un clic. -->
+      <div class="avisos" id="avisos" hidden>
+        <button type="button" class="avisos-resumen" id="avisos-resumen" aria-expanded="false" aria-controls="avisos-lista">
+          <span class="punto" id="avisos-punto"></span>
+          <span class="avisos-texto" id="avisos-texto"></span>
+          <span class="avisos-ver" id="avisos-ver">Ver</span>
+        </button>
+        <div class="avisos-lista" id="avisos-lista" hidden>
+          <!-- QUÉ TAN RECIENTES SON LAS VENTAS (ticket 29). -->
+          <div class="aviso-fila" data-etiqueta="Ventas"><p class="nota" id="pedido-ventas" hidden></p></div>
+          <!-- DOYLE NO CONTESTA (ticket 29): quien trabaja la lista tiene que
+               saber que los precios no están disponibles antes de mirarlos. -->
+          <div class="aviso-fila" data-etiqueta="Doyle"><p class="nota" id="pedido-doyle" hidden></p></div>
+          <!-- Lo que no se pudo leer y NO tumbó la lista: los precios o los
+               pedidos guardados. Sin esto su vacío se leería como un dato. -->
+          <div class="aviso-fila" data-etiqueta="Lectura"><div id="pedido-avisos" hidden></div></div>
+          <div class="aviso-fila" data-etiqueta="Anaquel"><p class="nota" id="pedido-sin-clasificar" hidden></p></div>
+          <!-- Cuántos renglones quedaron SIN COMPARAR (ticket 15): se tiene que
+               ver de un vistazo y sin abrir renglón por renglón. -->
+          <div class="aviso-fila" data-etiqueta="Precios"><p class="nota" id="pedido-sin-comparar" hidden></p></div>
+          <!-- CÓMO LE FUE AL LOTE DE ANOCHE (ticket 19, ADR 0007). Va debajo
+               del conteo porque lo EXPLICA. Se escribe también cuando el lote
+               fue bien: callar en el caso bueno dejaría el silencio con dos
+               significados. -->
+          <div class="aviso-fila" data-etiqueta="Lote"><p class="nota" id="pedido-corrida" hidden></p></div>
+          <!-- EL BOTÓN DE COMPLETAR SOLO LOS FALTANTES, y los proveedores a
+               los que se les caducó la sesión: el mismo momento del día. -->
+          <div class="aviso-fila" data-etiqueta="Completar"><div class="completar" id="completar" hidden></div></div>
+        </div>
+      </div>
+
+      <!-- Lo que contestó el último clic. Aparte de las notas porque es
+           pasajero y de otra naturaleza: aquéllas describen la lista, ésta
+           describe un clic. Arriba de los tres pasos, para que se vea desde
+           cualquiera. -->
+      <p class="nota" id="pedido-accion" role="status" hidden></p>
+      <p class="nota" id="pedido-nota" hidden></p>
+
+      <!-- PASO 1: REVISAR. La tabla de renglones y, a la derecha, el detalle
+           del renglón elegido. -->
+      <div class="paso revisar" id="paso-revisar">
+        <div class="lista-de-trabajo">
+          <div class="barra-lista" id="barra-lista" hidden>
+            <div class="vistas" id="vistas" role="radiogroup" aria-label="Qué se muestra en la lista" hidden></div>
+            <span class="orden">Ordenado por urgencia</span>
+            <span class="filtrados" id="pedido-filtrados" role="status" hidden></span>
+            <input type="search" class="filtro" id="pedido-filtro" placeholder="Filtrar la lista" aria-label="Filtrar la lista por nombre o clave" autocomplete="off">
+          </div>
+          <div class="tarjeta-tabla">
+            <table id="pedido-tabla" hidden>
+              <caption id="pedido-resumen"></caption>
+              <thead>
+                <!-- Los encabezados cortos son los del diseño; el nombre del
+                     glosario va dicho para el lector de pantalla y en el
+                     `title`. Las cuatro columnas de proveedor las pone el
+                     JavaScript con los nombres que manda el servidor. -->
+                <tr id="pedido-encabezado">
+                  <th class="producto">Producto</th>
+                  <th class="numero" title="Existencia"><span aria-hidden="true">Hay</span><span class="oculto">Existencia</span></th>
+                  <th class="numero" title="Días de cobertura"><span aria-hidden="true">Alcanza</span><span class="oculto">Días de cobertura</span></th>
+                  <th class="cantidad" title="Cantidad a pedir"><span aria-hidden="true">Pedir</span><span class="oculto">Cantidad a pedir</span></th>
+                  <th class="proveedor" id="encabezado-proveedor">Se le pide a</th>
+                  <th class="acciones"><span class="oculto">Descartar</span></th>
+                </tr>
+              </thead>
+              <tbody id="pedido-renglones"></tbody>
+            </table>
+            <!-- Los descartados, aparte y plegados: es lo que ya se atendió. -->
+            <details class="descartados" id="descartados" hidden>
+              <summary id="descartados-resumen"></summary>
+              <ul id="descartados-lista"></ul>
+            </details>
+          </div>
+          <!-- LA CONCILIACIÓN DIARIA (ADR 0021): lo propuesto contra lo que de
+               verdad se compró. Se pide aparte -no viaja en la respuesta de la
+               lista- porque es una lectura más cara. Nace escondido:
+               `cargarConciliacion` la enseña sola en cuanto contesta. -->
+          <div class="en-camino conciliacion" id="conciliacion" hidden></div>
+        </div>
+
+        <!-- EL DETALLE DEL RENGLÓN ELEGIDO. Todo lo que la fila no alcanza a
+             decir en una línea —cada frase del servidor, cada motivo de cada
+             hueco, quién decidió qué— vive aquí. En pantalla ancha va al lado;
+             en una angosta se abre encima al tocar un renglón. -->
+        <aside class="inspector" id="inspector" aria-labelledby="inspector-nombre" hidden>
+          <div class="inspector-cabeza">
+            <h3 id="inspector-nombre"></h3>
+            <button type="button" class="accion plana" id="inspector-cerrar" aria-label="Cerrar el detalle">✕</button>
+          </div>
+          <p class="inspector-identidad">
+            <span class="oculto">Clave</span>
+            <span class="chip-clave" id="inspector-clave"></span>
+            <span id="inspector-clase"></span>
+          </p>
+          <dl class="cifras">
+            <div><dt>Hay</dt><dd id="inspector-hay"></dd></div>
+            <div><dt>Se vendieron</dt><dd id="inspector-vendidas"></dd></div>
+            <div><dt>Pedir</dt><dd id="inspector-pedir"></dd></div>
+          </dl>
+          <div class="inspector-bloque" id="inspector-marcas-bloque">
+            <h4>Qué pasa con este producto</h4>
+            <ul class="inspector-marcas" id="inspector-marcas"></ul>
+          </div>
+          <div class="inspector-bloque">
+            <div class="inspector-titulo"><h4>Precio de proveedor</h4><span id="inspector-leido"></span></div>
+            <div id="inspector-precios"></div>
+          </div>
+          <div class="inspector-bloque">
+            <h4>Firmas</h4>
+            <ul class="firmas" id="inspector-firmas"></ul>
+          </div>
+          <div class="inspector-acciones" id="inspector-acciones"></div>
+        </aside>
+      </div>
+
+      <!-- PASO 2: REPARTIR. En qué pedidos queda la lista, uno por proveedor
+           (ticket 20). Lo de dentro se pinta entero desde el servidor: ni un
+           total se calcula aquí. -->
+      <div class="paso" id="paso-repartir" hidden>
+        <div class="particion" id="particion" hidden></div>
+      </div>
+
+      <!-- PASO 3: CAPTURAR Y ENVIAR (tickets 21 a 23). Un pedido a la vez: el
+           portal en otra ventana y esto en ésta. -->
+      <div class="paso" id="paso-capturar" hidden>
+        <div class="captura-panel" id="captura-panel"></div>
+      </div>
+    </section>
+
+    <section id="panel-camino" class="panel panel-ancho" role="tabpanel" aria-labelledby="pestana-camino" hidden>
+      <div class="cabeza-panel">
+        <h2 class="titulo-panel">En camino</h2>
+        <p class="sub-panel">Lo que ya se le pidió a un proveedor. Nada pasa a recibido sin la firma de una persona.</p>
+      </div>
+      <p class="nota" id="camino-sin-lista" hidden>Lo que viene en camino se lee junto con la lista del día, y el día que se está viendo no tiene lista. Vuelve a la lista de hoy para verlo.</p>
+      <!-- LO QUE PROBABLEMENTE YA LLEGÓ (ticket 26). Arriba de lo que viene en
+           camino porque es lo que se atiende: una compra de SICAR encaja con
+           un renglón en tránsito, y una persona la confirma o la rechaza. -->
+      <div class="en-camino recepcion" id="recepcion" hidden></div>
+      <!-- LO QUE VIENE EN CAMINO DE LISTAS ANTERIORES (ticket 24): lo
+           atrasado, lo que llegó de menos y los pedidos con sus renglones. -->
+      <div class="en-camino" id="en-camino" hidden></div>
+    </section>
+
+    <section id="panel-buscar" class="panel panel-ancho" role="tabpanel" aria-labelledby="pestana-buscar" hidden>
+      <div class="cabeza-panel">
+        <h2 class="titulo-panel">Buscar</h2>
+        <!-- MIRAR NO ES PEDIR. Lo que se encuentra aquí no entra a la lista ni
+             se guarda: agregar a mano es otra decisión, con su ADR (0022). -->
+        <p class="sub-panel">En los cuatro portales a la vez, con el código de barras o parte del
+          nombre. Tarda alrededor de medio minuto. Lo que encuentres aquí no entra a la lista
+          del día: es para mirar.</p>
+      </div>
+      <!-- `maxlength` es comodidad y no la defensa: el tope de verdad lo pone
+           el servidor (`busqueda.LARGO_MAXIMO_DEL_TERMINO`) y dice por qué. -->
+      <form class="buscador" id="buscar-forma" role="search">
+        <label class="oculto" for="buscar-termino">Código de barras o nombre</label>
+        <input id="buscar-termino" type="search" autocomplete="off" maxlength="100" placeholder="Código de barras o nombre">
+        <button type="submit" class="accion llena grande" id="buscar-boton">Buscar</button>
       </form>
-    </dialog>
-    <div class="vistas" id="vistas" role="radiogroup" aria-label="Qué se muestra en la lista" hidden></div>
-    <p class="nota" id="pedido-nota" hidden></p>
-    <p class="nota" id="pedido-sin-clasificar" hidden></p>
-    <!-- Cuántos renglones quedaron SIN COMPARAR (ticket 15). Va aquí arriba,
-         antes de la tabla, porque la casilla lo pide así: se tiene que ver de
-         un vistazo y sin abrir renglón por renglón. -->
-    <p class="nota" id="pedido-sin-comparar" hidden></p>
-    <!-- CÓMO LE FUE AL LOTE DE ANOCHE (ticket 19, ADR 0007). Va debajo del
-         conteo de huecos porque lo EXPLICA: el conteo dice cuántos renglones
-         están sin comparar y esto dice por qué. Se escribe también cuando el
-         lote fue bien, por lo mismo que el conteo: callar en el caso bueno
-         dejaría el silencio con dos significados —"corrió y le fue bien" y
-         "esta pantalla no lo cuenta"— y el encargado no puede distinguirlos. -->
-    <p class="nota" id="pedido-corrida" hidden></p>
-    <!-- EL BOTÓN DE COMPLETAR SOLO LOS FALTANTES, y los proveedores a los que
-         se les caducó la sesión. Los dos juntos y en un solo recuadro porque
-         son el mismo momento del día: el encargado llega, ve que media lista
-         no tiene precio, y lo arregla desde aquí. Separarlos mandaría a buscar
-         el segundo botón al final de la página. -->
-    <div class="completar" id="completar" hidden></div>
-    <!-- Lo que salió mal al descartar o al devolver. Aparte de las otras dos
-         notas porque es pasajero y de otra naturaleza: aquéllas describen la
-         lista, ésta describe un clic que no llegó. -->
-    <p class="nota" id="pedido-accion" hidden></p>
-    <table id="pedido-tabla" hidden>
-      <caption id="pedido-resumen"></caption>
-      <thead>
-        <tr>
-          <th class="clave">Clave</th>
-          <th>Producto</th>
-          <th class="numero">Existencia</th>
-          <th class="numero">Días de cobertura</th>
-          <th class="cantidad">Cantidad a pedir</th>
-          <th class="precios">Precio de proveedor</th>
-          <th class="proveedor">Se le pide a</th>
-          <th class="acciones">Quitar</th>
-        </tr>
-      </thead>
-      <tbody id="pedido-renglones"></tbody>
-    </table>
-    <!-- EN QUÉ SE PARTE LA LISTA (ticket 20). Debajo de la tabla y no arriba:
-         primero se decide a quién se le pide cada renglón y después se mira en
-         cuántos pedidos queda y cuánto suma cada uno. Lo de dentro se pinta
-         entero desde el servidor: ni un total se calcula aquí. -->
-    <!-- LO QUE VIENE EN CAMINO DE LISTAS ANTERIORES (ticket 24). Pegado a la
-         tabla porque explica lo que NO está en ella: esos productos se
-         vendieron y no se proponen porque ya se pidieron. Atenuado, no
-         escondido. Se pinta una sola vez, al cargar: partir, enviar y tachar
-         no lo cambian. -->
-    <!-- LO QUE PROBABLEMENTE YA LLEGÓ (ticket 26). Arriba de lo que viene en
-         camino porque es lo que se atiende: una compra de SICAR encaja con un
-         renglón en tránsito, y una persona la confirma o la rechaza. Nada pasa
-         a recibido solo. Se pinta con la carga, igual que el bloque de abajo. -->
-    <div class="en-camino recepcion" id="recepcion" hidden></div>
-    <div class="en-camino" id="en-camino" hidden></div>
-    <div class="particion" id="particion" hidden></div>
-    <details class="descartados" id="descartados" hidden>
-      <summary id="descartados-resumen"></summary>
-      <ul id="descartados-lista"></ul>
-    </details>
-    <!-- LA CONCILIACIÓN DIARIA (ADR 0021): lo propuesto contra lo que de
-         verdad se compró. Se pide aparte -no viaja en la respuesta de la
-         lista, igual que "al cerrar"- porque es una lectura más cara que
-         solo hace falta cuando alguien abre este bloque del día. Nace
-         escondido: `cargarConciliacion` la enseña sola en cuanto contesta. -->
-    <div class="en-camino conciliacion" id="conciliacion" hidden></div>
-  </section>
+      <p class="nota" id="buscar-falla" hidden></p>
+      <p class="nota" id="buscar-accion" hidden></p>
+      <p class="nota" id="buscar-frase" hidden></p>
+      <p class="nota nosotros" id="buscar-nuestro" hidden></p>
+      <p class="nota" id="buscar-catalogo" hidden></p>
+      <div class="portales" id="buscar-resultados" hidden></div>
+    </section>
 
-  <section id="panel-buscar" role="tabpanel" aria-labelledby="pestana-buscar" hidden>
-    <h2>Buscar en los proveedores</h2>
-    <!-- MIRAR NO ES PEDIR. Lo que se encuentra aquí no entra a la lista ni se
-         guarda: agregar a mano un producto que no se vendió es otra decisión,
-         con su ADR (0022). La frase lo dice para que nadie busque aquí
-         creyendo que está armando el pedido. -->
-    <p class="nota">Pregunta por un producto en los portales de los proveedores, todos a
-      la vez, con el código de barras o parte del nombre. Tarda alrededor de medio
-      minuto. Lo que encuentres aquí no entra a la lista del día: es para mirar.</p>
-    <!-- `maxlength` es comodidad y no la defensa: el tope de verdad lo pone el
-         servidor (`busqueda.LARGO_MAXIMO_DEL_TERMINO`) y dice por qué. -->
-    <form class="buscador" id="buscar-forma" role="search">
-      <label for="buscar-termino">Código de barras o nombre</label>
-      <input id="buscar-termino" type="search" autocomplete="off" maxlength="100">
-      <button type="submit" class="accion" id="buscar-boton">Buscar</button>
-    </form>
-    <!-- Lo que salió mal al buscar, y lo que contestaron los botones de sesión:
-         dos notas porque son dos cosas —una describe la búsqueda, la otra un
-         clic—, igual que `pedido-nota` y `pedido-accion`. -->
-    <p class="nota" id="buscar-falla" hidden></p>
-    <p class="nota" id="buscar-accion" hidden></p>
-    <p class="nota" id="buscar-frase" hidden></p>
-    <p class="nota" id="buscar-nuestro" hidden></p>
-    <p class="nota" id="buscar-catalogo" hidden></p>
-    <div class="portales" id="buscar-resultados" hidden></div>
-  </section>
+    <section id="panel-vigilancia" class="panel panel-ancho" role="tabpanel" aria-labelledby="pestana-vigilancia" hidden>
+      <div class="cabeza-panel con-accion">
+        <div>
+          <h2 class="titulo-panel">Vigilancia</h2>
+          <!-- La lista, el reloj y las búsquedas son de Doyle (su ADR 0007);
+               esto la dibuja. Tampoco entra a la lista del día. -->
+          <p class="sub-panel">Lo que hace falta y hoy no tiene ningún proveedor. Doyle lo busca
+            solo a las 9:30 y a las 19:30, y avisa en cuanto alguno aparece. Nada de esto entra a
+            la lista del día.</p>
+        </div>
+        <div class="revision">
+          <span class="detalle" id="vigilancia-revision"></span>
+          <button type="button" class="accion" id="vigilancia-revisar">Revisar ahora</button>
+        </div>
+      </div>
+      <p class="nota" id="vigilancia-falla" hidden></p>
+      <p class="nota" id="vigilancia-vacia" hidden></p>
+      <ul class="vigilados" id="vigilancia-lista"></ul>
+      <form class="buscador tarjeta vigilar" id="vigilancia-forma">
+        <h3 class="titulo-tarjeta">Vigilar otro producto</h3>
+        <label class="oculto" for="vigilancia-termino">Código de barras o nombre</label>
+        <input id="vigilancia-termino" type="text" autocomplete="off" maxlength="100" placeholder="Código de barras o nombre">
+        <button type="submit" class="accion llena grande">Vigilar</button>
+        <!-- Las casillas las pinta `pintarCasillas` con la lista del servidor:
+             cuáles son los proveedores y cómo se escriben vive en Python. -->
+        <fieldset class="proveedores-vigilancia" id="vigilancia-proveedores">
+          <legend>En qué proveedores</legend>
+        </fieldset>
+      </form>
+    </section>
 
-  <section id="panel-vigilancia" role="tabpanel" aria-labelledby="pestana-vigilancia" hidden>
-    <h2>Vigilancia</h2>
-    <!-- La lista, el reloj y las búsquedas son de Doyle (su ADR 0007); esto
-         la dibuja. Tampoco entra a la lista del día. -->
-    <p class="nota">Productos que hacen falta y hoy no tiene ningún proveedor. Doyle los
-      busca solo a las 9:30 y a las 19:30, y avisa arriba de las pestañas en cuanto
-      alguno aparece. Nada de esto entra a la lista del día.</p>
-    <form class="buscador" id="vigilancia-forma">
-      <label for="vigilancia-termino">Código de barras o nombre</label>
-      <input id="vigilancia-termino" type="text" autocomplete="off" maxlength="100">
-      <!-- Las casillas las pinta `pintarCasillas` con la lista del servidor:
-           cuáles son los proveedores y cómo se escriben vive en Python. -->
-      <fieldset class="proveedores-vigilancia" id="vigilancia-proveedores">
-        <legend>En qué proveedores</legend>
-      </fieldset>
-      <button type="submit" class="accion">Vigilar</button>
-    </form>
-    <div class="revision">
-      <button type="button" class="accion" id="vigilancia-revisar">Revisar ahora</button>
-      <span class="detalle" id="vigilancia-revision"></span>
+    <section id="panel-sesiones" class="panel panel-ancho" role="tabpanel" aria-labelledby="pestana-sesiones" hidden>
+      <div class="cabeza-panel">
+        <h2 class="titulo-panel">Sesiones</h2>
+        <!-- El «Inicio» de Doyle (2026-09-28). La contraseña se teclea en el
+             portal, dentro del visor, nunca aquí: Continental no la ve y Doyle
+             tampoco (ADR 0001 de Doyle). -->
+        <p class="sub-panel">Sin sesión, un portal no da precios. Se abre en dos pasos:
+          «Abrir sesión» abre el portal en el visor, ahí tecleas el usuario y la contraseña
+          —nunca en esta página—, y vuelves a darle a «Ya entré». De un portal a la vez.</p>
+      </div>
+      <p class="nota" id="sesiones-accion" hidden></p>
+      <p class="nota" id="sesiones-falla" hidden></p>
+      <div class="portales sesiones" id="sesiones-tarjetas"></div>
+    </section>
+
+    <section id="panel-estado" class="panel panel-angosto" role="tabpanel" aria-labelledby="pestana-estado" hidden>
+      <div class="cabeza-panel">
+        <h2 class="titulo-panel">Estado</h2>
+      </div>
+      <div class="grupo-lista">
+        <h3 class="grupo-lista-titulo">Continental</h3>
+        <ul id="estado"><li><span class="punto"></span><span class="detalle">Consultando…</span></li></ul>
+      </div>
+      <div class="grupo-lista">
+        <h3 class="grupo-lista-titulo">Módulos</h3>
+        <ul id="modulos"><li><span class="punto"></span><span class="detalle">Consultando…</span></li></ul>
+      </div>
+      <div class="grupo-lista">
+        <h3 class="grupo-lista-titulo">Datos</h3>
+        <ul id="estado-datos"><li><span class="punto"></span><span class="detalle">Consultando…</span></li></ul>
+        <p class="grupo-lista-pie">Las ventas de SICAR suben hacia las 18:51 y la cadena corre a las
+          20:30. Lo del viernes por la tarde llega hasta el lunes en la noche.</p>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- LA CONFIRMACIÓN ANTES DE CERRAR (ADR 0016). Un <dialog> propio y no la
+     ventanita del navegador: con showModal() atrapa el foco, Esc lo cierra sin
+     cerrar la lista, y "Volver" funciona aun sin JavaScript (method=dialog).
+     Todo lo que dice llega hecho del servidor (`cierre.al_cerrar`); lo de aquí
+     es el esqueleto con rótulos por omisión. -->
+<dialog id="confirmar-cierre" class="confirmar-cierre" aria-labelledby="confirmar-cierre-titulo">
+  <form method="dialog">
+    <h3 id="confirmar-cierre-titulo">¿Cerrar la lista?</h3>
+    <p id="confirmar-cierre-frase"></p>
+    <div class="aviso" id="confirmar-cierre-perdidas" hidden>
+      <p><b class="rotulo">Ojo:</b> <span id="confirmar-cierre-aviso"></span></p>
+      <ul class="se-perderia" id="confirmar-cierre-lista"></ul>
+      <p id="confirmar-cierre-que-hacer"></p>
     </div>
-    <p class="nota" id="vigilancia-falla" hidden></p>
-    <p class="nota" id="vigilancia-vacia" hidden></p>
-    <ul class="vigilados" id="vigilancia-lista"></ul>
-  </section>
-
-  <section id="panel-sesiones" role="tabpanel" aria-labelledby="pestana-sesiones" hidden>
-    <h2>Sesiones de los portales</h2>
-    <!-- El «Inicio» de Doyle (2026-09-28). La contraseña se teclea en el
-         portal, dentro del visor, nunca aquí: Continental no la ve y Doyle
-         tampoco (ADR 0001 de Doyle). -->
-    <p class="nota">Para traer precios, Doyle necesita una sesión abierta en cada portal.
-      Se abre en dos pasos: «Abrir sesión» abre el portal en el visor, ahí tecleas el
-      usuario y la contraseña —nunca en esta página—, y vuelves a darle a «Ya entré».
-      De un portal a la vez.</p>
-    <p class="nota" id="sesiones-accion" hidden></p>
-    <p class="nota" id="sesiones-falla" hidden></p>
-    <div class="portales" id="sesiones-tarjetas"></div>
-  </section>
-
-  <section>
-    <h2>Estado</h2>
-    <ul id="estado"><li><span class="punto"></span><span class="detalle">Consultando…</span></li></ul>
-  </section>
-
-  <section>
-    <h2>Módulos</h2>
-    <ul id="modulos"><li><span class="punto"></span><span class="detalle">Consultando…</span></li></ul>
-  </section>
-</main>
+    <p class="deshacer" id="confirmar-cierre-deshacer" hidden></p>
+    <div class="botones">
+      <button value="volver" id="confirmar-cierre-volver">Volver a la lista</button>
+      <button value="cerrar" id="confirmar-cierre-cerrar">Cerrar la lista</button>
+    </div>
+  </form>
+</dialog>
 
 <script src="/static/continental.js"></script>
 </body>

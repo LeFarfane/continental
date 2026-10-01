@@ -1,731 +1,689 @@
-/* LA HOJA DE ESTILOS DE CONTINENTAL (ticket 28).
+/* LA HOJA DE ESTILOS DE CONTINENTAL.
 
-   Hasta el ticket 27 vivía dentro de `index.html`; ahora es un archivo propio,
-   servido tal cual desde `/static` —sin compilar nada, sin marco de trabajo y
-   sin una sola fuente ni librería de fuera: atlas tiene que pintar esto igual
-   sin salir a internet—. `app.py` lo sirve con `Cache-Control: no-cache` para
-   que una versión nueva no se quede vieja en el navegador del mostrador.
+   Desde el 2026-09-30 sigue el diseño hecho con Cupertino UI (ADR 0023): la
+   barra lateral, el lienzo gris con tarjetas blancas encima, la escala de
+   letra de Apple, los botones en píldora. **No se trajo la librería**: es
+   React, y su hoja usa `color-mix()`, colores fuera de `:root` y una fuente
+   con `@font-face`. Aquí está traducida a la hoja de siempre, servida tal cual
+   desde `/static`, sin compilar nada y sin pedir nada afuera: atlas tiene que
+   pintar esto igual sin salir a internet.
 
    REGLA DEL ARCHIVO: **ningún color se escribe fuera de las dos listas de
    abajo.** Todo lo demás dice `var(--algo)`. Así el tema oscuro es cambiar
-   once valores en un solo lugar, y no buscar un gris escrito a mano en la
-   línea 400 que en oscuro se vuelve invisible. `tests/test_pasada_visual.py`
-   lo comprueba.
+   valores en un solo lugar. `tests/test_pasada_visual.py` lo comprueba.
 
    Y OTRA: **ningún significado viaja solo en el color.** El verde, el ámbar y
    el rojo acompañan; lo que distingue es una palabra, una forma (un borde
-   punteado, una barra, un círculo con signo), un peso o una cursiva. En una
-   pantalla de mostrador con reflejo, o para quien no distingue verdes de
-   rojos, el color solo no dice nada. */
+   punteado, una barra, un signo), un peso o una cursiva. En una pantalla de
+   mostrador con reflejo, o para quien no distingue verdes de rojos, el color
+   solo no dice nada.
+
+   LOS COLORES DE TEXTO NO SON LOS DEL DISEÑO, y es a propósito: el naranja
+   del sistema (`#ff9500`) sobre blanco da 2.1:1 de contraste, y el verde
+   2.2:1. Para letra se usan sus variantes de alto contraste —las que Apple
+   publica para "aumentar contraste"—, y los tonos vivos se quedan para lo
+   que no se lee: puntos, barras y fondos. */
 
 /* ------------------------------------------------------------- los colores */
 
 :root {
-  /* Declarado para que los controles del navegador —el desplegable de
-     proveedor, el campo de la cantidad, las casillas de la captura— se pinten
-     en el mismo tema que la página. Sin esto, en oscuro salían recuadros
-     blancos sobre fondo negro. */
+  /* Para que los controles del navegador —el desplegable de proveedor, el
+     campo de la cantidad, las casillas— se pinten en el mismo tema. */
   color-scheme: light;
-  --fondo: #fbfaf8;
-  --tinta: #1c1a17;
-  --tenue: #6b6560;
-  --linea: #e2ddd6;
-  --realce: #f3efe8;
-  --ok: #2f7d4f;
-  --mal: #a83232;
-  --aviso: #8a6a1f;
-  /* Los fondos suaves de cada tono, para las etiquetas con recuadro (el
-     ahorro, lo agotado). Escritos a mano y no con `color-mix()`: es de 2023, y
-     si el navegador del mostrador no lo tiene la declaración entera se cae. */
-  --ok-fondo: #e6f1e9;
-  --mal-fondo: #f8e7e5;
-  --aviso-fondo: #f6eedb;
+  /* El lienzo, y lo que va encima. */
+  --fondo: #f2f2f7;
+  --superficie: #ffffff;
+  --barra: #ffffff;
+  --lateral: #f2f2f7;
+  --hundido: #f2f2f7;
+  /* La letra, en tres intensidades. */
+  --tinta: #000000;
+  --tenue: rgba(60, 60, 67, 0.6);
+  --tercero: rgba(60, 60, 67, 0.3);
+  /* Rayas y rellenos. */
+  --linea: rgba(60, 60, 67, 0.29);
+  --relleno: rgba(120, 120, 128, 0.2);
+  --relleno-medio: rgba(120, 120, 128, 0.16);
+  --relleno-suave: rgba(120, 120, 128, 0.12);
+  --relleno-tenue: rgba(120, 120, 128, 0.08);
+  /* El acento: lo que se aprieta. */
+  --acento: #0d7bf2;
+  --acento-contraste: #ffffff;
+  --acento-tinte: rgba(13, 123, 242, 0.14);
+  --acento-tinte-fuerte: rgba(13, 123, 242, 0.22);
+  --acento-suave: rgba(13, 123, 242, 0.09);
+  /* Los tres tonos que significan algo: para letra, vivo, y de fondo. */
+  --ok: #248a3d;
+  --ok-vivo: #34c759;
+  --ok-fondo: rgba(52, 199, 89, 0.16);
+  --mal: #d70015;
+  --mal-vivo: #f5443a;
+  --mal-fondo: rgba(245, 68, 58, 0.14);
+  --aviso: #c93400;
+  --aviso-vivo: #ff9500;
+  --aviso-fondo: rgba(255, 149, 0, 0.18);
+  --morado: #8944ab;
+  --morado-fondo: rgba(175, 82, 222, 0.15);
+  /* El vidrio de lo que flota (el diálogo, el detalle encima), y las sombras. */
+  --material: rgba(255, 255, 255, 0.8);
+  --material-grueso: rgba(255, 255, 255, 0.92);
+  --material-borde: rgba(255, 255, 255, 0.65);
+  --material-brillo: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  --velo: rgba(0, 0, 0, 0.26);
+  --pulgar: #ffffff;
+  --sombra-chica: 0 1px 2px rgba(0, 0, 0, 0.06), 0 1px 1px rgba(0, 0, 0, 0.04);
+  --sombra-media: 0 4px 14px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.06);
+  --sombra-grande: 0 12px 32px rgba(0, 0, 0, 0.13), 0 2px 8px rgba(0, 0, 0, 0.07);
+  --sombra-flotante: 0 24px 64px rgba(0, 0, 0, 0.22), 0 2px 12px rgba(0, 0, 0, 0.1);
+  --anillo: 0 0 0 4px rgba(13, 123, 242, 0.28);
 }
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
-    --fondo: #16150f;
-    --tinta: #f0ece4;
-    --tenue: #a39c92;
-    --linea: #3a362f;
-    --realce: #211f18;
-    --ok: #6fbd8b;
-    --mal: #e08a8a;
-    --aviso: #d9b45e;
-    --ok-fondo: #1b2a20;
-    --mal-fondo: #2f1c1b;
-    --aviso-fondo: #2c2515;
+    --fondo: #000000;
+    --superficie: #1c1c1e;
+    --barra: #000000;
+    --lateral: #1c1c1e;
+    --hundido: #1c1c1e;
+    --tinta: #ffffff;
+    --tenue: rgba(235, 235, 245, 0.6);
+    --tercero: rgba(235, 235, 245, 0.3);
+    --linea: rgba(84, 84, 88, 0.65);
+    --relleno: rgba(120, 120, 128, 0.36);
+    --relleno-medio: rgba(120, 120, 128, 0.32);
+    --relleno-suave: rgba(120, 120, 128, 0.24);
+    --relleno-tenue: rgba(120, 120, 128, 0.18);
+    --acento: #1684f3;
+    /* Igual que en claro, y a propósito: el texto de un botón lleno de
+       acento es blanco en los dos temas. Es el único (ver la prueba). */
+    --acento-contraste: #ffffff;
+    --acento-tinte: rgba(22, 132, 243, 0.2);
+    --acento-tinte-fuerte: rgba(22, 132, 243, 0.3);
+    --acento-suave: rgba(22, 132, 243, 0.16);
+    --ok: #30db5b;
+    --ok-vivo: #30d158;
+    --ok-fondo: rgba(48, 209, 88, 0.2);
+    --mal: #ff6961;
+    --mal-vivo: #f54e44;
+    --mal-fondo: rgba(245, 78, 68, 0.2);
+    --aviso: #ffb340;
+    --aviso-vivo: #ff9f0a;
+    --aviso-fondo: rgba(255, 159, 10, 0.22);
+    --morado: #da8fff;
+    --morado-fondo: rgba(191, 90, 242, 0.22);
+    --material: rgba(28, 28, 30, 0.82);
+    --material-grueso: rgba(22, 22, 24, 0.94);
+    --material-borde: rgba(255, 255, 255, 0.18);
+    --material-brillo: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    --velo: rgba(0, 0, 0, 0.5);
+    --pulgar: #636366;
+    --sombra-chica: 0 1px 2px rgba(0, 0, 0, 0.5);
+    --sombra-media: 0 4px 14px rgba(0, 0, 0, 0.55);
+    --sombra-grande: 0 12px 32px rgba(0, 0, 0, 0.6);
+    --sombra-flotante: 0 24px 64px rgba(0, 0, 0, 0.7);
+    --anillo: 0 0 0 4px rgba(22, 132, 243, 0.4);
   }
+}
+
+/* -------------------------------------------------- la letra y las medidas
+
+   Aparte de los colores porque no cambian con el tema. La escala es la de
+   Apple —tamaño y alto de línea en pareja—, y la letra es la del sistema: el
+   diseño pide Inter, que se usa si la máquina la tiene, y si no Segoe UI en
+   la torre y San Francisco en una Mac. Cargarla con `@font-face` sería el
+   primer archivo que la pantalla pide afuera de su HTML, CSS y JS. */
+:root {
+  --letra: "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --letra-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --texto-titulo-grande: 2.125rem/2.5rem;
+  --texto-titulo-uno: 1.75rem/2.125rem;
+  --texto-titulo-dos: 1.375rem/1.75rem;
+  --texto-titulo-tres: 1.25rem/1.5625rem;
+  --texto-encabezado: 1.0625rem/1.375rem;
+  --texto-cuerpo: 1.0625rem/1.375rem;
+  --texto-llamada: 1rem/1.3125rem;
+  --texto-subtitulo: 0.9375rem/1.25rem;
+  --texto-nota: 0.8125rem/1.125rem;
+  --texto-leyenda: 0.75rem/1rem;
+  --texto-leyenda-chica: 0.6875rem/0.8125rem;
+  --radio-xs: 5px;
+  --radio-sm: 7px;
+  --radio-md: 10px;
+  --radio-lg: 13px;
+  --radio-xl: 17px;
+  --pildora: 999px;
+  --pelo: 0.5px;
+  --curva: cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 /* ------------------------------------------------------------------ la base */
 
 * { box-sizing: border-box; }
 /* El atributo `hidden` esconde de verdad, aunque el elemento tenga `display`.
-   La hoja del navegador trae `[hidden] { display: none }` pero con la
-   especificidad de un selector de tipo, así que cualquier regla de clase
-   —`.vistas { display: flex }`, `.cierre { display: flex }`— le gana y el
-   bloque se queda a la vista con el `hidden` puesto. Se vio el 2026-09-19 al
-   recorrer el ticket 08: después de cerrar la lista, el botón seguía ahí
-   diciendo "Cerrando…". Es la única `!important` del archivo y por eso vale:
-   la alternativa es acordarse de escribir `.loquesea[hidden]` cada vez. */
+   La hoja del navegador trae `[hidden] { display: none }` con la especificidad
+   de un selector de tipo, así que cualquier regla de clase le gana y el bloque
+   se queda a la vista con el `hidden` puesto. Se vio el 2026-09-19. Es la
+   única `!important` del archivo y por eso vale. */
 [hidden] { display: none !important; }
-/* El fondo se declara en `html` Y en `body`, explícito en los dos: si solo lo
-   lleva `body`, lo que queda debajo de una página corta —o el rebote del
-   desplazamiento en el teléfono— es el blanco del navegador, que en el tema
-   oscuro es un relámpago. */
+/* El fondo se declara en `html` Y en `body`: si solo lo lleva `body`, lo que
+   queda debajo de una página corta —o el rebote del desplazamiento en el
+   teléfono— es el blanco del navegador, que en el tema oscuro es un
+   relámpago. */
 html { background: var(--fondo); color: var(--tinta); }
 body {
-  margin: 0; padding: 2rem 1rem; background: var(--fondo); color: var(--tinta);
-  font: 16px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  /* Una palabra larga —una clave, un correo, un nombre de SICAR sin espacios—
-     se parte antes de empujar la página hacia los lados en el teléfono. */
+  margin: 0; background: var(--fondo); color: var(--tinta);
+  font: var(--texto-cuerpo) var(--letra); letter-spacing: -0.01em;
+  -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+  /* Una palabra larga —una clave, un correo, un nombre de SICAR sin
+     espacios— se parte antes de empujar la página hacia los lados. */
   overflow-wrap: break-word;
 }
-/* 90rem y no las 52 de antes: la tabla tiene ocho columnas y cuatro precios
-   por renglón, y a 52rem no cabía —se salía de `main` por la derecha—. Lo que
-   es PROSA (las notas, los bloques de abajo) se queda en ~62rem, que es lo que
-   un ojo lee de un tirón sin perder el renglón. */
-main { max-width: 90rem; margin: 0 auto; }
-p.sub, .corte, .armado, .cierre, .nota, .completar,
-.en-camino, .particion, .descartados, section > ul { max-width: 62rem; }
-h1 { font-size: 1.6rem; margin: 0 0 .25rem; letter-spacing: -.01em; }
-p.sub { margin: 0 0 2rem; color: var(--tenue); }
-section { border-top: 1px solid var(--linea); padding-top: 1.25rem; margin-top: 1.5rem; }
-h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .08em; color: var(--tenue); margin: 0 0 .75rem; }
-ul { list-style: none; margin: 0; padding: 0; }
-li { display: flex; gap: .6rem; align-items: baseline; padding: .4rem 0; border-bottom: 1px solid var(--linea); }
-li:last-child { border-bottom: 0; }
-.punto { width: .55rem; height: .55rem; border-radius: 50%; background: var(--tenue); flex: none; }
-.punto.ok { background: var(--ok); }
-.punto.mal { background: var(--mal); }
-.detalle { color: var(--tenue); font-size: .88rem; }
-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
+h1, h2, h3, h4, p { margin: 0; }
+ul, ol { list-style: none; margin: 0; padding: 0; }
+button, input, select, textarea { font: inherit; letter-spacing: inherit; color: inherit; }
+a { color: var(--acento); }
+:focus-visible { outline: none; box-shadow: var(--anillo); }
+code { font-family: var(--letra-mono); font-size: .85em; }
+/* Para el lector de pantalla y no para el ojo: el nombre del glosario detrás
+   de un encabezado corto, el rótulo de la clave. */
+.oculto {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+.punto { width: .5rem; height: .5rem; border-radius: 50%; background: var(--tercero); flex: none; display: inline-block; }
+.punto.ok { background: var(--ok-vivo); }
+.punto.mal { background: var(--mal-vivo); }
+.punto.aviso { background: var(--aviso-vivo); }
+.detalle { color: var(--tenue); font: var(--texto-nota) var(--letra); }
 
-/* EL CONTENEDOR DE NAVEGACIÓN (2026-09-27): la fecha al centro, una flecha a
-   cada lado. Los botones reusan `.accion` -no estrenan un estilo nuevo- y
-   esto solo acomoda a los tres en línea. */
-.navegacion { display: flex; align-items: center; justify-content: center; gap: 1rem; margin: 0 0 .75rem; }
-.navegacion span { font-weight: 600; min-width: 15rem; text-align: center; }
+/* ---------------------------------------------------------------- los botones
 
-/* El pedido sugerido. Tabla y no lista: son cinco datos por renglón y las
-   cifras se leen en columna, que es como se verifica de un vistazo. */
-.corte { margin: 0 0 .35rem; font-size: 1.05rem; }
-.corte strong { font-weight: 600; }
-/* Cuántos días acumula la ventana. Va en su propio renglón y en tono tenue:
-   es el dato que explica el rango de arriba, no compite con él. */
-.dias-acumulados { color: var(--tenue); font-size: .8rem; display: block; }
-/* Cuándo se armó la lista y en qué estado está. Va DEBAJO del corte y en
-   letra chica a propósito: el corte —de qué día son las ventas— es lo que
-   decide qué se compra; esto es lo que deja auditar la lista después. Dos
-   cifras del mismo tamaño se leerían como igual de importantes. */
-.armado { margin: 0 0 1rem; color: var(--tenue); font-size: .88rem; }
-/* El estado va en una píldora y no como texto suelto: `vencida` tiene que
-   saltar a la vista sin leer la oración entera. */
-.estado { display: inline-block; padding: .05rem .5rem; border-radius: 999px;
-          border: 1px solid var(--linea); font-size: .8rem; }
-.estado.abierto { border-color: var(--ok); color: var(--ok); }
-.estado.cerrado { border-color: var(--tenue); color: var(--tenue); }
-.estado.vencido { border-color: var(--aviso); color: var(--aviso); }
-/* Cerrar es la única acción de esta pantalla, así que no compite con nada y
-   no necesita color de alarma: cerrar no borra nada y se puede volver a
-   cargar la página para ver cómo quedó. */
-.cierre { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; margin: 0 0 1rem; }
-.cierre button {
-  font: inherit; font-size: .9rem; padding: .4rem .9rem; cursor: pointer;
-  color: var(--tinta); background: var(--realce);
-  border: 1px solid var(--tinta); border-radius: 999px;
+   `.accion` es el botón de toda la pantalla: gris y chico, en píldora, como
+   el `Button` gris del diseño. Las variantes son las suyas: lleno (la acción
+   principal de un lugar, una sola), teñido y plano. */
+.accion {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: 1.75rem; padding: 0 12px; border: 0; border-radius: var(--pildora);
+  font: 600 .9375rem/1.2 var(--letra); white-space: nowrap; cursor: pointer;
+  color: var(--tinta); background: var(--relleno-suave);
+  transition: background-color .14s var(--curva), transform .14s var(--curva);
 }
-.cierre button:disabled { cursor: default; opacity: .5; border-color: var(--linea); }
-/* Deshacer el cierre (ADR 0016) va sin relleno: es la salida de un error, no la
-   acción del día, y no debe competir con nada. */
-.cierre button#reabrir { background: transparent; border-style: dashed; }
+.accion:hover:not(:disabled) { background: var(--relleno-medio); }
+.accion:active:not(:disabled) { transform: scale(.97); }
+.accion:disabled { cursor: default; opacity: .4; }
+.accion.llena { background: var(--acento); color: var(--acento-contraste); }
+.accion.llena:hover:not(:disabled) { filter: brightness(1.06); background: var(--acento); }
+.accion.tenida { background: var(--acento-tinte); color: var(--acento); }
+.accion.tenida:hover:not(:disabled) { background: var(--acento-tinte-fuerte); }
+.accion.plana { background: transparent; color: var(--acento); padding: 0 6px; }
+.accion.plana:hover:not(:disabled) { background: var(--relleno-tenue); }
+.accion.grande { min-height: 2.25rem; padding: 0 20px; font-size: 1.0625rem; }
+/* Con el dedo —el teléfono, una pantalla táctil de mostrador— el objetivo
+   crece: un botón chico se falla y se descarta el renglón de al lado. Se
+   decide por el tipo de puntero y no por el ancho, que es lo que de verdad
+   decide si algo se toca o se apunta. */
+@media (pointer: coarse) {
+  .accion { min-height: 2.2rem; }
+}
 
-/* LA CONFIRMACIÓN ANTES DE CERRAR (ADR 0016). Un <dialog> propio: el del
-   navegador no deja decir QUÉ se perdería. El fondo de atrás se oscurece con la
-   tinta del tema y opacidad, no con un color escrito a mano. */
-.confirmar-cierre {
-  max-width: min(36rem, calc(100vw - 2rem)); padding: 1.1rem 1.25rem;
-  color: var(--tinta); background: var(--fondo);
-  border: 1px solid var(--linea); border-radius: .6rem;
+/* Las insignias: una palabra en una cápsula teñida. */
+.insignia {
+  display: inline-flex; align-items: center; flex: none; gap: 3px;
+  padding: 2px 8px; border-radius: var(--pildora); white-space: nowrap;
+  font: 600 .75rem/1rem var(--letra); letter-spacing: 0;
+  background: var(--relleno-suave); color: var(--tenue);
 }
-.confirmar-cierre::backdrop { background: var(--tinta); opacity: .35; }
-.confirmar-cierre h3 { margin: 0 0 .6rem; font-size: 1.05rem; }
-.confirmar-cierre p { margin: 0 0 .6rem; font-size: .92rem; }
-.confirmar-cierre .deshacer { color: var(--tenue); font-size: .85rem; }
-/* LO QUE SE PERDERÍA no se distingue solo por el ámbar (ticket 28): va con
-   barra a la izquierda, con el rótulo "Ojo:" escrito, y cada renglón con su
-   signo. */
-.confirmar-cierre .aviso {
-  border-left: 3px solid var(--aviso); padding: .45rem .7rem; margin: 0 0 .7rem;
-  background: var(--aviso-fondo); border-radius: .3rem;
+.insignia.verde { background: var(--ok-fondo); color: var(--ok); }
+.insignia.naranja { background: var(--aviso-fondo); color: var(--aviso); }
+.insignia.rojo { background: var(--mal-fondo); color: var(--mal); }
+.insignia.morado { background: var(--morado-fondo); color: var(--morado); }
+.insignia.acento { background: var(--acento-tinte); color: var(--acento); }
+
+/* ------------------------------------------------------------------ la cáscara
+
+   La barra lateral a la izquierda, el trabajo a la derecha. En la
+   computadora la página no se desplaza: se desplaza cada sección por dentro,
+   y así la barra del día y la lateral se quedan siempre a la vista. En el
+   teléfono vuelve a desplazarse la página entera (al final del archivo). */
+.app { display: flex; height: 100vh; }
+.lateral {
+  width: 14rem; flex: none; display: flex; flex-direction: column;
+  padding: 18px 10px 12px; overflow-y: auto;
+  background: var(--lateral); border-right: var(--pelo) solid var(--linea);
 }
-.confirmar-cierre .aviso .rotulo { color: var(--aviso); }
-.se-perderia li { border-bottom: 0; padding: .2rem 0; font-size: .9rem; }
-.se-perderia li::before {
-  content: "!" / ""; flex: none; font-weight: 700; color: var(--aviso);
-  width: 1.1rem; height: 1.1rem; line-height: 1.1rem; text-align: center;
-  border: 1px solid var(--aviso); border-radius: 50%; font-size: .75rem;
+.marca-app { display: flex; flex-direction: column; gap: 2px; padding: 4px 10px 6px; }
+.nombre-app { font: 600 var(--texto-encabezado) var(--letra); }
+.lema-app { font: var(--texto-leyenda) var(--letra); color: var(--tenue); }
+.contenido { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+
+/* LAS SECCIONES, en vertical. La elegida se distingue por el relleno Y por la
+   negrita, no solo por el tono. Los rótulos de grupo los pone `data-grupo`
+   y no se le leen al lector de pantalla: ya sabe en qué pestaña está. */
+.pestanas { display: flex; flex-direction: column; gap: 2px; flex: 1; }
+.pestanas [role="tab"] {
+  position: relative; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 6px 10px; border: 0; border-radius: var(--radio-sm); background: transparent;
+  font: 500 var(--texto-subtitulo) var(--letra); text-align: left; cursor: pointer; color: var(--tinta);
 }
-.confirmar-cierre .botones { display: flex; flex-wrap: wrap; gap: .6rem; justify-content: flex-end; }
-.confirmar-cierre .botones button {
-  font: inherit; font-size: .9rem; padding: .4rem .9rem; cursor: pointer;
-  color: var(--tinta); background: var(--realce);
-  border: 1px solid var(--tinta); border-radius: 999px;
+.pestanas [role="tab"]:hover { background: var(--relleno-tenue); }
+.pestanas [role="tab"][aria-selected="true"] { background: var(--relleno-medio); font-weight: 650; }
+.pestanas [data-grupo] { margin-top: 1.6rem; }
+.pestanas [data-grupo]::before {
+  content: attr(data-grupo); content: attr(data-grupo) / "";
+  position: absolute; left: 10px; top: -1.35rem;
+  font: 600 var(--texto-leyenda) var(--letra); color: var(--tercero);
 }
-/* Volver es la salida segura: va con el mismo peso, sin relleno. */
-.confirmar-cierre .botones button[value="volver"] { background: transparent; }
-.nota { margin: 0 0 1rem; color: var(--tenue); font-size: .9rem; }
+.cuenta-pestana {
+  min-width: 1.5rem; text-align: center; padding: 1px 7px; border-radius: var(--pildora);
+  font: 600 .75rem/1rem var(--letra); font-variant-numeric: tabular-nums;
+  background: var(--relleno-suave); color: var(--tenue);
+}
+.cuenta-pestana.acento { background: var(--acento-tinte); color: var(--acento); }
+.cuenta-pestana.verde { background: var(--ok-fondo); color: var(--ok); }
+.cuenta-pestana.rojo { background: var(--mal-fondo); color: var(--mal); }
+.cuenta-pestana.naranja { background: var(--aviso-fondo); color: var(--aviso); }
+/* EL ESTADO, abajo, como tarjeta. */
+.pestanas .estado-lateral {
+  margin-top: auto; flex-direction: column; align-items: stretch; gap: 6px;
+  padding: 10px; border-radius: var(--radio-md);
+}
+.estado-lateral-titulo { display: flex; align-items: center; gap: 8px; font: 600 var(--texto-nota) var(--letra); }
+.estado-lateral-detalle { font: 400 var(--texto-leyenda) var(--letra); color: var(--tenue); }
+.estado-lateral-detalle:empty { display: none; }
+
+/* El aviso de la vigilancia, arriba de todo, en una franja. */
+.avisos-vigilancia {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+  padding: 8px 20px; margin: 0; font: var(--texto-nota) var(--letra);
+  background: var(--barra); border-bottom: var(--pelo) solid var(--linea);
+  box-shadow: inset 3px 0 0 var(--ok-vivo);
+}
+
+/* --------------------------------------------------------------- los paneles */
+
+.panel { flex: 1; min-height: 0; overflow: auto; }
+.panel-ancho, .panel-angosto { padding: 28px 32px 48px; display: flex; flex-direction: column; gap: 22px; }
+.panel-ancho > * { max-width: 61.25rem; }
+.panel-angosto > * { max-width: 45rem; }
+#panel-buscar > .portales { max-width: none; }
+.cabeza-panel { display: flex; flex-direction: column; gap: 4px; }
+.cabeza-panel.con-accion { flex-direction: row; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px; }
+.titulo-panel { font: 700 var(--texto-titulo-grande) var(--letra); letter-spacing: -0.022em; }
+.sub-panel { font: var(--texto-subtitulo) var(--letra); color: var(--tenue); max-width: 40rem; }
+.tarjeta { background: var(--superficie); border-radius: var(--radio-lg); }
+.titulo-tarjeta { font: 600 var(--texto-encabezado) var(--letra); }
+
+/* Las notas sueltas: una frase del servidor. */
+.nota { font: var(--texto-nota) var(--letra); color: var(--tenue); }
 .nota.mal { color: var(--mal); }
 .nota.aviso { color: var(--aviso); }
-/* LAS FALLAS (ticket 29) no se distinguen solo por el color (ticket 28): llevan
-   un rótulo escrito delante —"Falla:" u "Ojo:"—, una barra a la izquierda, y el
-   qué hacer en su propio renglón con su nombre. */
+.nota.todo { color: var(--ok); }
+/* LAS FALLAS (ticket 29) no se distinguen solo por el color: llevan un rótulo
+   escrito delante —"Falla:" u "Ojo:"—, una barra a la izquierda, y el qué
+   hacer en su propio renglón con su nombre. */
 .nota.falla { border-left: 3px solid currentColor; padding-left: .6rem; }
 .nota .rotulo { font-weight: 700; }
 .nota .que-hacer { display: block; margin-top: .25rem; color: var(--tinta); }
 .nota .motivo { color: var(--tenue); }
-.nota.ventas { font-size: .85rem; }
-/* EL CONTEO DE LO QUE FALTA POR COMPARAR (ticket 15, cuarta casilla: *el
-   conteo es legible sin abrir cada renglón*). Va con recuadro y no como una
-   nota más porque no describe un renglón ni un problema del catálogo: dice
-   qué tan completa está la lista entera, que es lo que decide si la pregunta
-   "¿NADRO nos da el mejor precio?" vale algo hoy. Sin recuadro, a la tercera
-   pantalla se lee como el tercer párrafo gris de arriba y se deja de leer. */
-.nota.conteo {
-  border: 1px solid var(--linea); border-left-width: 3px; border-radius: .4rem;
-  padding: .55rem .75rem; line-height: 1.45;
+
+/* ------------------------------------------------------------ la lista del día */
+
+.panel-pedido { display: flex; flex-direction: column; overflow: hidden; }
+.panel-pedido > h2 {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
 }
-.nota.conteo.aviso { border-left-color: var(--aviso); }
-/* Y cuando NO falta ninguno se dice igual, en verde. Callar dejaría el
-   silencio con dos significados —"ya está" y "esta pantalla no lo cuenta"—
-   y el encargado no puede distinguirlos. */
-.nota.conteo.todo { border-left-color: var(--ok); color: var(--ok); }
-.nota.conteo b { color: var(--tinta); font-variant-numeric: tabular-nums; }
-.nota.conteo.todo b { color: inherit; }
-.nota.conteo .desglose { display: block; margin-top: .25rem; font-size: .85rem; }
-/* CÓMO LE FUE AL LOTE DE ANOCHE (ticket 19, y su ausencia desde la enmienda
-   del ADR 0007 del 2026-09-21). Mismo recuadro que el conteo —son el mismo
-   tipo de afirmación: sobre la lista entera, no sobre un renglón— y colores
-   que no son decoración, porque son cosas que se atienden distinto:
-     · verde  = recorrió la lista entera. Nada que hacer.
-     · ámbar  = se detuvo al tope (`tope`), NO ES UN ERROR —se arregla con el
-                botón de completar, o esperando a mañana—; o no hay corrida
-                porque la lista es más nueva que la última programada
-                (`espera`, `corridaAusente.nivel === 'espera'`): el lote
-                todavía no ha tenido su turno, tampoco es un error.
-     · rojo   = la corrida se cortó, o no hay corrida y ya debía haberla
-                (`corridaAusente.nivel === 'falla'`), o la LECTURA de la
-                corrida se cayó. Eso sí es una falla: lo que hay que mirar es
-                el journal de esa noche, o `systemctl status
-                continental-lote`.
-   El ámbar y el rojo son distintos a propósito: pintar de rojo un lote que
-   hizo lo que se le pidió —o que todavía no le tocaba— enseña a ignorar el
-   rojo. */
-.nota.corrida {
-  border: 1px solid var(--linea); border-left-width: 3px; border-radius: .4rem;
-  padding: .55rem .75rem; line-height: 1.45;
+.barra-dia {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px;
+  padding: 12px 20px; background: var(--barra); border-bottom: var(--pelo) solid var(--linea);
 }
-.nota.corrida.bien { border-left-color: var(--ok); }
-.nota.corrida.tope, .nota.corrida.espera { border-left-color: var(--aviso); }
-.nota.corrida.falla { border-left-color: var(--mal); color: var(--mal); }
-.nota.corrida b { color: var(--tinta); font-variant-numeric: tabular-nums; }
-.nota.corrida.falla b { color: inherit; }
-.nota.corrida .cuando { display: block; margin-top: .25rem; font-size: .8rem; color: var(--tenue); }
-/* EL BOTÓN DE COMPLETAR Y LAS SESIONES CADUCADAS. Recuadro propio y no una
-   nota más: esto no describe la lista, es algo que se APRIETA. Un botón que
-   se ve igual que un párrafo gris no se aprieta. */
-.completar {
-  border: 1px solid var(--linea); border-left: 3px solid var(--aviso);
-  border-radius: .4rem; padding: .55rem .75rem; margin: 0 0 1rem;
-  font-size: .9rem; line-height: 1.45; color: var(--tenue);
+.dia { display: grid; grid-template-columns: auto minmax(0, 24rem) auto; align-items: center; column-gap: 4px; }
+/* EL CONTENEDOR DE NAVEGACIÓN (2026-09-27): solo acomoda. Las flechas reusan
+   `.accion` -no estrenan un estilo- y la fecha queda al centro, con el corte
+   debajo de ella. */
+.navegacion { display: contents; }
+.navegacion .accion { grid-row: 1 / span 2; min-width: 1.75rem; padding: 0; background: transparent; color: var(--acento); font-size: 1.35rem; }
+.navegacion .accion:hover:not(:disabled) { background: var(--relleno-tenue); }
+.navegacion span { grid-column: 2; grid-row: 1; text-align: center; white-space: nowrap; font: 600 var(--texto-encabezado) var(--letra); min-width: 11.5rem; }
+.corte { grid-column: 2; grid-row: 2; text-align: center; font: var(--texto-leyenda) var(--letra); color: var(--tenue); }
+.corte strong { font-weight: 500; }
+/* Cuántos días acumula la ventana: el dato que explica el rango, sin
+   competir con él. */
+.dias-acumulados { display: block; color: var(--aviso); font-weight: 600; }
+/* LOS TRES PASOS: una píldora con tres botones. El paso en el que se está se
+   ve por el fondo blanco, la sombra Y el número relleno; los hechos, por el
+   número relleno. */
+.pasos {
+  display: flex; gap: 4px; padding: 3px; margin-inline: auto;
+  background: var(--relleno-suave); border-radius: var(--pildora);
 }
-.completar b { color: var(--tinta); font-variant-numeric: tabular-nums; }
-.completar .fila { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-top: .45rem; }
-.completar .detalle { display: block; margin-top: .35rem; font-size: .85rem; }
-.completar .detalle.mal { color: var(--mal); }
-.completar .sesiones {
-  display: block; margin-top: .6rem; padding-top: .5rem;
-  border-top: 1px dashed var(--linea);
+.pasos button {
+  display: flex; align-items: center; gap: 8px; padding: 4px 14px 4px 5px;
+  border: 0; border-radius: var(--pildora); background: transparent; cursor: pointer;
+  font: 600 var(--texto-nota) var(--letra); color: var(--tenue); white-space: nowrap;
 }
-/* EL MOTIVO DE UN RENGLÓN SIN NINGUNA LECTURA (ticket 19). Distinto de
-   `.precio-motivo`, que es el motivo de UN PROVEEDOR de ese renglón: éste es
-   del renglón entero y por eso ocupa la celda, sin el ámbar de aquél —no
-   todos son un problema: "el lote no lo miró" no lo es—. */
-.hueco-motivo { display: block; font-size: .78rem; color: var(--tenue); margin: 0 0 .35rem; }
-.hueco-motivo b { color: var(--tinta); }
+.pasos button[aria-current="step"] { background: var(--barra); box-shadow: var(--sombra-chica); color: var(--tinta); }
+.paso-numero {
+  width: 20px; height: 20px; border-radius: 50%; display: inline-grid; place-items: center;
+  font: 700 .75rem/1 var(--letra); background: var(--relleno); color: var(--tenue);
+}
+.pasos button[aria-current="step"] .paso-numero, .pasos button.hecho .paso-numero {
+  background: var(--acento); color: var(--acento-contraste);
+}
+/* Cerrar es la única acción sobre la lista entera; reabrir es la salida de un
+   error, no la acción del día. */
+.cierre { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.cierre button, .barra-dia > .accion {
+  min-height: 1.75rem; padding: 0 12px; border: 0; border-radius: var(--pildora); cursor: pointer;
+  font: 600 .9375rem/1.2 var(--letra); color: var(--tinta); background: var(--relleno-suave);
+}
+.cierre button:hover:not(:disabled) { background: var(--relleno-medio); }
+.cierre button:disabled { cursor: default; opacity: .4; }
+.cierre #reabrir { background: var(--acento-tinte); color: var(--acento); }
+.barra-dia > .insignia { align-self: center; }
+
+/* CÓMO ESTÁ LA LISTA: la franja de debajo de la barra del día. */
+.barra-estado { display: flex; flex-direction: column; }
+.armado, .barra-estado .detalle {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px;
+  padding: 8px 20px 8px 42px; position: relative;
+  font: var(--texto-nota) var(--letra); background: var(--barra);
+}
+.armado { border-bottom: var(--pelo) solid var(--linea); }
+.armado b { font-weight: 600; }
+/* El punto dice el estado y la frase lo dice con palabras. */
+.armado::before {
+  content: ""; position: absolute; left: 20px; top: 13px;
+  width: 8px; height: 8px; border-radius: 50%; background: var(--tercero);
+}
+.armado.abierto::before { background: var(--ok-vivo); }
+.armado.vencido::before { background: var(--aviso-vivo); }
+.barra-estado .detalle { color: var(--tenue); padding-top: 0; margin-top: -1px; border-bottom: var(--pelo) solid var(--linea); }
+.barra-estado .detalle:empty { display: none; }
+
+/* LOS AVISOS: una franja que se abre. El resumen dice cuántas cosas hay que
+   atender; adentro, cada nota con su etiqueta. La etiqueta la escribe la
+   hoja con `data-etiqueta` y su tono lo pone el JavaScript según la clase de
+   la nota que lleva dentro —no decide nada: lee lo que ya se pintó—. */
+.avisos { background: var(--barra); border-bottom: var(--pelo) solid var(--linea); }
+.avisos-resumen {
+  display: flex; align-items: center; gap: 14px; width: 100%;
+  padding: 8px 20px; border: 0; background: transparent; cursor: pointer; text-align: left;
+  font: var(--texto-nota) var(--letra); color: var(--tinta);
+}
+.avisos-resumen .punto { background: var(--ok-vivo); }
+.avisos-resumen .punto.aviso { background: var(--aviso-vivo); }
+.avisos-resumen .punto.mal { background: var(--mal-vivo); }
+.avisos-texto { flex: 1; }
+.avisos-texto b { font-weight: 600; }
+.avisos-texto .resto { color: var(--tenue); }
+.avisos-ver { font-weight: 500; color: var(--acento); }
+.avisos-lista { padding: 0 20px 10px 42px; }
+.aviso-fila {
+  display: grid; grid-template-columns: 5.75rem minmax(0, 1fr); gap: 4px 12px; align-items: start;
+  padding: 8px 0; border-top: var(--pelo) solid var(--linea);
+}
+.aviso-fila::before {
+  content: attr(data-etiqueta); justify-self: start; margin-top: 1px;
+  padding: 2px 8px; border-radius: var(--pildora); white-space: nowrap;
+  font: 600 .75rem/1rem var(--letra); background: var(--ok-fondo); color: var(--ok);
+}
+.aviso-fila.aviso::before { background: var(--aviso-fondo); color: var(--aviso); }
+.aviso-fila.mal::before { background: var(--mal-fondo); color: var(--mal); }
+.aviso-fila.informa::before { background: var(--relleno-suave); color: var(--tenue); }
+.aviso-fila > .nota, .aviso-fila > div { margin: 0; }
+.aviso-fila .nota { color: var(--tinta); }
+.aviso-fila .nota.mal { color: var(--mal); }
+/* EL CONTEO DE LO QUE FALTA POR COMPARAR (ticket 15) y CÓMO LE FUE AL LOTE
+   (ticket 19). Ámbar y rojo son distintos a propósito: pintar de rojo un lote
+   que hizo lo que se le pidió —o que todavía no le tocaba— enseña a ignorar el
+   rojo. La negrita del titular es lo que se lee primero. */
+.nota.conteo b, .nota.corrida b { font-variant-numeric: tabular-nums; }
+.nota.conteo .desglose { display: block; margin-top: .2rem; color: var(--tenue); }
+.nota.conteo.aviso b { color: var(--aviso); }
+.nota.conteo.todo, .nota.corrida.bien { color: var(--tenue); }
+.nota.conteo.todo b { color: var(--ok); }
+.nota.corrida.falla { color: var(--mal); }
+.nota.corrida.tope b, .nota.corrida.espera b { color: var(--aviso); }
+.nota.corrida .cuando { display: block; margin-top: .2rem; color: var(--tenue); }
+.nota.ventas { color: var(--tenue); }
+/* EL BOTÓN DE COMPLETAR Y LAS SESIONES CADUCADAS: algo que se APRIETA. */
+.completar { font: var(--texto-nota) var(--letra); color: var(--tenue); }
+.completar b { color: var(--tinta); font-weight: 600; font-variant-numeric: tabular-nums; }
+.completar .fila { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; }
+.completar .detalle { display: block; margin-top: 2px; }
+.completar .sesiones { display: block; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--linea); }
+
+/* LO QUE CONTESTÓ EL ÚLTIMO CLIC: una franja que no se confunde con las notas
+   de la lista, con una barra del color de lo que dice. */
+#pedido-accion, #pedido-nota { margin: 12px 20px 0; padding: 10px 14px; border-radius: var(--radio-md); background: var(--superficie); }
+#pedido-accion { box-shadow: inset 3px 0 0 var(--acento); }
+#pedido-accion.todo { box-shadow: inset 3px 0 0 var(--ok-vivo); }
+#pedido-accion.aviso { box-shadow: inset 3px 0 0 var(--aviso-vivo); }
+#pedido-accion.mal { box-shadow: inset 3px 0 0 var(--mal-vivo); }
+#pedido-accion.falla, #pedido-nota.falla { border-left: 0; padding-left: 14px; }
+
+/* EL PASO EN QUE SE ESTÁ ocupa lo que queda de alto. */
+.paso { flex: 1; min-height: 0; overflow: auto; }
+.paso.revisar { display: flex; overflow: hidden; }
+.lista-de-trabajo { flex: 1; min-width: 0; overflow: auto; padding-bottom: 32px; }
+.barra-lista { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding: 14px 20px 10px; }
+.barra-lista .orden { margin-left: auto; font: var(--texto-nota) var(--letra); color: var(--tenue); white-space: nowrap; }
+.filtrados { font: 600 var(--texto-nota) var(--letra); color: var(--acento); white-space: nowrap; }
+.filtro {
+  width: 12.5rem; height: 1.75rem; padding: 0 10px; border: 0; border-radius: var(--radio-md);
+  background: var(--relleno-suave); font: var(--texto-subtitulo) var(--letra);
+}
+.filtro::placeholder { color: var(--tenue); }
+
+/* EL INTERRUPTOR ENTRE LAS DOS VISTAS, como control segmentado. Son radios de
+   verdad y no botones: se recorren con las flechas del teclado y el lector de
+   pantalla los anuncia como "1 de 2". El input se esconde de la vista pero NO
+   del árbol. La marca de cuál está activa se pone con una clase desde el
+   JavaScript y no con `:has(input:checked)`: `:has` es de 2022 y si el
+   navegador del mostrador no lo tiene, el interruptor se vería sin ninguna
+   opción encendida. */
+.vistas { display: inline-flex; padding: 2px; border-radius: var(--radio-md); background: var(--relleno-suave); }
+.vistas label {
+  position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: 1.5rem; padding: 0 14px; border-radius: calc(var(--radio-md) - 2px); cursor: pointer;
+  font: 500 .8125rem/1.2 var(--letra); color: var(--tinta); white-space: nowrap;
+}
+.vistas label.activa { background: var(--pulgar); box-shadow: var(--sombra-chica); font-weight: 650; }
+.vistas label.enfocada { box-shadow: var(--anillo); }
+.vistas input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.vistas .cuenta { font-weight: 400; color: var(--tenue); font-variant-numeric: tabular-nums; }
+
+/* LA TABLA. Una tarjeta blanca sobre el lienzo, renglones separados por una
+   raya de pelo y el encabezado pegado arriba al bajar: en el renglón 35 ya
+   nadie recuerda cuál columna era la existencia. */
+.tarjeta-tabla { margin: 0 20px; background: var(--superficie); border-radius: var(--radio-lg); }
+table { width: 100%; border-collapse: separate; border-spacing: 0; font: var(--texto-nota) var(--letra); }
+caption {
+  caption-side: bottom; text-align: left; padding: 10px 16px;
+  font: var(--texto-nota) var(--letra); color: var(--tenue);
+}
+th, td { text-align: left; padding: 8px 6px; border-bottom: var(--pelo) solid var(--linea); vertical-align: middle; }
+th:first-child, td:first-child { padding-left: 16px; }
+th:last-child, td:last-child { padding-right: 10px; }
+th { font: 600 var(--texto-leyenda) var(--letra); color: var(--tenue); vertical-align: bottom; white-space: nowrap; }
+thead th { position: sticky; top: 0; z-index: 1; background: var(--superficie); padding-top: 10px; }
+thead th:first-child { border-top-left-radius: var(--radio-lg); }
+thead th:last-child { border-top-right-radius: var(--radio-lg); }
+tbody tr { cursor: pointer; }
+tbody tr:hover { background: var(--relleno-tenue); }
+/* El renglón elegido: el que el detalle de la derecha está enseñando. */
+tbody tr.elegido { background: var(--acento-suave); }
+td.producto { min-width: 9rem; }
+.ver-renglon {
+  display: block; max-width: 100%; padding: 0; border: 0; background: transparent; cursor: pointer;
+  text-align: left; font: 500 var(--texto-subtitulo) var(--letra); color: var(--tinta);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.insignias { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.insignias:empty { display: none; }
+/* Existencia y cobertura: a la derecha y con cifras de ancho fijo, que es lo
+   que deja comparar dos renglones sin leerlos. */
+td.numero, th.numero { text-align: right; width: 3.5rem; }
+td.numero { font-variant-numeric: tabular-nums; font-size: .9375rem; }
+td.numero + td.numero { font-size: .8125rem; color: var(--tenue); white-space: nowrap; }
+/* "sin dato" no es un cero y no se pinta como uno: un cero en existencia se
+   lee "agotado", que es lo contrario de "no sé qué queda". */
+td.numero.sindato { color: var(--tenue); font-size: .8125rem; font-style: italic; }
+/* LA URGENCIA (ticket 28). Tres señales y ninguna es solo color: la palabra
+   "agotado" en negrita, el "0" en negrita, y una barra al borde izquierdo del
+   renglón entero. */
+td.numero.urgente { color: var(--mal); font-weight: 700; }
+tr.agotado > td:first-child { box-shadow: inset 4px 0 0 var(--mal-vivo); }
+/* LA CANTIDAD A PEDIR: la cifra que se copia al pedido, la más pesada de la
+   fila. Editable con la lista abierta: un campo que se ve como cifra, en su
+   cápsula gris, y no como formulario. */
+td.cantidad, th.cantidad { text-align: right; width: 4.5rem; }
+td.cantidad b { font: 600 var(--texto-llamada) var(--letra); font-variant-numeric: tabular-nums; padding: 3px 8px; border-radius: var(--radio-sm); background: var(--relleno-tenue); }
+.cantidad-campo {
+  width: 3.4rem; min-height: 1.75rem; padding: 2px 8px; text-align: right;
+  font: 600 var(--texto-llamada) var(--letra); font-variant-numeric: tabular-nums;
+  border: 0; border-radius: var(--radio-sm); background: var(--relleno-tenue);
+}
+.cantidad-campo:hover { background: var(--relleno-suave); }
+.cantidad-campo:disabled { cursor: default; opacity: .6; }
+/* Que la cantidad ya no es la que propuso el sistema: un punto de acento
+   junto a la cifra, y la frase entera en el detalle. */
+.ajuste-punto { display: inline-block; width: 6px; height: 6px; margin-right: 4px; border-radius: 50%; background: var(--acento); vertical-align: middle; }
+
+/* LOS CUATRO PROVEEDORES, uno por columna: la comparación de los cuatro
+   (ticket 14) puesta en la fila. Cada casilla, su precio y debajo cuántas
+   tiene. Las cifras de los cuatro quedan alineadas entre sí, y el más barato
+   salta solo. */
+td.precio-celda, th.precio-celda { width: 4.75rem; padding-left: 3px; padding-right: 3px; text-align: right; }
+.precio {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 1px;
+  padding: 4px 6px; border-radius: var(--radio-sm); font-size: .8125rem;
+}
+.precio b { font-variant-numeric: tabular-nums; font-weight: 400; text-align: right; }
+.precio .hay { font: var(--texto-leyenda-chica) var(--letra); letter-spacing: .02em; color: var(--tercero); font-variant-numeric: tabular-nums; }
+/* EL GANADOR: fondo verde, cifra verde Y en negrita. La negrita es lo que lo
+   distingue sin distinguir el verde. */
+.precio.gana { background: var(--ok-fondo); }
+.precio.gana b { color: var(--ok); font-weight: 700; }
+/* Cuando nadie confirmó existencia, o fue el único que dio precio, el verde
+   afirmaría algo que ningún portal dijo: ámbar. La clase va en la casilla y no
+   se deduce con `:has()`. */
+.precio.gana.sinconfirmar, .precio.gana.unico { background: var(--aviso-fondo); }
+.precio.gana.sinconfirmar b, .precio.gana.unico b { color: var(--aviso); }
+/* UN HUECO NO PUEDE VERSE COMO UNA CIFRA: "sin dato" en cursiva, en tono
+   tenue y con un subrayado punteado —la forma de "aquí no hay cifra" que se
+   repite en toda la pantalla—. Nunca puede parecer el más barato. */
+.precio .sindato { color: var(--tercero); font-style: italic; font-weight: 400; }
+.precio .sindato, td.numero.sindato, .total.nose {
+  text-decoration: underline dotted; text-underline-offset: 3px;
+}
+/* Cero piezas NO es un hueco: es un dato duro —no lo tiene—. La cifra se
+   tacha y el "no tiene" va en rojo y en negrita: es lo que explica que un
+   precio más bajo no haya ganado. */
+.precio.notiene b { text-decoration: line-through; color: var(--tercero); }
+.precio .hay.notiene { color: var(--mal); font-weight: 600; }
+/* Y "no dijo" tampoco es cero: la tercera categoría, en cursiva. */
+.precio .hay.nodijo { font-style: italic; }
+/* Un renglón sin una sola lectura: el motivo ocupa las cuatro columnas. */
+td.hueco-celda { text-align: left; }
+.hueco-motivo { display: block; font: italic var(--texto-leyenda) var(--letra); color: var(--tenue); }
+.hueco-motivo b { font-style: normal; font-weight: 600; color: var(--tinta); }
 .hueco-motivo.tope b { color: var(--aviso); }
 .hueco-motivo.falla b { color: var(--mal); }
 .hueco-motivo .quiza { font-style: italic; }
-/* El interruptor entre las dos vistas. Son radios de verdad y no botones:
-   se recorren con las flechas del teclado, un lector de pantalla los anuncia
-   como "1 de 2", y el navegador ya sabe que solo uno puede estar encendido.
-   El input se esconde de la vista pero NO se quita del árbol (nada de
-   `display:none`), que es lo que lo dejaría sin foco ni nombre.
-   La marca de cuál está activa se pone con una clase desde el JavaScript y
-   no con `:has(input:checked)`: `:has` es de 2022 y si el navegador del
-   mostrador no lo soporta, el interruptor se vería SIN ninguna opción
-   encendida — y una pantalla que no dice qué está mostrando es peor que no
-   tener interruptor. */
-.vistas { display: flex; flex-wrap: wrap; gap: .4rem; margin: 0 0 1rem; padding: 0; }
-.vistas label {
-  display: inline-flex; align-items: baseline; gap: .4rem; cursor: pointer;
-  padding: .35rem .75rem; border: 1px solid var(--linea); border-radius: 999px;
-  font-size: .9rem; color: var(--tenue); line-height: 1.3;
+
+/* LA ESCALA (variante de la comparación en la fila; la otra es la rejilla de
+   arriba, y se elige con `COMPARACION_EN_LA_FILA` en el JavaScript). Una sola
+   columna: a la izquierda el ganador, a la derecha una recta de más barato a
+   más caro con un punto por proveedor que dio precio. El ganador va en negrita
+   y es el punto grande; el que no lo tiene es un punto hueco con borde rojo:
+   ningún dato viaja solo en el color. */
+th.escala-celda, td.escala-celda { width: 15rem; min-width: 14rem; text-align: left; }
+.escala { display: flex; align-items: center; gap: 14px; }
+.escala-ganador { flex: 0 0 4.5rem; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; font-size: .8125rem; }
+.escala-ganador b { font-variant-numeric: tabular-nums; font-weight: 700; color: var(--ok); }
+.escala-ganador.sinconfirmar b, .escala-ganador.unico b { color: var(--aviso); }
+/* El ámbar no puede ser la única diferencia: el ganador sin confirmar lleva
+   además un signo "?" (y su frase entera en el `title`). */
+.escala-ganador.sinconfirmar b::after, .escala-ganador.unico b::after { content: "?"; content: "?" / ""; }
+.escala-ganador .sindato { color: var(--tenue); font-style: italic; font-weight: 400; text-decoration: underline dotted; text-underline-offset: 3px; }
+.escala-quien { font: var(--texto-leyenda-chica) var(--letra); color: var(--tenue); }
+.escala-recta { flex: 1 1 auto; min-width: 0; }
+.escala-recta.sola { font: var(--texto-leyenda-chica) var(--letra); color: var(--tenue); }
+.escala-linea { position: relative; height: 14px; margin: 0 7px; }
+.escala-linea::before { content: ""; position: absolute; left: -7px; right: -7px; top: 50%; height: 2px; margin-top: -1px; border-radius: 1px; background: var(--relleno-medio); }
+.escala-punto {
+  position: absolute; top: 50%; width: 9px; height: 9px; box-sizing: content-box;
+  transform: translate(-50%, -50%); border-radius: 50%;
+  background: var(--tercero); border: 2px solid var(--superficie);
 }
-.vistas label.activa { background: var(--realce); color: var(--tinta); border-color: var(--tinta); font-weight: 600; }
-.vistas label.enfocada { outline: 2px solid var(--tinta); outline-offset: 2px; }
-.vistas input { position: absolute; opacity: 0; width: 1px; height: 1px; }
-.vistas .cuenta { font-weight: 400; color: var(--tenue); font-variant-numeric: tabular-nums; font-size: .85em; }
-/* LA DENSIDAD (ticket 28). La lista trae tantos renglones como productos
-   distintos se vendieron —40 y más en un día normal— y cada uno con cuatro
-   precios. Hasta el 27 un renglón medía ~300 px de alto en la computadora del
-   mostrador: la lista entera eran doce pantallas. Lo que la compacta es, en
-   este orden: la tabla más ancha (ver `main`), cada proveedor en UNA línea con
-   su diferencia o su motivo al lado y no debajo, la letra de la tabla un punto
-   más chica que la de la prosa, y relleno de celda más corto. Lo que NO se
-   tocó es el tamaño de lo que se lee para decidir: la cantidad a pedir y el
-   precio siguen siendo las cifras más pesadas de su celda. */
-table { width: 100%; border-collapse: collapse; font-size: .875rem; line-height: 1.4; }
-caption { text-align: left; color: var(--tenue); font-size: .85rem; padding-bottom: .5rem; }
-th, td { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid var(--linea); vertical-align: top; }
-th { font-size: .7rem; text-transform: uppercase; letter-spacing: .07em; color: var(--tenue); font-weight: 600;
-     vertical-align: bottom; }
-/* El encabezado se queda arriba al bajar por la lista: en el renglón 35 ya
-   nadie recuerda cuál columna era la existencia y cuál la cobertura. Con fondo
-   propio, o las filas se verían a través de él. */
-thead th { position: sticky; top: 0; z-index: 1; background: var(--fondo);
-           box-shadow: inset 0 -1px 0 var(--linea); }
-tbody tr:nth-child(even) { background: var(--realce); }
-td.clave, th.clave { width: 7rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8em; color: var(--tenue); }
-td.producto { font-weight: 500; }
-/* La cantidad: 6rem. Eran 9.5 porque debajo de la cifra caben dos renglones
-   más —lo que propuso el sistema y quién la cambió—, y a 7.5rem "ajustada por
-   sin-identificar" se partía en cuatro líneas (recorrido del 2026-09-19). Con
-   la letra de la tabla más chica y esas dos notas a .75rem caben en dos. */
-td.cantidad, th.cantidad { width: 6rem; text-align: right; }
-td.cantidad b { font-size: 1.05rem; font-weight: 700; font-variant-numeric: tabular-nums; }
-/* El campo para corregir la cantidad. Se ve como una cifra y no como un
-   formulario: es la columna que el encargado lee de un vistazo y no puede
-   convertirse en la que más pesa en la pantalla. El borde tenue dice que se
-   puede escribir ahí; al enfocarlo se pone firme.
-   4.5rem cabe "9999" — más de lo que nadie pide de una pieza — y 2.2rem de
-   alto es el mismo objetivo táctil del botón de descartar: a 375 px esto se
-   toca con el dedo. */
-.cantidad-campo {
-  font: inherit; font-size: 1.05rem; font-weight: 600; font-variant-numeric: tabular-nums;
-  width: 4.5rem; min-height: 2.2rem; text-align: right;
-  padding: .2rem .4rem; color: var(--tinta); background: var(--fondo);
-  border: 1px solid var(--linea); border-radius: .4rem;
-}
-.cantidad-campo:hover { border-color: var(--tinta); }
-.cantidad-campo:focus { outline: 2px solid var(--tinta); outline-offset: 1px; }
-.cantidad-campo:disabled { cursor: default; opacity: .6; }
-/* Lo que el sistema propuso, cuando ya no es lo que se va a pedir. En tono
-   tenue y debajo: lo que se copia al pedido es la cifra de arriba, y ésta es
-   la que explica de dónde salía. Las dos juntas son el punto del ticket 11
-   —se guardan por separado— y por eso se ven las dos, no una. */
-.propuesta { color: var(--tenue); font-size: .8rem; display: block; }
-/* Quién la corrigió. Solo aparece en los renglones que alguien tocó, que son
-   los menos: es una firma (regla 3 de CLAUDE.md) y sirve para poder
-   preguntar por qué se pidieron diez de algo de lo que se vendieron tres. */
-.ajustada { color: var(--tenue); font-size: .78rem; display: block; }
-/* La columna de acciones. Angosta a propósito: descartar es una acción
-   frecuente pero secundaria —lo que se lee es la cantidad a pedir—, así que
-   el botón no compite con ella por atención. */
-td.acciones, th.acciones { width: 6.5rem; text-align: right; }
-/* A QUIÉN SE LE PIDE (ticket 20). Columna propia y no una línea más dentro
-   de la celda de precios: la comparación dice cuánto cuesta cada uno y esto
-   dice a quién se le compra, que es una DECISIÓN y no un dato. Mezclarlas
-   haría que la elección se leyera como una conclusión aritmética, y el
-   ticket dice lo contrario — hay razones que el sistema no ve. */
-td.proveedor, th.proveedor { width: 9.5rem; }
+.escala-punto.gana { z-index: 1; width: 12px; height: 12px; background: var(--ok-vivo); }
+.escala-punto.gana.sinconfirmar, .escala-punto.gana.unico { background: var(--aviso-vivo); }
+.escala-punto.notiene { background: var(--superficie); border-color: var(--mal-vivo); }
+.escala-pie { display: flex; justify-content: space-between; gap: 6px; margin-top: 2px; white-space: nowrap; font: var(--texto-leyenda-chica) var(--letra); color: var(--tenue); font-variant-numeric: tabular-nums; }
+.escala-cuantos.poco { color: var(--aviso); }
+/* El extremo de la escala que es de quien no lo tiene: tachado y en rojo. */
+.escala-pie .notiene { text-decoration: line-through; color: var(--mal); }
+
+/* A QUIÉN SE LE PIDE (ticket 20): una decisión y no un dato. El desplegable
+   se ve como texto con su flecha; debajo, en chico, si es sugerencia o
+   decisión. Lo sugerido va en cursiva; lo decidido, recto. */
+td.proveedor, th.proveedor { width: 7rem; }
 .eleccion-campo {
-  width: 100%; font: inherit; font-size: .85rem; padding: .2rem .25rem;
-  border: 1px solid var(--linea); border-radius: 4px; background: var(--fondo);
-  color: inherit;
+  max-width: 100%; padding: 1px 2px; border: 0; border-radius: var(--radio-xs);
+  background: transparent; font: 500 var(--texto-nota) var(--letra); cursor: pointer;
 }
-.eleccion-campo:hover { border-color: var(--tinta); }
-.eleccion-campo:focus { outline: 2px solid var(--tinta); outline-offset: 1px; }
-.eleccion-campo:disabled { cursor: default; opacity: .6; }
-/* QUIÉN LO DECIDIÓ. Sugerencia y decisión se ven distinto a propósito: son
-   la misma pregunta que el ticket 11 resolvió con dos cantidades, y si las
-   dos se vieran igual nadie podría saber si un renglón lo miró una persona.
-   Lo sugerido va en gris y en cursiva —es una propuesta—; lo decidido va en
-   tinta normal con su firma debajo. */
-.eleccion-de { color: var(--tenue); font-size: .75rem; display: block; margin-top: .2rem; }
+.eleccion-campo:hover:not(:disabled) { background: var(--relleno-tenue); }
+.eleccion-campo:disabled { cursor: default; opacity: 1; appearance: none; -webkit-appearance: none; }
+.eleccion-de { display: block; font: var(--texto-leyenda-chica) var(--letra); letter-spacing: .02em; color: var(--tercero); padding-left: 2px; }
 .eleccion-de.sugerida { font-style: italic; }
-/* Cuando la persona eligió DISTINTO de lo que el sistema sugería, se dicen
-   las dos. Es el par de cifras que vuelve auditable la elección, igual que
-   "el sistema propuso 3" al lado de un 10. */
-.eleccion-de.distinta { color: var(--aviso); font-style: normal; }
-/* Sin a quién pedirle: un empate, o ningún precio. NO es un error y no se
-   pinta como tal — es un renglón que espera a que una persona decida. */
-.eleccion-sin { color: var(--tenue); font-size: .75rem; display: block; font-style: italic; }
-/* EN QUÉ SE PARTE LA LISTA. Va DEBAJO de la tabla y no arriba: primero se
-   decide renglón por renglón y después se mira el total. */
-.particion { border: 1px solid var(--linea); border-radius: 6px; padding: .7rem .9rem; margin-top: 1rem; }
-.particion > b { display: block; margin-bottom: .35rem; }
-.particion .detalle { color: var(--tenue); font-size: .82rem; margin-bottom: .5rem; }
-.particion .pedido {
-  display: grid; grid-template-columns: 7rem 1fr auto; gap: 0 .5rem;
-  align-items: baseline; padding: .3rem 0; border-top: 1px solid var(--linea);
+.eleccion-de.distinta { color: var(--aviso); }
+.eleccion-sin { display: block; font: italic var(--texto-leyenda-chica) var(--letra); color: var(--aviso); padding-left: 2px; }
+
+/* DESCARTAR: una cruz que se pone roja al pasar. Angosta a propósito: es
+   frecuente pero secundaria, y no compite con la cantidad. */
+td.acciones, th.acciones { width: 2rem; text-align: center; }
+.quitar {
+  width: 24px; height: 24px; display: inline-grid; place-items: center; padding: 0;
+  border: 0; border-radius: 50%; background: transparent; cursor: pointer;
+  font-size: .95rem; line-height: 1; color: var(--tercero);
 }
-.particion .pedido .quien { font-weight: 600; }
-.particion .pedido .cuanto { font-variant-numeric: tabular-nums; text-align: right; font-weight: 600; }
-/* UN TOTAL QUE NO SE SABE NO SE PINTA COMO UNA CIFRA, por lo mismo que un
-   precio sin dato: en gris y en cursiva, nunca alineado como un número y
-   nunca "$0.00". Un cero ahí se leería "este pedido no cuesta nada". */
-.particion .pedido .cuanto.nose { color: var(--tenue); font-style: italic; font-weight: 400; }
-.particion .pedido .marca { color: var(--aviso); font-size: .75rem; grid-column: 2 / -1; }
-.particion .pedido .marca.tenue { color: var(--tenue); }
-/* QUÉ SIGNIFICA ENVIAR. Ocupa la línea entera bajo su pedido, junto al botón
-   y NO como nota al pie: quien no lee la nota al pie es exactamente quien
-   necesitaba leerla. La frase viene hecha de `particion.frase_del_envio`. */
-.particion .pedido .envio { grid-column: 1 / -1; font-size: .78rem; color: var(--tenue); margin-top: .25rem; }
-/* Ya capturado. Verde como el ganador de la comparación y por lo mismo: es un
-   hecho cerrado, no un aviso que pida hacer algo. */
-.particion .pedido .envio.hecho { color: var(--ok); }
-.particion .pedido .acciones { grid-column: 1 / -1; margin-top: .35rem; }
-/* El enlace del CSV (ticket 23) con la tinta de la pantalla y no con el azul
-   del navegador, que en el tema oscuro casi no se lee. Subrayado: es un
-   enlace, y el color solo no lo dice. */
-.particion .pedido .exportar { grid-column: 1 / -1; justify-self: start; font-size: .78rem;
-  margin-top: .25rem; color: var(--tinta); text-decoration: underline; text-underline-offset: 2px; }
-.particion .pedido .exportar:hover { color: var(--ok); }
-.particion .fila { margin-top: .6rem; }
-/* LA PANTALLA DE CAPTURA (ticket 22). El portal del proveedor en una ventana
-   y esto en otra: se recorre de arriba abajo tachando conforme se teclea
-   allá. Un bloque plegable por pedido, porque se captura UN portal a la vez;
-   ocupa la línea entera bajo su pedido y va ANTES del botón de enviar, que es
-   adonde lleva. */
-.captura { grid-column: 1 / -1; margin-top: .45rem; border: 1px solid var(--linea); border-radius: 6px; }
-.captura > summary { cursor: pointer; padding: .5rem .65rem; font-size: .85rem; min-height: 2.2rem; }
-.captura > summary .avance { color: var(--tenue); }
-/* Todo tachado: el resumen se pone en verde, como el envío ya hecho. Es un
-   hecho cerrado, no un aviso. */
-.captura.completa > summary .avance { color: var(--ok); font-weight: 600; }
-.captura ol { list-style: none; margin: 0; padding: 0; }
-/* Un renglón por línea (casilla 1): la casilla, la clave, la descripción, las
-   piezas y el precio. En el teléfono la descripción se va a su propio
-   renglón, pero la casilla y la clave se quedan juntas al principio. */
-.captura li {
-  display: grid; grid-template-columns: 2rem auto 1fr auto auto;
-  gap: .25rem .6rem; align-items: center;
-  padding: .35rem .65rem; border-top: 1px solid var(--linea);
-}
-.captura li input[type="checkbox"] { width: 1.35rem; height: 1.35rem; margin: 0; cursor: pointer; }
-.captura li label { cursor: pointer; overflow-wrap: anywhere; }
-.captura li .cuantas, .captura li .costo { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
-.captura li .costo.nose { color: var(--tenue); font-style: italic; }
-/* LA CLAVE SE COPIA DE UN CLIC (casilla 4). Es un botón de verdad y no texto
-   seleccionable, porque "de un clic" no es "doble clic, Ctrl+C". En
-   monoespaciada: trece dígitos se leen mejor alineados, y es lo que se
-   compara de reojo contra el buscador del portal. */
-.captura .clave, .resultados .clave {
-  font: inherit; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
-  font-size: .8rem; min-height: 2rem; padding: .2rem .45rem; cursor: pointer;
-  color: var(--tinta); background: var(--fondo);
-  border: 1px solid var(--linea); border-radius: 4px; white-space: nowrap;
-}
-.captura .clave:hover, .resultados .clave:hover { border-color: var(--tinta); }
-.captura .clave.hecho, .resultados .clave.hecho { border-color: var(--ok); color: var(--ok); }
-.captura .clave.fallo, .resultados .clave.fallo { border-color: var(--mal); color: var(--mal); white-space: normal; }
-.captura .clave.sin { font-family: inherit; font-style: italic; color: var(--tenue); cursor: default; border-style: dashed; }
-/* LO TACHADO SE DISTINGUE DE UN VISTAZO (casilla 2), y no solo por color:
-   tachado de verdad, atenuado y con fondo. Se ve igual sin distinguir el
-   verde, y a un metro de la pantalla. NO se mueve de sitio: una lista que se
-   reordena bajo el dedo pierde el renglón por el que uno iba. */
-.captura li.hecho { background: var(--realce); }
-.captura li.hecho label, .captura li.hecho .cuantas, .captura li.hecho .costo {
-  text-decoration: line-through; color: var(--tenue);
-}
-.captura .invitacion { margin: 0; padding: .5rem .65rem; border-top: 1px solid var(--linea); font-size: .8rem; color: var(--tenue); }
-.captura .invitacion.lista { color: var(--ok); font-weight: 600; }
-.captura .nota-captura { margin: 0; padding: 0 .65rem .45rem; font-size: .78rem; color: var(--mal); }
-.captura .nota-captura:empty { display: none; }
-/* El botón de enviar, cuando todo está tachado: es adonde lleva la captura
-   (casilla 5). Solo se resalta — nunca se apaga por la captura. */
-.particion .pedido .accion.listo { border-color: var(--ok); color: var(--ok); font-weight: 600; }
-@media (max-width: 34rem) {
-  .captura li { grid-template-columns: 2rem auto 1fr; }
-  .captura li label { grid-column: 1 / -1; order: 3; }
-  .captura li .cuantas { order: 4; text-align: left; grid-column: 1 / 3; }
-  .captura li .costo { order: 5; }
-}
-/* Los cuatro proveedores, uno por renglón dentro de la celda. En columna y
-   no en una línea: son cuatro cifras que se comparan entre sí, y comparar
-   hacia abajo es lo que un ojo hace sin pensar.
-   Entre 25 y 32rem según la pantalla, y no las 13 de antes (ticket 28): a
-   13 la marca del ganador, la diferencia y el motivo de cada hueco colgaban
-   DEBAJO de su proveedor, cada uno partido en dos o tres líneas —era lo que
-   hacía medir 300 px a un renglón—. Ahora van en la misma línea que su
-   proveedor, en una cuarta columna. Crece con la pantalla porque el motivo
-   de un hueco es la frase más larga de la fila, y cada rem que se le da es
-   una línea menos en los renglones que más huecos tienen. */
-td.precios, th.precios { width: clamp(25rem, 38vw, 36rem); }
-/* Cuándo se leyó y el botón de volver a consultar, en la misma línea cuando
-   caben: son la última línea de la celda y ninguno de los dos se compara con
-   nada. */
-td.precios > .precio-cuando { display: inline-block; margin-right: .6rem; }
-td.precios > .accion { vertical-align: baseline; }
-/* Cada proveedor es una rejilla de tres columnas —quién, cuánto, cuántas
-   tiene— y no una línea de flex, para que las cifras de los CUATRO queden
-   alineadas entre sí. Comparar cuatro números que no empiezan en la misma
-   columna obliga a leerlos uno por uno; alineados, el más barato salta solo.
-   Cuatro columnas desde el ticket 28 —quién, cuánto, cuántas tiene, y lo
-   que hay que saber de él—: la marca del ganador, la diferencia contra él o
-   el motivo del hueco van en la cuarta, a la derecha de su cifra, y no
-   rompen la alineación de las tres primeras. En el teléfono vuelven a colgar
-   debajo (ver el final del archivo). */
-.precio {
-  display: grid; grid-template-columns: 4.6rem 4.4rem 3.6rem minmax(0, 1fr);
-  gap: 0 .4rem; align-items: baseline; font-size: .8rem;
-  padding: .08rem 0;
-}
-.precio .quien { color: var(--tenue); overflow-wrap: anywhere; }
-.precio b { font-variant-numeric: tabular-nums; font-weight: 600; text-align: right; }
-/* EL GANADOR. Fondo suave y borde a la izquierda: se ve de un vistazo sin
-   depender de que se distinga el verde, y la palabra "el más barato" va
-   escrita debajo. Es la segunda casilla del ticket 14 y la razón de ser de
-   la pantalla entera. */
-.precio.gana { background: var(--realce); border-left: 3px solid var(--ok); padding-left: .3rem; margin-left: -.33rem; }
-.precio.gana b { color: var(--ok); }
-.precio .marca-gana { grid-column: 4; color: var(--ok); font-size: .74rem; font-weight: 700; line-height: 1.25; }
-/* Cuando nadie confirmó existencia la marca cambia de palabras Y de color:
-   el verde afirma algo que ningún portal dijo. La clase va en la LÍNEA y no
-   se deduce con `:has()` —que es de 2022 y el navegador del mostrador puede
-   no tenerlo—: sin él, la marca ámbar se vería verde y diría lo que no es. */
-.precio.gana.sinconfirmar { border-left-color: var(--aviso); }
-.precio.gana.sinconfirmar b { color: var(--aviso); }
-.precio .marca-gana.sinconfirmar { color: var(--aviso); }
-/* Y lo mismo cuando fue EL ÚNICO que dio precio (ticket 15), aunque haya
-   confirmado su existencia: el verde entero es la marca de "el más barato",
-   y con una sola cotización no hay contra qué serlo. Es una clase aparte y
-   no la de arriba porque son dos cosas distintas —una habla de la
-   existencia, la otra de la cobertura— y un renglón puede traer las dos. */
-.precio.gana.unico { border-left-color: var(--aviso); }
-.precio.gana.unico b { color: var(--aviso); }
-.precio .marca-gana.unico { color: var(--aviso); }
-/* LO CARO. La diferencia por pieza contra el ganador, calculada en Python.
-   Es lo que hace legible una fila de cuatro cifras sin restar de cabeza, y
-   es lo que vuelve "caro" un aspecto y no una conjetura. */
-.precio .caro { grid-column: 4; color: var(--aviso); font-variant-numeric: tabular-nums; font-size: .74rem; line-height: 1.25; }
-/* UN HUECO NO PUEDE VERSE COMO UNA CIFRA. "sin dato" va en cursiva y en tono
-   tenue justo para que no se lea como un número: un proveedor sin dato tiene
-   que distinguirse de uno caro de un vistazo (ticket 14), y lo que nunca
-   puede parecer es el más barato (regla 4 de CLAUDE.md). El de arriba es
-   ámbar y alineado a la derecha como un número; éste es gris, en cursiva y
-   alineado a la izquierda: no se parecen ni de lejos. */
-.precio .sindato { color: var(--tenue); font-style: italic; text-align: left; font-weight: 400; }
-/* Y además de la cursiva, un subrayado punteado: es la forma de "aquí no hay
-   cifra" que se repite en toda la pantalla (el total que no se sabe, el
-   ahorro que no se puede calcular), y se ve también en blanco y negro. */
-.precio .sindato, td.numero.sindato, .particion .pedido .cuanto.nose {
-  text-decoration: underline dotted; text-underline-offset: 3px;
-}
-/* La existencia que reporta el proveedor, en su propia columna. Es la cuarta
-   casilla: el más barato no sirve si no lo tiene. */
-.precio .hay { color: var(--tenue); font-size: .75rem; font-variant-numeric: tabular-nums; }
-/* Cero piezas NO es un hueco: es un dato duro —no lo tiene— y por eso va en
-   rojo y no en gris. Es lo que explica que un precio más bajo no haya
-   ganado. */
-.precio .hay.notiene { color: var(--mal); font-weight: 600; }
-/* Y "no dijo" tampoco es cero: es la tercera categoría, y va en cursiva
-   para que no se confunda con una cifra. */
-.precio .hay.nodijo { font-style: italic; }
-/* El motivo, en chico. Es la diferencia entre un hueco que alguien puede
-   atender y uno que solo frustra: "la sesión caducó" se arregla en dos clics
-   y "sin resultados" no se arregla (historia 23). Desde el ticket 28 vive
-   DENTRO de la línea de su proveedor, en la cuarta columna; el que no es de
-   un proveedor —Doyle no contestó— sigue suelto en la celda, a lo ancho. */
-.precio-motivo { color: var(--aviso); font-size: .74rem; display: block; margin: 0 0 .3rem; line-height: 1.25; }
-.precio .precio-motivo { grid-column: 4; margin: 0; }
-.precio-cuando { color: var(--tenue); font-size: .75rem; display: block; margin-top: .25rem; }
-/* El veredicto: quién gana con todas sus letras y cuánto se ahorra. Va
-   separado de la rejilla por una línea porque no es un quinto proveedor:
-   es la conclusión de los cuatro de arriba. */
-.veredicto { border-top: 1px solid var(--linea); margin-top: .3rem; padding-top: .25rem; }
-/* Por qué NO hay ganador, cuando no lo hay. El caso con ganador no escribe
-   nada aquí: su marca ya está pegada al proveedor que ganó, y repetirla
-   costaría dos renglones de una celda de 13 rem. */
-.veredicto .gano.nadie { display: block; font-size: .78rem; color: var(--tenue); font-weight: 400; font-style: italic; }
-/* La cobertura y el ahorro siguen uno detrás del otro en la misma línea
-   cuando caben (ticket 28): son dos oraciones cortas con su punto, y una
-   línea menos por renglón son cuarenta líneas menos por lista. */
-.veredicto .ahorro { display: inline; font-size: .78rem; font-variant-numeric: tabular-nums; }
-/* EL AHORRO se ve de un vistazo por su FORMA y no solo por el verde: una
-   etiqueta con recuadro lleno. Lo que cuesta de más lleva el recuadro
-   punteado —es lo contrario de un ahorro y no puede parecerse a uno— y lo
-   que no se puede calcular no lleva recuadro, en cursiva (abajo). */
-.veredicto .ahorro.gana, .veredicto .ahorro.cuesta {
-  display: inline-block; margin: .15rem 0; padding: .05rem .45rem;
-  border: 1px solid; border-radius: .3rem; font-weight: 700;
-}
-.veredicto .ahorro.gana { color: var(--ok); background: var(--ok-fondo); }
-.veredicto .ahorro.cuesta { color: var(--aviso); background: var(--aviso-fondo); border-style: dashed; }
-/* SIN AHORRO QUE CALCULAR no es un ahorro de cero y no se pinta como una
-   cifra: va en gris y en cursiva, con el motivo al lado. Un "$0.00" aquí se
-   leería "da lo mismo a quién comprarle", que es lo contrario de lo que
-   pasa. */
-.veredicto .ahorro.nose { color: var(--tenue); font-style: italic; }
-/* CONTRA CUÁNTOS PROVEEDORES SE COMPARÓ ESTE RENGLÓN (ticket 15, primera
-   casilla, el número de renglón). Va arriba del ahorro porque es lo que
-   dice cuánto vale todo lo demás de la celda: "NADRO es el más barato" solo
-   significa algo si se sabe contra cuántos se midió. En ámbar cuando no hubo
-   comparación, que es cuando hay algo que saber. */
-.veredicto .cobertura { display: inline; font-size: .75rem; color: var(--tenue); margin-right: .45rem; }
-.veredicto .cobertura.escasa { color: var(--aviso); }
-/* 2.2rem de alto mínimo: a 375 px esto se toca con el dedo, y un objetivo
-   más chico se falla y se descarta el renglón de al lado. Que se pueda
-   deshacer no vuelve gratis equivocarse. */
-.accion {
-  font: inherit; font-size: .82rem; line-height: 1.2; min-height: 2.2rem;
-  padding: .35rem .7rem; cursor: pointer; white-space: nowrap;
-  color: var(--tinta); background: var(--fondo);
-  border: 1px solid var(--linea); border-radius: 999px;
-}
-.accion:hover { border-color: var(--tinta); background: var(--realce); }
-.accion:disabled { cursor: default; opacity: .5; }
-/* Con ratón, el objetivo de 2.2rem sobra y cuesta alto de renglón en una
-   lista de 40: se compacta. Con el dedo —`pointer: coarse`, el teléfono y
-   una pantalla táctil de mostrador— se queda como está. Es la misma regla de
-   arriba dicha por el tipo de puntero y no por el ancho, que es lo que de
-   verdad decide si algo se toca o se apunta. */
-@media (pointer: fine) {
-  .accion { min-height: 1.85rem; padding: .2rem .65rem; font-size: .78rem; }
-  .cantidad-campo, .a-mano input { min-height: 1.9rem; }
-  td.precios > .accion { margin-top: .2rem; }
+.quitar:hover:not(:disabled) { background: var(--relleno-medio); color: var(--mal); }
+.quitar:disabled { cursor: default; opacity: .35; }
+@media (pointer: coarse) {
+  .quitar { width: 2.2rem; height: 2.2rem; }
 }
 
-/* Los descartados, aparte. `<details>` y no una sección siempre abierta:
-   es lo que ya se atendió, así que por omisión no ocupa pantalla, y el
-   navegador ya sabe abrirlo con teclado y anunciarlo. Lo que NO se esconde
-   es cuántos son: eso va en el `<summary>`, que se ve con el bloque
-   cerrado. */
-.descartados { margin: 1.25rem 0 0; border-top: 1px dashed var(--linea); padding-top: .9rem; }
-.descartados summary { cursor: pointer; color: var(--tenue); font-size: .9rem; }
-.descartados ul { margin: .75rem 0 0; }
-.descartados li { flex-wrap: wrap; gap: .3rem .7rem; }
-.descartados .quien { color: var(--tenue); font-size: .8rem; flex: 1 1 100%; }
-.descartados .accion { margin-left: auto; }
-/* EN TRÁNSITO (ticket 24, casilla 4): ATENUADO, NO ESCONDIDO. Un hueco
-   visible es información: lo que viene en camino tiene que seguir leyéndose,
-   con su frase entera, porque es la razón por la que no está en la lista.
-   Opacidad y no `display: none`, y una clase —no un color suelto— para que
-   se distinga también sin distinguir colores. */
-tr.transito, li.transito { opacity: .62; }
+/* EN TRÁNSITO (ticket 24): ATENUADO, NO ESCONDIDO. Un hueco visible es
+   información. Opacidad y no `display: none`, y una clase —no un color
+   suelto—. Además, una barra PUNTEADA al borde: se distingue de la continua de
+   lo agotado sin distinguir colores, y le gana. */
+tr.transito, li.transito { opacity: .55; }
 tr.transito:hover, li.transito:hover { opacity: 1; }
-/* El bloque de lo que viene de listas anteriores. Debajo de la tabla y
-   siempre visible con una lista: un bloque vacío dice "nada en camino", y
-   callar dejaría el silencio con dos significados. */
-.en-camino { margin: 1.25rem 0 0; border-top: 1px dashed var(--linea); padding-top: .9rem; }
-.en-camino .resumen { margin: 0 0 .35rem; color: var(--tenue); font-size: .9rem; }
-.en-camino .advertencia { margin: 0 0 .6rem; color: var(--aviso); font-size: .82rem; }
-.en-camino .resumen.mal { color: var(--mal); }
-.en-camino ul { margin: .35rem 0 0; }
-.en-camino li { flex-wrap: wrap; gap: .1rem .7rem; }
-.en-camino .que { flex: 1 1 60%; }
-.en-camino .cuanto { color: var(--tenue); font-variant-numeric: tabular-nums; }
-.en-camino .cuando, .en-camino .vendido-desde { flex: 1 1 100%; font-size: .82rem; }
-.en-camino .vendido-desde { color: var(--tenue); }
-/* ATRASADO (ticket 25): lo que lleva más de N días sin llegar deja de
-   atenuarse. Es justo lo que hay que mirar, y la clase —no solo el color—
-   es lo que lo distingue sin distinguir colores. */
-li.transito.atrasado { opacity: 1; }
-.en-camino .atraso { flex: 1 1 100%; font-size: .82rem; color: var(--aviso); font-weight: 600; }
-.en-camino .umbral { margin: 0 0 .35rem; color: var(--tenue); font-size: .82rem; }
-.en-camino .umbral.mal { color: var(--mal); }
-.en-camino .pedidos-en-camino, .en-camino .vuelven, .en-camino .faltaron { margin: .9rem 0 0; }
-.en-camino .pedidos-en-camino li, .en-camino .vuelven li, .en-camino .faltaron li { flex-wrap: wrap; gap: .3rem .7rem; }
-/* RECIBIR A MANO (ticket 27): la cifra y su botón, juntos y sin romperse. */
-.a-mano { display: inline-flex; align-items: center; gap: .3rem; }
-/* El campo se ve como el de la cantidad a pedir (ticket 28): sin esto el
-   navegador lo pintaba con su gris de formulario, que en el tema oscuro era un
-   bloque claro sin borde y no se leía como un lugar donde escribir. */
-.a-mano input {
-  width: 4.5rem; min-height: 2.2rem; font: inherit; font-variant-numeric: tabular-nums;
-  text-align: right; padding: .15rem .4rem;
-  color: var(--tinta); background: var(--fondo);
-  border: 1px solid var(--linea); border-radius: .4rem;
-}
-.a-mano input:hover { border-color: var(--tinta); }
-.a-mano input:focus { outline: 2px solid var(--tinta); outline-offset: 1px; }
-.en-camino .explica { flex: 1 1 100%; font-size: .82rem; color: var(--tenue); }
-.en-camino .accion { margin-left: auto; }
-/* LA RECEPCIÓN SUGERIDA (ticket 26). Usa la misma caja que lo que viene en
-   camino —es su otra cara— y va ARRIBA de ella: lo que probablemente ya
-   llegó es lo que hay que atender primero. La evidencia a la vista, entera,
-   y no en un `title`: la persona la tiene que poder juzgar. */
-.recepcion .evidencia { flex: 1 1 100%; font-size: .82rem; margin: 0; padding-left: 1rem; }
-.recepcion .evidencia li { display: list-item; }
-.recepcion .cantidad { flex: 1 1 100%; font-size: .82rem; }
-.recepcion .compartida { flex: 1 1 100%; font-size: .82rem; color: var(--aviso); }
-.recepcion .esperan { margin: .9rem 0 0; }
-.recepcion .esperan li { flex-wrap: wrap; gap: .1rem .7rem; }
-.en-camino .recepcion-marca { flex: 1 1 100%; font-size: .82rem; color: var(--aviso); font-weight: 600; }
-/* LA CONCILIACIÓN DIARIA (ADR 0021). Reusa la caja de "en camino" -es la
-   misma familia de bloque, resumen arriba y una lista abajo- y solo agrega
-   lo que le falta: la frase del pago, el checkbox del lote y las dos marcas
-   que nunca se auto-confirman. Ningún color nuevo: los mismos `--aviso`,
-   `--tenue` y `--mal` de siempre. */
-.conciliacion .pago { flex: 1 1 100%; font-size: .82rem; color: var(--tenue); }
-/* LO QUE PAGA EL MÓDULO ENTERO: cuando de verdad había algo más barato, la
-   frase del pago deja de ser un dato tenue y pasa a ser lo que hay que ver
-   primero. */
-.conciliacion .pago.hallazgo { color: var(--aviso); font-weight: 600; }
-.conciliacion .lote { flex: 1 1 100%; font-size: .82rem; display: inline-flex;
-  align-items: center; gap: .35rem; }
-.conciliacion .sin-comprar li, .conciliacion .compradas-sin-proponer li { flex-wrap: wrap; gap: .1rem .7rem; }
-.conciliacion .suelta.ambiguo { color: var(--aviso); }
-.conciliacion .suelta.descartado { color: var(--mal); }
-/* Existencia y cobertura: a la derecha y con cifras de ancho fijo, que es lo
-   que deja comparar dos renglones sin leerlos. */
-td.numero, th.numero { text-align: right; width: 4.8rem; }
-td.numero { font-variant-numeric: tabular-nums; }
-/* "sin dato" no es un cero y no se pinta como uno: un cero en existencia se
-   lee "agotado", que es lo contrario de "no sé qué queda". */
-td.numero.sindato { color: var(--tenue); font-size: .85em; font-style: italic; }
-/* LA URGENCIA (ticket 28). La lista ya viene ordenada por urgencia; lo que
-   falta es que el renglón agotado se vea agotado sin leerlo. Tres señales y
-   ninguna es solo color: la palabra "agotado" en negrita, el "0" de la
-   existencia en negrita, y una barra gruesa al borde izquierdo del renglón
-   entero (`tr.agotado`). */
-td.numero.urgente { color: var(--mal); font-weight: 700; }
-tr.agotado > td:first-child { box-shadow: inset 4px 0 0 var(--mal); padding-left: .75rem; }
+tr.transito > td:first-child { box-shadow: inset 3px 0 0 transparent; border-left: 3px dotted var(--tercero); padding-left: 13px; }
+/* ATRASADO (ticket 25): deja de atenuarse, y su barra es doble. */
+tr.transito.atrasado { opacity: 1; }
+tr.transito.atrasado > td:first-child { border-left: 4px double var(--aviso-vivo); }
 
-/* LAS MARCAS DE UN RENGLÓN: qué le pasa a ese producto, dicho con palabras
-   debajo de su nombre. Desde el ticket 28 cada clase de marca lleva además un
-   SIGNO a la izquierda, con su propia forma, para que se distingan de un
-   vistazo y sin depender del ámbar o del gris:
+/* LAS MARCAS DE UN RENGLÓN: qué le pasa a ese producto, en insignias debajo
+   de su nombre y con su frase entera en el detalle. Cada clase lleva además
+   un SIGNO, para que se distingan de un vistazo y sin depender del tono:
      ?  en círculo  → sin clasificar: no tiene anaquel conocido
-     !  en cuadro   → algo que alguien tiene que ir a arreglar o a mirar:
-                      fuera del catálogo, atrasado, ya viene en camino
-     →  sin marco   → en tránsito: ya se pidió
+     !  en cuadro   → algo que alguien tiene que ir a arreglar o a mirar
+     →              → en tránsito: ya se pidió
      ✓  punteado    → probablemente recibido: lo dice el sistema, no una
                       persona, y por eso el círculo NO es continuo
      ✓  continuo    → recibido: lo firmó una persona
-     ↺  sin marco   → se dejó de esperar: vuelve en la siguiente lista
+     ↺              → se dejó de esperar: vuelve en la siguiente lista
    El signo va en `::before` y se le quita al lector de pantalla con la
-   sintaxis `content: "x" / ""`: la frase de al lado ya lo dice todo, y oír
-   "signo de interrogación" antes de cada renglón es ruido. Un navegador que
-   no conoce esa sintaxis se queda con la primera declaración y el signo se
-   ve igual. */
-.marca { color: var(--aviso); font-size: .78rem; display: block; font-weight: 400; line-height: 1.35;
-         margin-top: .1rem; }
-/* La marca de abarrote va en gris y no en ámbar: no es un aviso —el anaquel
-   está bien capturado y el dato es correcto—, solo dice qué es. El ámbar se
-   queda para lo que alguien tiene que ir a arreglar en SICAR. */
-.marca.tenue { color: var(--tenue); }
-.marca.sin-clasificar::before, .marca.hueco-catalogo::before, .marca.atrasado::before,
-.marca.hay-que-mirar::before, .marca.en-transito::before, .marca.probable::before,
-.marca.llego::before, .marca.vuelve::before,
-.en-camino .atraso::before, .en-camino .recepcion-marca::before {
-  display: inline-block; width: 1.05rem; height: 1.05rem; margin-right: .35rem;
-  line-height: 1rem; text-align: center; vertical-align: .05em;
-  font-size: .72rem; font-weight: 700; font-style: normal;
-  border: 1px solid currentColor;
+   sintaxis `content: "x" / ""`: la palabra de al lado ya lo dice. */
+.marca::before {
+  display: inline-grid; place-items: center; width: .85rem; height: .85rem;
+  font-size: .62rem; font-weight: 700; font-style: normal; line-height: 1;
 }
+.marca.sin-clasificar::before, .marca.hueco-catalogo::before, .marca.atrasado::before,
+.marca.hay-que-mirar::before, .marca.probable::before, .marca.llego::before,
+.marca.en-transito::before, .marca.vuelve::before { border: 1px solid currentColor; }
 .marca.sin-clasificar::before { content: "?"; content: "?" / ""; border-radius: 50%; }
 .marca.hueco-catalogo::before, .marca.atrasado::before, .marca.hay-que-mirar::before,
 .en-camino .atraso::before { content: "!"; content: "!" / ""; border-radius: 2px; }
@@ -737,177 +695,526 @@ tr.agotado > td:first-child { box-shadow: inset 4px 0 0 var(--mal); padding-left
 .marca.vuelve::before { content: "↺"; content: "↺" / ""; border-color: transparent; }
 /* Sin clasificar y atrasado, además, en negrita: son las dos marcas que piden
    que alguien haga algo hoy. */
-.marca.sin-clasificar, .marca.atrasado { font-weight: 600; }
-.vendido { color: var(--tenue); font-size: .78rem; display: block; }
+.marca.sin-clasificar, .marca.atrasado { font-weight: 700; }
 
-/* EN TRÁNSITO EN LA TABLA. Además de atenuado (arriba), con una barra
-   PUNTEADA al borde izquierdo: se distingue de la barra continua de lo
-   agotado sin distinguir colores, y le gana —lo que ya se pidió no es urgente
-   aunque su existencia sea cero—. */
-tr.transito > td:first-child { box-shadow: none; border-left: 3px dotted var(--tenue); padding-left: .6rem; }
-/* ATRASADO EN LA TABLA (ticket 25): deja de atenuarse, igual que en el bloque
-   de abajo, y su barra es doble. */
-tr.transito.atrasado { opacity: 1; }
-tr.transito.atrasado > td:first-child { border-left: 4px double var(--aviso); }
-
-/* ------------------------------------------------- la tableta y el teléfono */
-
-@media (max-width: 76rem) {
-  /* Por debajo de ~1200 px las ocho columnas NO caben: la de precios sola
-     mide 24rem y el nombre del producto se quedaba en una palabra por línea.
-     Así que la tabla deja de ser rejilla y cada renglón se apila, con su
-     etiqueta pegada a cada cifra. Hasta el ticket 27 esto pasaba solo en el
-     teléfono (34rem), y entre 34 y ~60rem la tabla se salía de la página.
-     Se apila en vez de esconder una columna: un dato que no se ve es un dato
-     que nadie sabe que existe, y esconder la existencia justo aquí sería tan
-     malo como filtrar el renglón. */
-  thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-  table, tbody { display: block; }
-  /* Con la tabla en `block` el `caption` deja de medir el ancho de la
-     rejilla y se encoge a una palabra por renglón. Se le devuelve el ancho
-     a mano. */
-  caption { display: block; }
-  tr { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 .9rem;
-       padding: .55rem .5rem; border-bottom: 1px solid var(--linea); }
-  td { display: block; border: 0; padding: 0; }
-  td.clave, td.producto { flex: 0 0 100%; width: auto; }
-  td.numero, td.cantidad, td.acciones, td.precios, td.proveedor { width: auto; text-align: left; }
-  td.proveedor { flex: 1 1 14rem; margin-top: .45rem; }
-  td.proveedor::before { content: "Se le pide a "; color: var(--tenue); font-size: .78rem; }
-  /* Los cuatro precios ocupan la línea entera. Compartirla con la cantidad
-     los dejaba a media columna y las cifras dejaban de alinearse entre sí,
-     que es lo único que hace comparable una lista de cuatro. */
-  td.precios { flex: 0 0 100%; margin-top: .45rem; max-width: 34rem; }
-  td.numero::before { content: attr(data-etiqueta) " "; color: var(--tenue); font-size: .78rem;
-                      font-weight: 400; }
-  /* La cantidad se va al extremo derecho de su línea: es la cifra que el
-     encargado copia al pedido, y apilada sigue siendo la que se lee sola. */
-  td.cantidad { margin-left: auto; text-align: right; }
-  /* La etiqueta cuelga del número y no de la celda: si colgara de la celda
-     quedaría DEBAJO del "se vendieron 2.5" del granel, y se leería
-     "3 · se vendieron 2.5 · a pedir". */
-  td.cantidad b::after { content: " a pedir"; color: var(--tenue); font-size: .78rem; font-weight: 400; }
-  /* Y la misma etiqueta para el campo editable, que va ANTES porque después
-     del recuadro quedaría colgando del borde derecho de la pantalla. */
-  td.cantidad.editable::before { content: "a pedir "; color: var(--tenue); font-size: .78rem; }
-  /* Las barras de agotado, en tránsito y atrasado pasan de la primera celda
-     al renglón entero, que ahora es una tarjeta. */
-  tr.agotado > td:first-child, tr.transito > td:first-child,
-  tr.transito.atrasado > td:first-child { box-shadow: none; border-left: 0; padding-left: 0; }
-  tr.agotado { box-shadow: inset 4px 0 0 var(--mal); padding-left: .85rem; }
-  tr.transito { box-shadow: none; border-left: 3px dotted var(--tenue); padding-left: .7rem; }
-  tr.transito.atrasado { border-left: 4px double var(--aviso); }
+/* Los descartados, aparte y plegados. Lo que NO se esconde es cuántos son:
+   eso va en el `<summary>`, que se ve con el bloque cerrado. */
+.descartados { border-top: var(--pelo) solid var(--linea); }
+.descartados summary { padding: 10px 16px; cursor: pointer; font: 500 var(--texto-nota) var(--letra); color: var(--acento); }
+.descartados ul { background: var(--hundido); border-radius: 0 0 var(--radio-lg) var(--radio-lg); }
+.descartados li {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 2px 14px;
+  padding: 10px 16px; border-top: var(--pelo) solid var(--linea);
 }
-@media (max-width: 34rem) {
-  /* EL TELÉFONO, medido a 375 px. Todo lo de arriba sigue valiendo; esto es
-     lo que además hace falta cuando la línea mide ~21rem. */
-  .particion .pedido { grid-template-columns: 1fr auto; }
-  td.proveedor { flex: 0 0 100%; }
-  /* El botón se va a su propio renglón, pegado a la izquierda: a 375 px
-     compartir línea con la cantidad dejaba las dos cosas apretadas contra
-     los bordes y el objetivo táctil a menos de 2.2 rem. */
-  td.acciones { flex: 0 0 100%; margin-top: .35rem; }
-  /* A 21rem la cuarta columna de cada proveedor se quedaría en 6rem y el
-     motivo de un hueco se partiría en cinco líneas: vuelve a colgar DEBAJO de
-     su proveedor, desde la segunda columna, como antes del ticket 28. Y la
-     rejilla se permite columnas más anchas y letra un punto más grande
-     (medido en el recorrido del 2026-09-19). */
-  td.precios .precio { grid-template-columns: 5.4rem 5.2rem minmax(0, 1fr); font-size: .85rem; }
-  .precio .marca-gana, .precio .caro, .precio .precio-motivo { grid-column: 2 / -1; }
-  .detalle { display: block; }
+.descartados li > span:first-child { flex: 1 1 12rem; font: var(--texto-subtitulo) var(--letra); color: var(--tenue); }
+.descartados .quien { flex: 1 1 100%; order: 3; font: var(--texto-leyenda) var(--letra); color: var(--tercero); }
+
+/* ----------------------------------------------------------------- el detalle */
+
+.inspector {
+  width: clamp(16.25rem, 24vw, 21.25rem); flex: none; overflow: auto;
+  display: flex; flex-direction: column; gap: 20px; padding: 20px;
+  background: var(--barra); border-left: var(--pelo) solid var(--linea);
+}
+.inspector-cabeza { display: flex; align-items: flex-start; gap: 8px; }
+.inspector-cabeza h3 { flex: 1; font: 600 var(--texto-titulo-tres) var(--letra); text-wrap: pretty; }
+/* La cruz de cerrar solo hace falta cuando el detalle flota encima. */
+#inspector-cerrar { display: none; font-size: 1rem; }
+.inspector-identidad { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: -14px; font: var(--texto-leyenda) var(--letra); color: var(--tenue); }
+.chip-clave { font-family: var(--letra-mono); padding: 2px 6px; border-radius: var(--radio-xs); background: var(--relleno-suave); color: var(--tenue); }
+.chip-clave:empty { display: none; }
+.cifras { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; }
+.cifras div { display: flex; flex-direction: column; gap: 2px; padding: 10px; border-radius: var(--radio-md); background: var(--hundido); }
+.cifras dt { font: var(--texto-leyenda-chica) var(--letra); letter-spacing: .02em; color: var(--tenue); }
+.cifras dd { margin: 0; font: 600 var(--texto-encabezado) var(--letra); font-variant-numeric: tabular-nums; }
+.cifras dd.urgente { color: var(--mal); }
+.cifras dd .propuesta { display: block; font: 400 var(--texto-leyenda-chica) var(--letra); color: var(--tenue); }
+.inspector-bloque { display: flex; flex-direction: column; gap: 8px; }
+.inspector-bloque h4, .inspector-titulo h4 { font: 600 var(--texto-leyenda) var(--letra); color: var(--tenue); }
+.inspector-titulo { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+#inspector-leido { font: var(--texto-leyenda-chica) var(--letra); color: var(--tercero); text-align: right; }
+.inspector-marcas { display: flex; flex-direction: column; gap: 10px; }
+.inspector-marcas li { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px 10px; }
+.inspector-marcas li > .frase { flex: 1 1 10rem; font: var(--texto-nota) var(--letra); text-wrap: pretty; }
+.inspector-marcas li > .a-mano, .inspector-marcas li > .accion { margin-left: auto; }
+/* Los cuatro precios del detalle: cada proveedor con su cifra y, debajo, lo
+   que hay que saber de él —el más barato con todas sus letras, cuánto más
+   caro es, o el motivo de su hueco—. */
+.precios-detalle { display: flex; flex-direction: column; border-radius: var(--radio-md); background: var(--hundido); overflow: hidden; }
+.precio-detalle {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; align-items: baseline;
+  padding: 8px 12px; border-radius: 0; border-bottom: var(--pelo) solid var(--linea);
+}
+.precio-detalle:last-child { border-bottom: 0; }
+.precio-detalle .quien { font: 500 var(--texto-nota) var(--letra); }
+.precio-detalle b { font: 400 var(--texto-nota) var(--letra); font-variant-numeric: tabular-nums; text-align: right; }
+.precio-detalle .sindato { font: italic var(--texto-nota) var(--letra); text-align: right; }
+.precio-detalle .nota-precio {
+  grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 2px 8px;
+  font: var(--texto-leyenda) var(--letra); color: var(--tenue); text-wrap: pretty;
+}
+.precio-detalle .nota-precio .hay { font: inherit; letter-spacing: 0; color: var(--tenue); }
+.precio-detalle .nota-precio .hay.notiene { color: var(--mal); }
+/* Lo que se dice de cada proveedor: el más barato con todas sus letras (verde,
+   o ámbar si nadie confirmó existencia o fue el único), cuánto más caro es que
+   el ganador, y el motivo de su hueco. */
+.precio .marca-gana { color: var(--ok); font-weight: 600; }
+.precio .marca-gana.sinconfirmar, .precio .marca-gana.unico { color: var(--aviso); }
+.precio .caro { color: var(--aviso); font-variant-numeric: tabular-nums; }
+.precio .precio-motivo { color: var(--aviso); }
+.precio-cuando { display: block; font: var(--texto-leyenda) var(--letra); color: var(--tenue); }
+.precio-motivo { display: block; font: var(--texto-leyenda) var(--letra); color: var(--aviso); }
+/* El veredicto: contra cuántos se comparó, por qué no hay ganador cuando no lo
+   hay, y el ahorro contra NADRO. El ahorro se ve por su FORMA y no solo por
+   el verde: una etiqueta con recuadro lleno. Lo que cuesta de más lleva el
+   recuadro punteado, y lo que no se puede calcular va sin recuadro y en
+   cursiva. */
+.veredicto { display: flex; flex-direction: column; gap: 4px; font: var(--texto-nota) var(--letra); }
+.veredicto .cobertura { color: var(--tenue); }
+.veredicto .cobertura.escasa { color: var(--aviso); }
+.veredicto .gano.nadie { color: var(--tenue); font-style: italic; }
+.veredicto .ahorro { font-variant-numeric: tabular-nums; }
+.veredicto .ahorro.gana, .veredicto .ahorro.cuesta {
+  align-self: flex-start; padding: 2px 8px; border: 1px solid; border-radius: var(--radio-sm); font-weight: 700;
+}
+.veredicto .ahorro.gana { color: var(--ok); background: var(--ok-fondo); }
+.veredicto .ahorro.cuesta { color: var(--aviso); background: var(--aviso-fondo); border-style: dashed; }
+.veredicto .ahorro.nose { color: var(--tenue); font-style: italic; }
+.firmas { display: flex; flex-direction: column; gap: 8px; }
+.firmas li { display: flex; flex-direction: column; gap: 1px; font: var(--texto-nota) var(--letra); }
+.firmas .quien { font: var(--texto-leyenda) var(--letra); color: var(--tenue); }
+.firmas .distinta { color: var(--aviso); }
+.inspector-acciones { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; }
+.inspector-acciones:empty { display: none; }
+
+/* RECIBIR A MANO (ticket 27): la cifra y su botón, juntos y sin romperse. El
+   campo se ve como el de la cantidad a pedir. */
+.a-mano { display: inline-flex; align-items: center; gap: 6px; }
+.a-mano input {
+  width: 4.5rem; min-height: 1.75rem; padding: 0 8px; text-align: right;
+  font: var(--texto-nota) var(--letra); font-variant-numeric: tabular-nums;
+  border: 0; border-radius: var(--radio-sm); background: var(--relleno-suave);
 }
 
-/* ------------------------------------------------------------ las pestañas
+/* ------------------------------------------------------- paso 2: repartir */
 
-   Pedido y Buscar (2026-09-28). La activa se distingue por la raya de abajo
-   y la negrita, además del tono: la regla del archivo, nada solo en color.
-   Los paneles no llevan la raya de arriba de las demás secciones: la de las
-   pestañas ya los separa, y dos rayas juntas se leen como un hueco. */
-.pestanas { display: flex; gap: .25rem; border-bottom: 1px solid var(--linea); margin: 0 0 1.25rem; }
-.pestanas button {
-  font: inherit; font-size: .95rem; cursor: pointer; background: none; color: var(--tenue);
-  border: 0; border-bottom: 3px solid transparent; margin-bottom: -1px; padding: .5rem .9rem;
+.particion { display: flex; flex-direction: column; gap: 20px; padding: 24px; }
+.particion-cabeza { display: flex; flex-direction: column; gap: 4px; max-width: 45rem; }
+.particion-cabeza > b { font: 600 var(--texto-titulo-dos) var(--letra); letter-spacing: -0.022em; }
+.particion-cabeza .detalle { font: var(--texto-subtitulo) var(--letra); }
+.pedidos-grilla { display: grid; grid-template-columns: repeat(auto-fill, minmax(16.25rem, 1fr)); gap: 16px; }
+.pedido {
+  display: flex; flex-direction: column; gap: 12px; padding: 18px;
+  border-radius: var(--radio-lg); background: var(--superficie);
 }
-.pestanas button[aria-selected="true"] { color: var(--tinta); font-weight: 600; border-bottom-color: var(--tinta); }
-.pestanas button:focus-visible { outline: 2px solid var(--tinta); outline-offset: 2px; }
-section[role="tabpanel"] { border-top: 0; padding-top: 0; margin-top: 0; }
+.pedido-cabeza { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.pedido .quien { font: 600 var(--texto-encabezado) var(--letra); }
+.pedido .total { font: 700 var(--texto-titulo-uno) var(--letra); letter-spacing: -0.022em; font-variant-numeric: tabular-nums; }
+/* UN TOTAL QUE NO SE SABE NO SE PINTA COMO UNA CIFRA: en gris, en cursiva,
+   nunca "$0.00". Un cero ahí se leería "este pedido no cuesta nada". */
+.pedido .total.nose { color: var(--tercero); font-style: italic; font-weight: 600; font-size: var(--texto-titulo-tres); }
+.pedido .que { font: var(--texto-nota) var(--letra); color: var(--tenue); margin-top: -10px; }
+.pedido .marca { font: var(--texto-leyenda) var(--letra); color: var(--aviso); text-wrap: pretty; }
+.pedido .marca.tenue { color: var(--tenue); }
+/* QUÉ SIGNIFICA ENVIAR, o quién lo capturó: la frase entera, junto al pedido
+   y no como nota al pie. */
+.pedido .envio { font: var(--texto-leyenda) var(--letra); color: var(--tenue); text-wrap: pretty; }
+.pedido .envio.hecho { color: var(--ok); }
+.pedido .acciones { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: auto; }
+.pedido .acciones .accion { flex: 1 1 auto; }
+/* El enlace del CSV (ticket 23): subrayado, porque es un enlace y el color
+   solo no lo dice. */
+.exportar { font: var(--texto-leyenda) var(--letra); color: var(--acento); text-decoration: underline; text-underline-offset: 2px; }
+.sin-decidir {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; max-width: 45rem;
+  padding: 14px 18px; border-radius: var(--radio-lg); background: var(--superficie);
+}
+.sin-decidir .detalle { flex: 1 1 16rem; color: var(--tinta); }
+.particion-pie { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.particion-pie .detalle { flex: 1 1 14rem; }
+
+/* ------------------------------------------- paso 3: capturar y enviar */
+
+.captura-panel { display: flex; min-height: 100%; }
+.captura-pedidos {
+  width: 15rem; flex: none; display: flex; flex-direction: column; gap: 4px; padding: 16px 12px;
+  background: var(--barra); border-right: var(--pelo) solid var(--linea);
+}
+.captura-pedidos > h3 { font: 600 var(--texto-leyenda) var(--letra); color: var(--tercero); padding: 0 8px 6px; }
+.captura-pedidos button {
+  display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 0; border-radius: var(--radio-md);
+  background: transparent; cursor: pointer; text-align: left;
+}
+.captura-pedidos button:hover { background: var(--relleno-tenue); }
+.captura-pedidos button[aria-current="true"] { background: var(--relleno-suave); }
+.captura-pedidos .fila-nombre { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.captura-pedidos .fila-nombre b { font: 600 var(--texto-subtitulo) var(--letra); }
+.captura-pedidos .avance-corto { font: var(--texto-leyenda) var(--letra); color: var(--tenue); font-variant-numeric: tabular-nums; }
+.captura-pedidos .avance-corto.listo { color: var(--ok); font-weight: 600; }
+.barra-avance { height: 4px; border-radius: 2px; background: var(--relleno-suave); overflow: hidden; }
+.barra-avance span { display: block; height: 100%; background: var(--acento); }
+.barra-avance.completa span { background: var(--ok-vivo); }
+.captura-trabajo { flex: 1; min-width: 0; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+.captura-cabeza { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 16px; }
+.captura-cabeza h3 { font: 600 var(--texto-titulo-dos) var(--letra); letter-spacing: -0.022em; }
+.captura-cabeza p { font: var(--texto-subtitulo) var(--letra); color: var(--tenue); }
+.captura-cabeza .exportar {
+  display: inline-flex; align-items: center; min-height: 1.75rem; padding: 0 12px; border-radius: var(--pildora);
+  background: var(--relleno-suave); color: var(--tinta); text-decoration: none; font: 600 .9375rem/1.2 var(--letra);
+}
+/* LA LISTA DE CAPTURA (ticket 22): la casilla, la clave que se copia de un
+   clic, la descripción, las piezas y el precio. */
+.captura { background: var(--superficie); border-radius: var(--radio-lg); overflow: hidden; }
+.captura li {
+  display: grid; grid-template-columns: 1.75rem auto minmax(0, 1fr) auto auto; gap: 4px 12px; align-items: center;
+  padding: 10px 16px; border-bottom: var(--pelo) solid var(--linea);
+}
+.captura li:last-child { border-bottom: 0; }
+.captura li input[type="checkbox"] {
+  width: 1.3rem; height: 1.3rem; margin: 0; cursor: pointer; accent-color: var(--acento);
+}
+.captura li label { cursor: pointer; font: var(--texto-subtitulo) var(--letra); overflow-wrap: anywhere; }
+.captura li .cuantas { font: 600 var(--texto-subtitulo) var(--letra); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.captura li .costo { font: var(--texto-nota) var(--letra); color: var(--tenue); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.captura li .costo.nose { color: var(--tercero); font-style: italic; }
+/* LA CLAVE SE COPIA DE UN CLIC: un botón de verdad, en monoespaciada. */
+.captura .clave, .resultados .clave {
+  justify-self: start; min-height: 1.6rem; padding: 2px 8px; border: 0; border-radius: var(--radio-xs); cursor: copy;
+  font: var(--texto-leyenda) var(--letra-mono); background: var(--relleno-suave); color: var(--tinta); white-space: nowrap;
+}
+.captura .clave:hover, .resultados .clave:hover { background: var(--relleno-medio); }
+.captura .clave.hecho, .resultados .clave.hecho { background: var(--ok-fondo); color: var(--ok); }
+.captura .clave.fallo, .resultados .clave.fallo { background: var(--mal-fondo); color: var(--mal); white-space: normal; }
+.captura .clave.sin { font-family: var(--letra); font-style: italic; color: var(--tenue); cursor: default; background: transparent; box-shadow: inset 0 0 0 1px var(--linea); }
+/* LO TACHADO SE DISTINGUE DE UN VISTAZO, y no solo por color: tachado de
+   verdad, atenuado y con fondo. NO se mueve de sitio: una lista que se
+   reordena bajo el dedo pierde el renglón por el que uno iba. */
+.captura li.hecho { background: var(--hundido); }
+.captura li.hecho label, .captura li.hecho .cuantas, .captura li.hecho .costo {
+  text-decoration: line-through; color: var(--tercero);
+}
+.captura .nota-captura { margin: 0; padding: 8px 16px; font: var(--texto-leyenda) var(--letra); color: var(--mal); }
+.captura .nota-captura:empty { display: none; }
+.captura-pie {
+  display: flex; flex-direction: column; gap: 10px; padding: 16px 18px;
+  border-radius: var(--radio-lg); background: var(--superficie);
+}
+.captura-pie .fila { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.captura-pie .avance { flex: 1 1 14rem; font: 600 var(--texto-encabezado) var(--letra); }
+.captura-pie .avance.completa { color: var(--ok); }
+.captura-pie .envio { font: var(--texto-nota) var(--letra); color: var(--tenue); text-wrap: pretty; }
+.captura-pie .envio.hecho { color: var(--ok); }
+.captura-pie .invitacion { font: var(--texto-nota) var(--letra); color: var(--tenue); }
+.captura-pie .invitacion.lista { color: var(--ok); font-weight: 600; }
+.captura-pie .marca { font: var(--texto-nota) var(--letra); color: var(--aviso); }
+/* El botón de enviar, cuando todo está tachado: es adonde lleva la captura.
+   Solo se resalta —con un anillo— y nunca se apaga por la captura. */
+.accion.listo { box-shadow: 0 0 0 2px var(--ok-vivo); }
+
+/* ------------------------------------------------------------- en camino */
+
+/* La caja de "en camino" sirve a tres bloques —la recepción, lo que viene en
+   camino y la conciliación— que tienen la misma forma: una frase que resume
+   y una lista de tarjetas. */
+.en-camino { display: flex; flex-direction: column; gap: 10px; }
+.en-camino-bloque { display: flex; flex-direction: column; gap: 10px; }
+.recepcion, #en-camino { gap: 28px; }
+.titulo-bloque { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.titulo-bloque h3 { font: 600 var(--texto-titulo-tres) var(--letra); }
+.en-camino .resumen { font: var(--texto-nota) var(--letra); color: var(--tenue); }
+.en-camino .resumen.mal { color: var(--mal); }
+.en-camino .advertencia { font: var(--texto-nota) var(--letra); color: var(--aviso); }
+.en-camino .umbral { font: var(--texto-nota) var(--letra); color: var(--tenue); }
+.en-camino .umbral.mal { color: var(--mal); }
+.en-camino ul { display: flex; flex-direction: column; gap: 10px; }
+.en-camino .tarjeta-lista { gap: 0; border-radius: var(--radio-lg); background: var(--superficie); overflow: hidden; }
+.en-camino .tarjeta-lista > li { border-radius: 0; border-bottom: var(--pelo) solid var(--linea); }
+.en-camino .tarjeta-lista > li:last-child { border-bottom: 0; }
+.en-camino li {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px;
+  padding: 14px 18px; border-radius: var(--radio-lg); background: var(--superficie);
+}
+.en-camino .que { flex: 1 1 60%; font: 600 var(--texto-subtitulo) var(--letra); }
+.en-camino .cuanto { font: var(--texto-nota) var(--letra); color: var(--tenue); font-variant-numeric: tabular-nums; }
+.en-camino .cuando, .en-camino .vendido-desde, .en-camino .explica,
+.en-camino .cantidad, .en-camino .compartida, .en-camino .pago { flex: 1 1 100%; font: var(--texto-nota) var(--letra); }
+.en-camino .vendido-desde, .en-camino .explica { color: var(--tenue); }
+.en-camino .compartida { color: var(--aviso); }
+.en-camino .botones { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; }
+/* ATRASADO (ticket 25): lo que lleva más de N días sin llegar deja de
+   atenuarse y lleva una barra doble al borde, además de la palabra. */
+li.transito.atrasado { opacity: 1; box-shadow: inset 4px 0 0 var(--aviso-vivo); }
+.en-camino .atraso { flex: 1 1 100%; font: 600 var(--texto-nota) var(--letra); color: var(--aviso); }
+.en-camino .atraso::before, .en-camino .recepcion-marca::before {
+  display: inline-grid; place-items: center; width: .9rem; height: .9rem; margin-right: 6px;
+  font-size: .62rem; font-weight: 700; border: 1px solid currentColor;
+}
+.en-camino .recepcion-marca { flex: 1 1 100%; font: 600 var(--texto-nota) var(--letra); color: var(--aviso); }
+/* LA EVIDENCIA, compra por compra, a la vista: la persona la juzga. */
+.recepcion .evidencia { flex: 1 1 100%; display: block; margin: 0; padding-left: 1rem; font: var(--texto-nota) var(--letra); list-style: disc; }
+.recepcion .evidencia li { display: list-item; padding: 0; background: transparent; border-radius: 0; }
+.recepcion .esperan > li { flex-direction: column; flex-wrap: nowrap; align-items: stretch; }
+.recepcion .esperan > li > .explica { flex: none; }
+.recepcion .cuales { gap: 0; }
+.recepcion .cuales li { padding: 8px 0; border-radius: 0; border-top: var(--pelo) solid var(--linea); background: transparent; }
+.pedidos-en-camino .cabeza-pedido { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.pedidos-en-camino .renglones-del-pedido { flex: 1 1 100%; gap: 0; }
+.pedidos-en-camino .renglones-del-pedido li { padding: 8px 0; border-radius: 0; border-top: var(--pelo) solid var(--linea); background: transparent; }
+
+/* LA CONCILIACIÓN DIARIA (ADR 0021): la misma caja, debajo de la tabla. Solo agrega lo que le falta: la frase del pago, la casilla del lote y las dos marcas que nunca se auto-confirman. Ningún color nuevo: los de siempre.
+   */
+.conciliacion { margin: 20px 20px 0; }
+.conciliacion .pago { color: var(--tenue); }
+.conciliacion .pago.hallazgo { color: var(--aviso); font-weight: 600; }
+.conciliacion .lote { flex: 1 1 100%; display: inline-flex; align-items: center; gap: 6px; font: var(--texto-nota) var(--letra); }
+.conciliacion .sin-comprar li, .conciliacion .compradas-sin-proponer li { flex-wrap: wrap; gap: 2px 14px; }
+.conciliacion .suelta.ambiguo { color: var(--aviso); }
+.conciliacion .suelta.descartado { color: var(--mal); }
+
+/* --------------------------------------------- la confirmación antes de cerrar
+
+   El panel del diseño: vidrio grueso, esquinas grandes, el fondo velado. */
+.confirmar-cierre {
+  width: min(30rem, calc(100vw - 2rem)); padding: 20px 20px 24px; color: var(--tinta);
+  border: 0; border-radius: var(--radio-xl);
+  background: var(--material-grueso); box-shadow: var(--sombra-flotante), var(--material-brillo);
+  backdrop-filter: saturate(200%) blur(30px); -webkit-backdrop-filter: saturate(200%) blur(30px);
+}
+.confirmar-cierre::backdrop { background: var(--velo); }
+.confirmar-cierre form { display: flex; flex-direction: column; gap: 14px; }
+.confirmar-cierre h3 { font: 600 var(--texto-titulo-dos) var(--letra); letter-spacing: -0.022em; }
+.confirmar-cierre p { font: var(--texto-subtitulo) var(--letra); color: var(--tenue); }
+.confirmar-cierre .deshacer { font: var(--texto-leyenda) var(--letra); }
+/* LO QUE SE PERDERÍA no se distingue solo por el ámbar: va con barra a la
+   izquierda, con el rótulo "Ojo:" escrito, y cada renglón con su signo. */
+.confirmar-cierre .aviso {
+  display: flex; flex-direction: column; gap: 8px; padding: 12px 14px;
+  border-left: 3px solid var(--aviso); border-radius: var(--radio-md); background: var(--hundido);
+}
+.confirmar-cierre .aviso p { color: var(--tinta); font: var(--texto-nota) var(--letra); }
+.confirmar-cierre .aviso .rotulo { color: var(--aviso); }
+.se-perderia li { display: flex; gap: 8px; align-items: baseline; font: var(--texto-nota) var(--letra); }
+.se-perderia li::before {
+  content: "!"; content: "!" / ""; flex: none; display: inline-grid; place-items: center;
+  width: 1rem; height: 1rem; border: 1px solid var(--aviso); border-radius: 50%;
+  font-size: .7rem; font-weight: 700; color: var(--aviso);
+}
+.confirmar-cierre .botones { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.confirmar-cierre .botones button {
+  min-height: 2.25rem; padding: 0 20px; border: 0; border-radius: var(--pildora); cursor: pointer;
+  font: 600 var(--texto-cuerpo) var(--letra); background: var(--relleno-suave); color: var(--tinta);
+}
+.confirmar-cierre .botones button[value="cerrar"] { background: var(--acento); color: var(--acento-contraste); }
 
 /* ------------------------------------------------------------------ Buscar
 
    Una tarjeta por portal, siempre en el mismo orden y en columnas fijas —no
    `auto-fit`, que bajaba a QuePharma a una segunda hilera en cuanto su
-   contenido no cabía (la misma lección de la pantalla de Doyle)—. Cuatro a
-   lo ancho, dos en la tableta, una en el teléfono. */
-.buscador { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; max-width: 62rem; margin: 0 0 1rem; }
-.buscador > label { flex: 0 0 100%; font-size: .88rem; color: var(--tenue); }
-/* Solo los campos de texto: las casillas de Vigilancia viven en el mismo
-   formulario y con esta regla se estiraban a lo ancho (recorrido del
-   2026-09-28). */
+   contenido no cabía—. Dos a lo ancho, una en el teléfono. */
+.buscador { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; max-width: 40rem; }
 .buscador input[type="search"], .buscador input[type="text"] {
-  flex: 1 1 14rem; font: inherit; padding: .45rem .65rem;
-  color: var(--tinta); background: var(--fondo); border: 1px solid var(--linea); border-radius: 6px;
+  flex: 1 1 14rem; height: 2.25rem; padding: 0 12px; border: 0; border-radius: var(--radio-md);
+  background: var(--relleno-suave); font: var(--texto-cuerpo) var(--letra);
 }
-.buscador input[type="search"]:focus-visible, .buscador input[type="text"]:focus-visible { outline: 2px solid var(--tinta); outline-offset: 1px; }
-.portales { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .9rem; }
-.portal { border: 1px solid var(--linea); border-radius: 8px; padding: .75rem .9rem; min-width: 0; }
+.buscador input::placeholder { color: var(--tenue); }
+.nota.nosotros { padding: 14px 18px; border-radius: var(--radio-lg); background: var(--superficie); color: var(--tinta); font: var(--texto-subtitulo) var(--letra); max-width: 40rem; }
+.portales { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.portal { display: flex; flex-direction: column; min-width: 0; border-radius: var(--radio-lg); background: var(--superficie); overflow: hidden; }
 .portal h3 {
-  display: flex; justify-content: space-between; align-items: baseline; gap: .5rem;
-  font-size: .95rem; margin: 0 0 .5rem;
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  padding: 12px 16px; border-bottom: var(--pelo) solid var(--linea); font: 600 var(--texto-encabezado) var(--letra);
 }
-.estado-portal { font-size: .78rem; font-weight: 400; color: var(--tenue); }
-/* Mientras busca, en cursiva; sin dato, en negrita y con su motivo escrito
+.estado-portal {
+  padding: 2px 8px; border-radius: var(--pildora); white-space: nowrap;
+  font: 600 .75rem/1rem var(--letra); background: var(--relleno-suave); color: var(--tenue);
+}
+/* Mientras busca, en cursiva; sin dato, en ámbar y con su motivo escrito
    debajo. El color acompaña a la palabra, no la sustituye. */
 .portal.esperando .estado-portal { font-style: italic; }
-.portal.sin-dato .estado-portal { font-weight: 600; color: var(--aviso); }
-.portal .que-paso { font-size: .88rem; margin: 0 0 .5rem; }
-.portal .fila { display: flex; flex-wrap: wrap; gap: .5rem; margin: 0 0 .5rem; }
-.portal > .detalle { display: block; margin: .5rem 0 0; }
-.resultados li { display: block; padding: .55rem 0; }
-.resultados .descripcion { display: block; font-size: .9rem; margin-bottom: .2rem; }
-.resultados .cifras { display: block; font-size: .85rem; margin-top: .2rem; font-variant-numeric: tabular-nums; }
-/* Sin existencia: la palabra ya lo dice ("Sin existencia"); la negrita es
-   para verlo sin leer, como `.precio .hay.notiene` en la lista. */
+.portal.sin-dato .estado-portal { background: var(--aviso-fondo); color: var(--aviso); }
+.portal.sirve .estado-portal { background: var(--ok-fondo); color: var(--ok); }
+.portal.esperando-sesion { box-shadow: 0 0 0 2px var(--acento); }
+.portal.esperando-sesion .estado-portal { background: var(--acento-tinte); color: var(--acento); font-style: normal; }
+.portal .que-paso { padding: 14px 16px 0; font: var(--texto-nota) var(--letra); color: var(--tenue); text-wrap: pretty; }
+.portal .fila { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 16px; }
+.portal > .detalle { padding: 0 16px 14px; }
+.resultados li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 16px; padding: 10px 16px; border-bottom: var(--pelo) solid var(--linea); }
+.resultados .descripcion { font: var(--texto-subtitulo) var(--letra); }
+.resultados .cifras { grid-column: 1 / -1; font: var(--texto-nota) var(--letra); color: var(--tenue); font-variant-numeric: tabular-nums; }
+.resultados .clave { grid-row: 1; grid-column: 2; }
+/* Sin existencia: la palabra ya lo dice; la negrita es para verlo sin leer. */
 .resultados li.agotado .cifras { font-weight: 600; color: var(--mal); }
-.resultados .advertencia { display: block; font-size: .8rem; color: var(--aviso); }
+.resultados .advertencia { grid-column: 1 / -1; font: var(--texto-leyenda) var(--letra); color: var(--aviso); }
 .resultados .advertencia::before { content: "!" / ""; font-weight: 700; margin-right: .35rem; }
-.resultados .nuestro { display: block; font-size: .82rem; font-weight: 600; color: var(--ok); margin-top: .2rem; }
+.resultados .nuestro { grid-column: 1 / -1; font: 600 var(--texto-leyenda) var(--letra); color: var(--ok); }
 .resultados .nuestro::before { content: "✓" / ""; margin-right: .35rem; }
-@media (max-width: 76rem) {
-  .portales { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-@media (max-width: 34rem) {
-  .portales { grid-template-columns: minmax(0, 1fr); }
-}
 
 /* -------------------------------------------------------------- Vigilancia
 
-   La pestaña de Vigilancia de Doyle (su ADR 0007). Lo que ya hay lleva una
-   barra y la palabra "ya hay"; el aviso de arriba de las pestañas, su rótulo
-   y su botón. Nada se distingue solo por el color. */
-.avisos-vigilancia { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; border-left: 3px solid currentColor; padding-left: .6rem; }
-.proveedores-vigilancia { flex: 0 0 100%; display: flex; flex-wrap: wrap; gap: .25rem 1.1rem; border: 0; padding: 0; margin: 0; }
-.proveedores-vigilancia legend { font-size: .88rem; color: var(--tenue); padding: 0; margin-bottom: .25rem; }
-.proveedores-vigilancia label { display: inline-flex; align-items: center; gap: .35rem; }
-.revision { display: flex; flex-wrap: wrap; align-items: baseline; gap: .6rem; max-width: 62rem; margin: 0 0 1rem; }
-.vigilados { max-width: 62rem; }
-.vigilados li { display: block; padding: .7rem 0; }
-.vigilados .termino { font-weight: 600; }
-.vigilados .estado-vigilado { font-size: .8rem; color: var(--tenue); margin-left: .35rem; }
-.vigilados li.disponible { border-left: 3px solid var(--ok); padding-left: .7rem; }
-.vigilados li.disponible .estado-vigilado { color: var(--ok); font-weight: 700; }
+   Lo que ya hay lleva una barra, la palabra "ya hay" y su signo. Nada se
+   distingue solo por el color. */
+.revision { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.vigilados { border-radius: var(--radio-lg); background: var(--superficie); overflow: hidden; }
+.vigilados:empty { display: none; }
+.vigilados li {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 14px; align-items: center;
+  padding: 12px 18px; border-bottom: var(--pelo) solid var(--linea);
+}
+.vigilados li:last-child { border-bottom: 0; }
+.vigilados .termino { font: 500 var(--texto-subtitulo) var(--letra); }
+.vigilados .estado-vigilado {
+  grid-column: 2; grid-row: 1; justify-self: end; padding: 2px 8px; border-radius: var(--pildora);
+  font: 600 .75rem/1rem var(--letra); background: var(--relleno-suave); color: var(--tenue);
+}
+.vigilados .detalle, .vigilados .error-vigilado { grid-column: 1 / -1; font: var(--texto-leyenda) var(--letra); }
+.vigilados li.disponible { box-shadow: inset 3px 0 0 var(--ok-vivo); }
+.vigilados li.disponible .estado-vigilado { background: var(--ok-fondo); color: var(--ok); }
 .vigilados li.disponible .estado-vigilado::before { content: "✓" / ""; margin-right: .25rem; }
-.vigilados .detalle, .vigilados .error-vigilado { display: block; margin-top: .2rem; }
-.vigilados .error-vigilado { font-size: .85rem; color: var(--aviso); }
+.vigilados .error-vigilado { color: var(--aviso); }
 .vigilados .error-vigilado::before { content: "!" / ""; font-weight: 700; margin-right: .35rem; }
-.vigilados .fila { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .45rem; }
+.vigilados .fila { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.buscador.vigilar { max-width: 61.25rem; padding: 18px; gap: 14px; }
+.buscador.vigilar > h3 { flex: 0 0 100%; }
+.proveedores-vigilancia { flex: 0 0 100%; display: flex; flex-wrap: wrap; gap: 6px 20px; border: 0; padding: 0; margin: 0; }
+.proveedores-vigilancia legend { font: var(--texto-nota) var(--letra); color: var(--tenue); padding: 0; margin-bottom: 6px; }
+.proveedores-vigilancia label { display: inline-flex; align-items: center; gap: 8px; font: var(--texto-cuerpo) var(--letra); }
+.proveedores-vigilancia input { width: 1.2rem; height: 1.2rem; margin: 0; accent-color: var(--acento); }
 
 /* ---------------------------------------------------------------- Sesiones
 
-   Las tarjetas reusan las de Buscar (`.portal`): una por portal, en el mismo
-   orden. "Caducada" y "sin sesión" van como `sin-dato` —negrita y ámbar, con
-   la palabra escrita—. Con cuatro pestañas, en el teléfono se aprietan un
-   poco en vez de empujar la página hacia los lados. */
-.portal > .detalle { font-size: .82rem; }
+   Una tarjeta por portal. "Caducada" y "sin sesión" van en ámbar con la
+   palabra escrita; la que espera a que alguien entre, con un anillo. */
+.portales.sesiones .portal { padding-bottom: 4px; }
+.portales.sesiones .que-paso { color: var(--tenue); min-height: 2.25rem; }
+
+/* ------------------------------------------------------------------ Estado
+
+   Como las listas agrupadas de Ajustes: un título chico en mayúsculas, los
+   renglones en una tarjeta, y una nota al pie. */
+.grupo-lista { display: flex; flex-direction: column; gap: 6px; }
+.grupo-lista-titulo { padding: 0 16px; font: var(--texto-nota) var(--letra); letter-spacing: .02em; text-transform: uppercase; color: var(--tenue); }
+.grupo-lista-pie { padding: 0 16px; font: var(--texto-nota) var(--letra); color: var(--tenue); }
+.grupo-lista ul { border-radius: var(--radio-lg); background: var(--superficie); overflow: hidden; }
+.grupo-lista li {
+  display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 10px 16px;
+  border-bottom: var(--pelo) solid var(--linea);
+}
+.grupo-lista li:last-child { border-bottom: 0; }
+.grupo-lista li > span:nth-child(2) { flex: 1; }
+.grupo-lista li .detalle { font: var(--texto-subtitulo) var(--letra); text-align: right; }
+
+/* ------------------------------------------------- el detalle, encima
+
+   Por debajo de ~1280 px el detalle ya no cabe al lado de la tabla sin
+   apretarla: se abre ENCIMA, desde la derecha, al tocar un renglón, y se
+   cierra con su cruz o con Esc. */
+@media (max-width: 80rem) {
+  .inspector {
+    position: fixed; top: 0; right: 0; bottom: 0; z-index: 40; width: min(22rem, 100vw);
+    background: var(--material-grueso); box-shadow: var(--sombra-flotante), var(--material-brillo);
+    backdrop-filter: saturate(200%) blur(30px); -webkit-backdrop-filter: saturate(200%) blur(30px);
+    border-left: 0;
+  }
+  #inspector-cerrar { display: inline-flex; }
+}
+
+/* ------------------------------------------------------------ la tableta
+
+   Por debajo de 1024 px la barra lateral se vuelve una franja arriba, con las
+   secciones en una fila que se desliza, y la página vuelve a desplazarse
+   entera. */
+@media (max-width: 64rem) {
+  .app { display: block; height: auto; }
+  .lateral {
+    position: sticky; top: 0; z-index: 30; width: auto; flex-direction: row; align-items: center; gap: 12px;
+    padding: 8px 12px; overflow-x: auto; border-right: 0; border-bottom: var(--pelo) solid var(--linea);
+    background: var(--material); backdrop-filter: saturate(200%) blur(30px); -webkit-backdrop-filter: saturate(200%) blur(30px);
+  }
+  .marca-app { padding: 0 4px; flex: none; }
+  .lema-app { display: none; }
+  .pestanas { flex-direction: row; gap: 4px; }
+  .pestanas [role="tab"] { white-space: nowrap; }
+  .pestanas [data-grupo] { margin-top: 0; }
+  .pestanas [data-grupo]::before { display: none; }
+  .pestanas .estado-lateral { margin-top: 0; flex-direction: row; align-items: center; padding: 6px 10px; }
+  .estado-lateral-detalle { display: none; }
+  .contenido, .panel-pedido, .paso.revisar, .panel { overflow: visible; }
+  .paso, .lista-de-trabajo { overflow: visible; }
+  thead th { top: 3.1rem; }
+  .panel-ancho, .panel-angosto { padding: 20px 16px 40px; }
+  .captura-panel { flex-direction: column; }
+  .captura-pedidos { width: auto; flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: var(--pelo) solid var(--linea); }
+  .captura-pedidos > h3 { display: none; }
+  .captura-pedidos button { flex: 0 0 12rem; }
+}
+
+/* ------------------------------------------------- la tabla, apilada
+
+   Por debajo de ~830 px las diez columnas NO caben: la tabla deja de ser
+   rejilla y cada renglón se apila en una tarjeta, con su etiqueta pegada a
+   cada cifra. Se apila en vez de esconder una columna: un dato que no se ve
+   es un dato que nadie sabe que existe. */
+@media (max-width: 52rem) {
+  thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  table, tbody { display: block; }
+  caption { display: block; }
+  tr { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px;
+       padding: 10px 14px; border-bottom: var(--pelo) solid var(--linea); }
+  td { display: block; border: 0; padding: 0; }
+  th:first-child, td:first-child, th:last-child, td:last-child { padding: 0; }
+  td.producto { flex: 0 0 100%; min-width: 0; }
+  .ver-renglon { white-space: normal; }
+  td.numero, td.cantidad, td.acciones, td.proveedor { width: auto; text-align: left; }
+  td.numero::before { content: attr(data-etiqueta) " "; color: var(--tenue); font-size: .75rem; font-weight: 400; }
+  td.cantidad { margin-left: auto; text-align: right; }
+  td.cantidad::before { content: "a pedir "; color: var(--tenue); font-size: .75rem; }
+  /* Los cuatro precios en una línea entera, cada uno con su proveedor
+     encima: compartirla con la cantidad dejaba las cifras desalineadas. */
+  td.precio-celda { flex: 1 1 20%; width: auto; text-align: left; }
+  td.precio-celda::before { content: attr(data-etiqueta); display: block; padding-left: 6px; color: var(--tenue); font-size: .6875rem; }
+  .precio { align-items: flex-start; }
+  td.hueco-celda { flex: 0 0 100%; }
+  /* La escala ocupa la línea entera, con su etiqueta encima. */
+  td.escala-celda { flex: 0 0 100%; min-width: 0; }
+  td.escala-celda::before { content: attr(data-etiqueta); display: block; color: var(--tenue); font-size: .6875rem; }
+  td.escala-celda.hueco-celda::before { content: none; }
+  td.proveedor { flex: 1 1 12rem; }
+  td.proveedor::before { content: "Se le pide a "; color: var(--tenue); font-size: .75rem; }
+  /* Las barras de agotado, en tránsito y atrasado pasan de la primera celda
+     al renglón entero, que ahora es una tarjeta. */
+  tr.agotado > td:first-child, tr.transito > td:first-child,
+  tr.transito.atrasado > td:first-child { box-shadow: none; border-left: 0; padding-left: 0; }
+  tr.agotado { box-shadow: inset 4px 0 0 var(--mal-vivo); }
+  tr.transito { border-left: 3px dotted var(--tercero); }
+  tr.transito.atrasado { border-left: 4px double var(--aviso-vivo); }
+  .barra-lista .orden { display: none; }
+  .filtro { flex: 1 1 10rem; width: auto; }
+  .portales { grid-template-columns: minmax(0, 1fr); }
+}
+
 @media (max-width: 34rem) {
-  .pestanas button { padding: .5rem .5rem; font-size: .9rem; }
+  /* EL TELÉFONO, medido a 375 px. Todo lo de arriba sigue valiendo; esto es
+     lo que además hace falta cuando la línea mide ~21rem. */
+  .barra-dia { padding: 10px 12px; }
+  .pasos { order: 5; margin-inline: 0; width: 100%; overflow-x: auto; }
+  .pasos button { padding-right: 10px; }
+  .tarjeta-tabla, .conciliacion { margin-inline: 8px; }
+  .barra-lista { padding-inline: 8px; }
+  #pedido-accion, #pedido-nota { margin-inline: 8px; }
+  .armado, .barra-estado .detalle, .avisos-resumen { padding-left: 34px; padding-right: 12px; }
+  .armado::before { left: 14px; }
+  .avisos-lista { padding: 0 12px 10px 12px; }
+  .aviso-fila { grid-template-columns: minmax(0, 1fr); }
+  td.proveedor { flex: 0 0 100%; }
+  /* El botón de descartar se va a su propio renglón: a 375 px compartir línea
+     con la cantidad dejaba el objetivo táctil apretado contra el borde. */
+  td.acciones { flex: 0 0 100%; text-align: right; }
+  .particion, .captura-trabajo { padding: 16px 8px; }
+  .captura li { grid-template-columns: 1.75rem auto minmax(0, 1fr); }
+  .captura li label { grid-column: 1 / -1; order: 3; }
+  .captura li .cuantas { order: 4; text-align: left; grid-column: 1 / 3; }
+  .captura li .costo { order: 5; }
+  .vistas { width: 100%; }
+  .vistas label { flex: 1; padding: 0 8px; }
+  .detalle { display: block; }
 }

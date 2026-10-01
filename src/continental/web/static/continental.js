@@ -235,14 +235,33 @@ const celdaDeCifra = (valor, etiqueta, sufijo, urgente) => {
 // compara en tres lugares.
 const DESCARTADO = 'descartado';
 
-const botonDeAccion = (texto, alHacerClic) => {
+// `estilo` es la variante del botón del diseño (2026-09-30): sin ella es el
+// gris chico de siempre; 'llena' es la acción principal de un lugar —una
+// sola—, 'tenida' la que se ofrece al lado, y 'plana' la que casi no pesa.
+const botonDeAccion = (texto, alHacerClic, estilo) => {
   const boton = document.createElement('button');
   boton.type = 'button';
-  boton.className = 'accion';
+  boton.className = 'accion' + (estilo ? ' ' + estilo : '');
   boton.textContent = texto;
   boton.onclick = () => alHacerClic(boton);
   return boton;
 };
+
+// Una insignia: una palabra en una cápsula teñida. El tono acompaña a la
+// palabra, nunca la sustituye.
+const insignia = (texto, tono, clase) => {
+  const span = document.createElement('span');
+  span.className = 'insignia' + (tono ? ' ' + tono : '') + (clase ? ' ' + clase : '');
+  span.textContent = texto;
+  return span;
+};
+
+// La hora sola, "7:40 a. m.", para donde el día ya se lee al lado (la barra
+// del día, la firma de un envío de hoy). Es el mismo instante con zona que
+// `instanteEnPalabras`, dicho más corto.
+const horaEnPalabras = (iso) => new Date(iso).toLocaleTimeString('es-MX', {
+  hour: 'numeric', minute: '2-digit'
+});
 
 // La celda de la cantidad, que desde el ticket 11 es dos cosas según el estado
 // de la LISTA:
@@ -300,33 +319,17 @@ const celdaDeCantidad = (r, editable, alAjustar) => {
     td.append(numero);
   }
 
-  // Las dos cifras a la vista cuando no son la misma. Es lo que el ticket pide
-  // ver, y lo que hace evidente que la propuesta del sistema NO se sobreescribió.
-  if (r.difiere_de_la_propuesta) {
-    const propuesta = document.createElement('span');
-    propuesta.className = 'propuesta';
-    propuesta.textContent = 'el sistema propuso ' + r.cantidad_propuesta;
-    td.append(propuesta);
-  }
-
-  // Solo para granel: si se vendieron 2.5 y se proponen 3, la diferencia se
-  // dice. Callarla haría que la propuesta no cuadre con el ticket.
-  if (r.piezas_vendidas !== r.cantidad_propuesta) {
-    const vendido = document.createElement('span');
-    vendido.className = 'vendido';
-    vendido.textContent = 'se vendieron ' + r.piezas_vendidas;
-    td.append(vendido);
-  }
-
-  // Quién la cambió, a la vista. Aparece aunque la cantidad haya quedado igual
-  // que la propuesta: confirmar el número del sistema también es una decisión, y
-  // es la que dice que la reposición 1 a 1 acertó ese día.
+  // QUE ALGUIEN LA DECIDIÓ, en la fila: un punto de acento junto a la cifra
+  // (diseño del 2026-09-30). Las dos cifras —la propuesta y la final—, quién
+  // la cambió y cuándo se dicen enteras en el detalle del renglón
+  // (`firmasDelRenglon`): la fila no tiene sitio para tres renglones más en
+  // cada celda, y el punto es lo que avisa que hay algo que leer ahí.
   if (r.fue_ajustada) {
-    const firma = document.createElement('span');
-    firma.className = 'ajustada';
-    firma.textContent = 'ajustada por ' + (r.ajustada_por || 'sin-identificar');
-    if (r.ajustada_en) firma.title = instanteEnPalabras(r.ajustada_en);
-    td.append(firma);
+    const punto = document.createElement('span');
+    punto.className = 'ajuste-punto';
+    punto.title = (r.difiere_de_la_propuesta ? 'El sistema propuso ' + r.cantidad_propuesta + '. ' : '')
+      + 'Ajustada por ' + (r.ajustada_por || 'sin-identificar');
+    td.prepend(punto);
   }
 
   return td;
@@ -432,6 +435,15 @@ const veredicto = (comparacion) => {
 // puesta en una fila: a cómo está el producto en cada proveedor, cuál gana y
 // cuánto se ahorra.
 //
+// Desde el diseño del 2026-09-30 vive en DOS sitios, y cada uno dice lo suyo:
+//
+// - **La fila**: una columna por proveedor, con su precio y debajo cuántas
+//   tiene (`celdasDePrecio`). El más barato salta solo, con fondo y negrita, y
+//   las cuatro cifras quedan alineadas entre sí.
+// - **El detalle del renglón**: cada proveedor con todo lo que hay que saber
+//   de él —el más barato con todas sus letras, cuánto más caro es, el motivo
+//   de su hueco—, el veredicto y cuándo se leyó (`preciosDelDetalle`).
+//
 // **Ninguna cifra se calcula aquí, y ninguna regla se decide aquí.** El precio
 // llega como CADENA desde el servidor —el JSON de JavaScript solo tiene coma
 // flotante, y meter dinero ahí justo en el borde donde acababa de salir es la
@@ -440,21 +452,289 @@ const veredicto = (comparacion) => {
 // `comparacion.py`, que es una función pura con su tabla de casos. Aquí solo se
 // pregunta por banderas: `es_ganador`, `es_ahorro`, `la_referencia_gana`.
 //
-// La razón es la misma que la de `vistas.py`: si la regla que decide a quién
-// comprarle viviera en este archivo, viviría en el único que ninguna prueba de
-// Python mira, y el día que alguien "limpiara" la vista se perdería sin que
-// nada se pusiera rojo.
+// Tres aspectos distintos y no tres tonos del mismo gris: el ganador con fondo
+// y negrita; el que no lo tiene, tachado y con "no tiene"; los huecos en
+// cursiva, en gris y con su motivo. Un proveedor sin dato NUNCA se pinta como
+// cero, como vacío ni como el más caro (regla 4 de CLAUDE.md).
+
+// Las columnas de precio, en el orden y con los nombres que manda el servidor
+// (`datos.puente`). Un servidor viejo que no los mande: las casillas de la
+// comparación, en su orden.
+const columnasDeProveedor = (casillas) => PROVEEDORES.length
+  ? PROVEEDORES
+  : casillas.map(c => ({ proveedor: c.proveedor, nombre: c.nombre }));
+
+// Lo que dice la existencia que reportó el portal, en corto. Se pinta tal como
+// llegó —"+100" dice más que "100"—, y "pzs" solo se agrega a una cifra.
+const existenciaEnCorto = (c) => {
+  if (c.estado === 'sin existencia') return 'no tiene';
+  if (c.estado === 'no dijo existencia') return '¿hay?';
+  const dicho = c.existencia_como_llego || '';
+  return /^\+?\d+$/.test(dicho) ? dicho + ' pzs' : dicho;
+};
+
+// POR QUÉ ESTE RENGLÓN NO TIENE NI UNA LECTURA (ticket 19, primera casilla).
 //
-// Tres aspectos distintos y no tres tonos del mismo gris (quinta casilla):
-// el ganador con fondo, borde y su palabra; los caros con la diferencia en
-// ámbar y alineada como número; los huecos en cursiva, en gris y con su motivo.
-// Un proveedor sin dato NUNCA se pinta como cero, como vacío ni como el más
-// caro (regla 4 de CLAUDE.md).
-const celdaDePrecios = (r, acciones) => {
+// Hasta el ticket 18 aquí no había nada: "el lote se cortó por tiempo antes de
+// llegar a éste" se veía IGUAL que "nadie lo ha consultado nunca". Eran dos
+// cosas que se arreglan distinto.
+//
+// **La frase viene hecha del servidor** y esta pantalla no elige entre
+// literales suyos: la decide `faltantes.por_que_no_hay_lectura`, que es una
+// función pura con su tabla de casos y sus pruebas.
+//
+// `seguro` en falso no invalida el motivo: lo matiza. Esa noche el tope cortó
+// Y ADEMÁS hubo renglones que no se pudieron consultar, así que de éste no se
+// puede afirmar cuál de los dos le tocó (ADR 0007). Se escribe "probablemente"
+// en vez de elegir uno a cara o cruz. `completo` agrega la explicación: en la
+// fila no cabe, en el detalle sí.
+const motivoSinLectura = (porque, completo) => {
+  const caja = document.createElement('span');
+  // ÁMBAR y no ROJO para «el lote se negó a correr»: es la sonda de sesiones
+  // (ADR 0019) haciendo justo lo que se le pide -negarse antes de escribir
+  // precios tuertos-, no una falla desconocida que manda al journal.
+  caja.className = 'hueco-motivo'
+    + (porque.motivo === 'al lote se le acabó el tiempo'
+       || porque.motivo === 'el lote se negó a correr: falta abrir una sesión'
+         ? ' tope' : '')
+    + (porque.motivo === 'la corrida del lote se cortó'
+       || porque.motivo === 'el lote lo intentó y no pudo' ? ' falla' : '');
+  const titular = document.createElement('b');
+  titular.textContent = porque.seguro ? porque.motivo : 'probablemente: ' + porque.motivo;
+  if (!porque.seguro) titular.className = 'quiza';
+  caja.append(titular);
+  if (completo) caja.append(' — ' + porque.explicacion);
+  else caja.title = porque.explicacion;
+  return caja;
+};
+
+// LA FILA, VARIANTE «REJILLA»: una celda por proveedor. Si el renglón no tiene
+// ni una lectura, una sola celda que ocupa las cuatro, con el motivo.
+const celdasDeRejilla = (r) => {
+  const comparacion = r.comparacion || null;
+  const casillas = (comparacion && comparacion.por_proveedor) || [];
+  const columnas = columnasDeProveedor(casillas);
+  const porque = r.porque_no_hay_lectura;
+
+  if (porque && !casillas.length) {
+    const td = document.createElement('td');
+    td.className = 'hueco-celda';
+    td.colSpan = columnas.length || 4;
+    td.dataset.etiqueta = 'Precio';
+    td.append(motivoSinLectura(porque, false));
+    return [td];
+  }
+
+  const porProveedor = new Map(casillas.map(c => [c.proveedor, c]));
+  return columnas.map(p => {
+    const td = document.createElement('td');
+    td.className = 'precio-celda';
+    td.dataset.etiqueta = p.nombre;
+    const caja = document.createElement('div');
+    const c = porProveedor.get(p.proveedor);
+    // Dos avisos distintos y por eso dos clases: "nadie confirmó que lo tenga"
+    // y "fue el único que contestó". El verde entero es solo para el ganador
+    // que no tiene ninguno de los dos.
+    caja.className = 'precio'
+      + (c && c.es_ganador ? ' gana' : '')
+      + (c && c.es_ganador && !comparacion.ganador.con_existencia ? ' sinconfirmar' : '')
+      + (c && c.es_ganador && comparacion.ganador.es_unico ? ' unico' : '')
+      + (c && c.estado === 'sin existencia' ? ' notiene' : '');
+
+    // La cifra es un `<b>`; el hueco es un `<span>` en cursiva. Son dos
+    // elementos distintos a propósito: la diferencia tiene que verse aunque
+    // alguien mire la pantalla de lejos o con reflejo.
+    const cifraOhueco = document.createElement(c && c.precio ? 'b' : 'span');
+    const hay = document.createElement('span');
+    hay.className = 'hay';
+    if (c && c.precio) {
+      cifraOhueco.textContent = '$' + c.precio;
+      hay.textContent = existenciaEnCorto(c);
+      if (c.estado === 'sin existencia') hay.className = 'hay notiene';
+      if (c.estado === 'no dijo existencia') hay.className = 'hay nodijo';
+    } else {
+      cifraOhueco.className = 'sindato';
+      cifraOhueco.textContent = !c || c.estado === 'sin consultar' ? 'sin consultar' : 'sin dato';
+    }
+    caja.append(cifraOhueco, hay);
+
+    // Lo que no cabe en la casilla va en su `title` —el motivo del hueco, la
+    // diferencia contra el ganador— y entero en el detalle del renglón, que es
+    // donde se lee en una pantalla táctil.
+    const dicho = [p.nombre];
+    if (c && c.es_ganador) dicho.push(comparacion.ganador.certeza);
+    if (c && c.diferencia) {
+      dicho.push(c.mas_barato_que_el_ganador
+        ? c.diferencia_magnitud + ' más barato por pieza, pero no lo tiene'
+        : '+$' + c.diferencia_magnitud + ' por pieza');
+    }
+    if (c && c.motivo) dicho.push(c.motivo_explicado || c.motivo);
+    td.title = dicho.filter(Boolean).join(' · ');
+    td.append(caja);
+    return td;
+  });
+};
+
+// LA FILA, VARIANTE «ESCALA»: UNA sola celda por renglón. A la izquierda el
+// ganador —su precio y quién es—; a la derecha, si hay dos precios o más, una
+// recta de más barato a más caro con un punto por proveedor que dio precio, y
+// debajo el mínimo, cuántos contestaron y el máximo.
+//
+// **Ninguna cifra que se lee se calcula aquí.** El precio llega como cadena y
+// se escribe tal cual (`'$' + c.precio`); el mínimo y el máximo del pie son las
+// cadenas de las casillas que tienen el precio menor y el mayor. La ÚNICA
+// conversión a número es `posicionEnLaEscala`, y su resultado es un porcentaje
+// de ancho para colocar un punto: posición en pantalla, nunca una cifra que se
+// enseñe ni una regla. Quién gana, el empate y la certeza vienen del servidor.
+const posicionEnLaEscala = (casillas) => {
+  const numerico = (c) => parseFloat(c.precio);
+  let menor = casillas[0];
+  let mayor = casillas[0];
+  casillas.forEach(c => {
+    if (numerico(c) < numerico(menor)) menor = c;
+    if (numerico(c) > numerico(mayor)) mayor = c;
+  });
+  const ancho = numerico(mayor) - numerico(menor);
+  // Todos al mismo precio: no hay escala que dibujar, y dividir entre cero
+  // pondría los puntos fuera de la recta. Se centran.
+  const donde = (c) => ancho > 0 ? ((numerico(c) - numerico(menor)) / ancho) * 100 : 50;
+  return { menor, mayor, donde };
+};
+
+const celdaDeEscala = (r) => {
+  const comparacion = r.comparacion || null;
+  const casillas = (comparacion && comparacion.por_proveedor) || [];
+  const porque = r.porque_no_hay_lectura;
+
   const td = document.createElement('td');
-  td.className = 'precios';
   td.dataset.etiqueta = 'Precio';
 
+  // Sin una sola lectura: el motivo, igual que en la rejilla.
+  if (porque && !casillas.length) {
+    td.className = 'escala-celda hueco-celda';
+    td.append(motivoSinLectura(porque, false));
+    return td;
+  }
+  td.className = 'escala-celda';
+  const caja = document.createElement('div');
+  caja.className = 'escala';
+
+  // ---- A la izquierda: el ganador.
+  const g = comparacion ? comparacion.ganador : null;
+  const hayGanador = !!(g && g.proveedores && g.proveedores.length && g.precio);
+  const empate = hayGanador && g.proveedores.length > 1;
+  const izquierda = document.createElement('div');
+  izquierda.className = 'escala-ganador'
+    + (hayGanador && !g.con_existencia ? ' sinconfirmar' : '')
+    + (hayGanador && g.es_unico ? ' unico' : '');
+  const cifraOhueco = document.createElement(hayGanador ? 'b' : 'span');
+  const quien = document.createElement('span');
+  quien.className = 'escala-quien';
+  if (hayGanador) {
+    cifraOhueco.textContent = '$' + g.precio;
+    quien.textContent = empate
+      ? 'empate ' + (g.nombres || []).join(' y ')
+      : (g.nombres && g.nombres[0]) || '';
+    // La certeza, tal como la dice el servidor: es lo que el verde, el ámbar y
+    // el "?" solo insinúan.
+    if (g.certeza) izquierda.title = g.certeza;
+  } else {
+    cifraOhueco.className = 'sindato';
+    cifraOhueco.textContent = 'sin dato';
+    // La frase la dice el servidor (`ganador.motivo`); lo único propio es el
+    // caso sin comparación alguna, que es "nadie lo ha consultado".
+    quien.textContent = (g && g.motivo) || 'sin consultar';
+    if (g && g.motivo) izquierda.title = g.motivo;
+  }
+  izquierda.append(cifraOhueco, quien);
+
+  // ---- A la derecha: la recta, solo con dos precios o más.
+  const conPrecio = casillas.filter(c => c.precio);
+  const total = (comparacion && comparacion.consultados) || PROVEEDORES.length;
+  const dieron = comparacion ? comparacion.con_precio : 0;
+  // El ámbar lo decide el servidor (`se_comparo`, la misma bandera de
+  // `veredicto()` para `.cobertura.escasa`); aquí no hay umbral. Con cero
+  // proveedores no hay conteo que enseñar.
+  const cuantos = document.createElement('span');
+  cuantos.className = 'escala-cuantos'
+    + (comparacion && !comparacion.se_comparo ? ' poco' : '');
+  cuantos.textContent = dieron + ' de ' + total + ' dieron precio';
+  const cuantosCorto = document.createElement('span');
+  cuantosCorto.className = cuantos.className;
+  cuantosCorto.textContent = dieron + '/' + total + ' con precio';
+  cuantosCorto.title = cuantos.textContent;
+
+  const derecha = document.createElement('div');
+  derecha.className = 'escala-recta';
+  if (conPrecio.length >= 2) {
+    derecha.setAttribute('role', 'img');
+    derecha.setAttribute('aria-label', conPrecio.length + ' proveedores con precio');
+    const { menor, mayor, donde } = posicionEnLaEscala(conPrecio);
+    const linea = document.createElement('div');
+    linea.className = 'escala-linea';
+    conPrecio.forEach(c => {
+      const punto = document.createElement('span');
+      punto.className = 'escala-punto'
+        + (c.es_ganador ? ' gana' : '')
+        + (c.es_ganador && g && !g.con_existencia ? ' sinconfirmar' : '')
+        + (c.es_ganador && g && g.es_unico ? ' unico' : '')
+        + (c.estado === 'sin existencia' ? ' notiene' : '');
+      punto.style.left = donde(c) + '%';
+      punto.title = c.nombre + ' $' + c.precio
+        + (c.estado === 'sin existencia' ? ' · no lo tiene' : '');
+      punto.setAttribute('aria-label', punto.title);
+      linea.append(punto);
+    });
+    const pie = document.createElement('div');
+    pie.className = 'escala-pie';
+    // El extremo de un proveedor que no lo tiene no se presenta como el
+    // mínimo "bueno": tachado y en rojo, con su palabra en el `title`.
+    const extremo = (c) => {
+      const marca = document.createElement('span');
+      marca.textContent = '$' + c.precio;
+      if (c.estado === 'sin existencia') {
+        marca.className = 'notiene';
+        marca.title = c.nombre + ' · no lo tiene';
+      }
+      return marca;
+    };
+    pie.append(extremo(menor), total ? cuantosCorto : '', extremo(mayor));
+    derecha.append(linea, pie);
+  } else {
+    derecha.classList.add('sola');
+    if (total) derecha.append(cuantos);
+  }
+  caja.append(izquierda, derecha);
+
+  // Los motivos de los huecos, en el `title` de la celda y enteros en el
+  // detalle del renglón.
+  const huecos = casillas
+    .filter(c => !c.precio && c.motivo)
+    .map(c => c.nombre + ': ' + (c.motivo_explicado || c.motivo));
+  if (huecos.length) td.title = huecos.join(' · ');
+  td.append(caja);
+  return td;
+};
+
+// CÓMO SE COMPARAN LOS CUATRO EN LA FILA. Existen las dos variantes y conviven
+// a propósito: el dueño probó la escala el 2026-09-30 y eligió la rejilla. La
+// escala se queda, sin uso, para poder volver a probarla cambiando solo esta
+// constante, sin reescribir nada.
+//   'rejilla' cuatro columnas, una por proveedor, con su precio y su existencia.
+//   'escala'  una columna: el ganador y una recta de más barato a más caro.
+// El detalle del renglón no depende de esta elección: siempre trae los cuatro.
+const COMPARACION_EN_LA_FILA = 'rejilla'; // o 'escala'
+const EN_ESCALA = COMPARACION_EN_LA_FILA === 'escala';
+
+const celdasDePrecio = (r) => EN_ESCALA ? [celdaDeEscala(r)] : celdasDeRejilla(r);
+
+// EL DETALLE: cada proveedor en su línea, con lo que hay que saber de él. Lo
+// que devuelve son tres piezas porque van en tres sitios del detalle: el
+// cuerpo, cuándo se leyó (arriba a la derecha) y el botón de volver a
+// consultar (abajo, con las demás acciones).
+const preciosDelDetalle = (r, acciones) => {
+  const cuerpo = document.createElement('div');
+  cuerpo.className = 'precios-del-detalle';
   const precios = Array.isArray(r.precios) ? r.precios : [];
   const comparacion = r.comparacion || null;
   const consulta = r.consulta || null;
@@ -463,172 +743,110 @@ const celdaDePrecios = (r, acciones) => {
   // llave.
   const porClave = new Map(precios.map(p => [p.proveedor, p]));
   const casillas = (comparacion && comparacion.por_proveedor) || [];
-
-  // POR QUÉ ESTE RENGLÓN NO TIENE NI UNA LECTURA (ticket 19, primera casilla).
-  //
-  // Hasta el ticket 18 aquí no había nada: un renglón sin lecturas se veía
-  // como una celda con un botón, y "el lote se cortó por tiempo antes de
-  // llegar a éste" se veía IGUAL que "nadie lo ha consultado nunca". Eran dos
-  // cosas que se arreglan distinto y la diferencia solo vivía en el journal
-  // del lote, o sea en un `ssh`.
-  //
-  // **La frase viene hecha del servidor** y esta pantalla no elige entre
-  // literales suyos: la decide `faltantes.por_que_no_hay_lectura`, que es una
-  // función pura con su tabla de casos y sus pruebas. Es exactamente el error
-  // que el ticket 15 arregló con la certeza del ganador, y que estaba en el
-  // único archivo que ninguna prueba de Python mira.
-  //
-  // `seguro` en falso no invalida el motivo: lo matiza. Esa noche el tope
-  // cortó Y ADEMÁS hubo renglones que no se pudieron consultar, así que de
-  // éste no se puede afirmar cuál de los dos le tocó (ADR 0007). Se escribe
-  // "probablemente" en vez de elegir uno a cara o cruz.
   const porque = r.porque_no_hay_lectura;
-  if (porque && !casillas.length) {
-    const caja = document.createElement('span');
-    // ÁMBAR y no ROJO para «el lote se negó a correr»: es la sonda de
-    // sesiones (ADR 0019) haciendo justo lo que se le pide -negarse antes de
-    // escribir precios tuertos-, no una falla desconocida que manda al
-    // journal. Mismo trato que «se acabó el tiempo»: se sabe qué pasó y se
-    // arregla en un par de clics, con el botón de «Abrir sesión» de más
-    // abajo en esta misma pantalla.
-    caja.className = 'hueco-motivo'
-      + (porque.motivo === 'al lote se le acabó el tiempo'
-         || porque.motivo === 'el lote se negó a correr: falta abrir una sesión'
-           ? ' tope' : '')
-      + (porque.motivo === 'la corrida del lote se cortó'
-         || porque.motivo === 'el lote lo intentó y no pudo' ? ' falla' : '');
-    const titular = document.createElement('b');
-    titular.textContent = porque.seguro ? porque.motivo : 'probablemente: ' + porque.motivo;
-    if (!porque.seguro) titular.className = 'quiza';
-    caja.append(titular, ' — ' + porque.explicacion);
-    td.append(caja);
+
+  if (porque && !casillas.length) cuerpo.append(motivoSinLectura(porque, true));
+
+  if (casillas.length) {
+    const lista = document.createElement('div');
+    lista.className = 'precios-detalle';
+    const porProveedor = new Map(casillas.map(c => [c.proveedor, c]));
+    columnasDeProveedor(casillas).forEach(p => {
+      const c = porProveedor.get(p.proveedor) || { nombre: p.nombre, estado: 'sin consultar' };
+      const linea = document.createElement('div');
+      linea.className = 'precio precio-detalle'
+        + (c.es_ganador ? ' gana' : '')
+        + (c.es_ganador && !comparacion.ganador.con_existencia ? ' sinconfirmar' : '')
+        + (c.es_ganador && comparacion.ganador.es_unico ? ' unico' : '');
+
+      const quien = document.createElement('span');
+      quien.className = 'quien';
+      quien.textContent = c.nombre || p.nombre;
+
+      const cifraOhueco = document.createElement(c.precio ? 'b' : 'span');
+      if (c.precio) {
+        cifraOhueco.textContent = '$' + c.precio;
+      } else {
+        cifraOhueco.className = 'sindato';
+        cifraOhueco.textContent = c.estado === 'sin consultar' ? 'sin consultar' : 'sin dato';
+      }
+
+      const nota = document.createElement('span');
+      nota.className = 'nota-precio';
+
+      // La marca del ganador va con PALABRA además de color: un verde más
+      // oscuro no es una marca para quien no distingue verdes. LA FRASE VIENE
+      // HECHA DEL SERVIDOR (`ganador.certeza`), y eso es el ticket 15: "el más
+      // barato con existencia", "el único que contestó"… se deciden en
+      // `comparacion.py`, con su tabla de casos.
+      if (c.es_ganador) {
+        const marca = document.createElement('span');
+        marca.className = 'marca-gana'
+          + (comparacion.ganador.con_existencia ? '' : ' sinconfirmar')
+          + (comparacion.ganador.es_unico ? ' unico' : '');
+        marca.textContent = '✔ ' + (comparacion.ganador.certeza || '');
+        nota.append(marca);
+      }
+
+      // Cuánto más caro es que el ganador, ya restado en Python. Y puede ser
+      // MÁS BARATO y no haber ganado: el ganador es el más barato de los que lo
+      // tienen. El signo lo decide Python; aquí solo se elige la frase.
+      if (c.diferencia) {
+        const caro = document.createElement('span');
+        caro.className = 'caro';
+        caro.textContent = c.mas_barato_que_el_ganador
+          ? c.diferencia_magnitud + ' más barato por pieza, pero no lo tiene'
+          : '+$' + c.diferencia_magnitud + ' por pieza';
+        nota.append(caro);
+      }
+
+      // LA EXISTENCIA, dicha: el más barato no sirve si no lo tiene.
+      if (c.estado === 'con existencia' || c.estado === 'sin existencia'
+          || c.estado === 'no dijo existencia') {
+        const hay = document.createElement('span');
+        hay.className = 'hay' + (c.estado === 'sin existencia' ? ' notiene'
+          : c.estado === 'no dijo existencia' ? ' nodijo' : '');
+        hay.textContent = c.estado === 'sin existencia'
+          ? 'no lo tiene'
+          : c.estado === 'no dijo existencia'
+            ? 'no dijo cuántas tiene'
+            : 'tiene ' + c.existencia_como_llego;
+        if (c.estado === 'sin existencia') hay.setAttribute('aria-label', 'no lo tiene');
+        nota.append(hay);
+      }
+
+      // El motivo DICHO PARA UNA PERSONA (ticket 15): el producto no está en
+      // ese catálogo, el EAN dio varios resultados, el portal no contestó, la
+      // sesión caducó. La cadena corta es la que se guarda y se cuenta; la
+      // larga es la que se lee. Si el servidor no mandara la larga se escribe
+      // la corta: dice menos, pero dice algo.
+      if (c.motivo) {
+        const motivo = document.createElement('span');
+        motivo.className = 'precio-motivo';
+        motivo.textContent = c.motivo_explicado || c.motivo;
+        const lectura = porClave.get(c.proveedor);
+        if (lectura && lectura.detalle) motivo.title = lectura.detalle;
+        nota.append(motivo);
+      }
+
+      linea.append(quien, cifraOhueco);
+      if (nota.childNodes.length) linea.append(nota);
+      lista.append(linea);
+    });
+    cuerpo.append(lista);
   }
 
-  casillas.forEach(c => {
-    const linea = document.createElement('div');
-    // Dos avisos distintos y por eso dos clases: "nadie confirmó que lo tenga"
-    // y "fue el único que contestó". Pueden darse los dos a la vez, y el verde
-    // entero es solo para el ganador que no tiene ninguno de los dos.
-    linea.className = 'precio'
-      + (c.es_ganador ? ' gana' : '')
-      + (c.es_ganador && !comparacion.ganador.con_existencia ? ' sinconfirmar' : '')
-      + (c.es_ganador && comparacion.ganador.es_unico ? ' unico' : '');
-
-    const quien = document.createElement('span');
-    quien.className = 'quien';
-    quien.textContent = c.nombre;
-
-    // La cifra es un `<b>`; el hueco es un `<span>` en cursiva. Son dos
-    // elementos distintos a propósito: la diferencia tiene que verse aunque
-    // alguien mire la pantalla de lejos o con reflejo.
-    const cifraOhueco = document.createElement(c.precio ? 'b' : 'span');
-    if (c.precio) {
-      cifraOhueco.textContent = c.precio;
-    } else {
-      cifraOhueco.className = 'sindato';
-      cifraOhueco.textContent = c.estado === 'sin consultar' ? 'sin consultar' : 'sin dato';
-    }
-
-    // LA EXISTENCIA, en su propia columna (cuarta casilla): el más barato no
-    // sirve si no lo tiene. Se pinta el texto tal como lo dijo el portal
-    // —"+100" dice más que "100"— y el estado decide cómo se ve.
-    const hay = document.createElement('span');
-    hay.className = 'hay';
-    if (c.estado === 'con existencia') {
-      hay.textContent = c.existencia_como_llego;
-    } else if (c.estado === 'sin existencia') {
-      hay.className = 'hay notiene';
-      hay.textContent = c.existencia_como_llego || '0';
-      hay.title = 'no lo tiene: por eso no gana aunque sea el más barato';
-      hay.setAttribute('aria-label', 'no lo tiene');
-    } else if (c.estado === 'no dijo existencia') {
-      hay.className = 'hay nodijo';
-      hay.textContent = c.existencia_como_llego || 'no dijo';
-      hay.title = 'dio precio y no dijo cuántas piezas tiene';
-    }
-
-    linea.append(quien, cifraOhueco, hay);
-
-    // Cuánto más caro es que el ganador, ya restado en Python. Es lo que
-    // convierte cuatro cifras sueltas en una comparación legible.
-    //
-    // Y puede ser MÁS BARATO y no haber ganado: el ganador es el más barato de
-    // los que lo tienen, así que un proveedor con cero piezas queda debajo con
-    // su precio a la vista. Ahí la frase es otra —"más barato, pero no lo
-    // tiene"—, porque un "+-60.33" no es una cifra y no dice nada. El signo lo
-    // decide Python; aquí solo se elige la frase.
-    if (c.diferencia) {
-      const caro = document.createElement('span');
-      caro.className = 'caro';
-      caro.textContent = c.mas_barato_que_el_ganador
-        ? c.diferencia_magnitud + ' más barato por pieza, pero no lo tiene'
-        : '+' + c.diferencia_magnitud + ' por pieza';
-      linea.append(caro);
-    }
-
-    // La marca del ganador va con PALABRA además de color y borde: un verde
-    // más oscuro no es una marca para quien no distingue verdes, ni en una
-    // pantalla de mostrador con reflejo.
-    if (c.es_ganador) {
-      const marca = document.createElement('span');
-      // LA FRASE VIENE HECHA DEL SERVIDOR (`ganador.certeza`), y eso es el
-      // ticket 15. Hasta el 14, este archivo elegía entre dos cadenas suyas
-      // mirando una bandera, y por eso un renglón con UNA sola lectura salía
-      // rotulado "el más barato con existencia": el superlativo afirma algo
-      // sobre otros tres precios que nadie vio, y la afirmación se escribía en
-      // el único archivo que ninguna prueba de Python mira. Ahora son cuatro
-      // frases —"el más barato con existencia", "el más barato, pero nadie
-      // confirmó existencia", "el único que contestó" y "el único que contestó,
-      // y no dijo si lo tiene"— y las cuatro se deciden en `comparacion.py`,
-      // con su tabla de casos.
-      marca.className = 'marca-gana'
-        + (comparacion.ganador.con_existencia ? '' : ' sinconfirmar')
-        + (comparacion.ganador.es_unico ? ' unico' : '');
-      marca.textContent = '✔ ' + (comparacion.ganador.certeza || '');
-      linea.append(marca);
-    }
-
-    td.append(linea);
-
-    // El motivo del hueco. Es lo que distingue un hueco que el encargado puede
-    // atender de uno que no: "la sesión caducó" se arregla en dos clics y "sin
-    // resultados" no se arregla (historia 23). Desde el ticket 28 va DENTRO de
-    // la línea de su proveedor —la cuarta columna de la rejilla—, y no debajo
-    // de ella: en una lista de 40 renglones, cada hueco colgando en su propia
-    // línea era lo que hacía medir 300 px a un renglón.
-    if (c.motivo) {
-      const motivo = document.createElement('span');
-      motivo.className = 'precio-motivo';
-      // El motivo DICHO PARA UNA PERSONA (segunda casilla del ticket 15: *cada
-      // precio faltante dice su motivo: el producto no está en ese catálogo,
-      // el EAN dio varios resultados, el portal no contestó, la sesión
-      // caducó*). La cadena corta —"sin resultados"— es la que se guarda y la
-      // que se cuenta; la larga es la que se lee, y las dos viven en
-      // `precios.py`. Si el servidor no mandara la larga se escribe la corta:
-      // dice menos, pero dice algo.
-      motivo.textContent = c.motivo_explicado || c.motivo;
-      const lectura = porClave.get(c.proveedor);
-      if (lectura && lectura.detalle) motivo.title = lectura.detalle;
-      linea.append(motivo);
-    }
-  });
-
-  // EL VEREDICTO: quién gana con todas sus letras, y el ahorro contra NADRO.
-  if (comparacion && comparacion.hay_lecturas) td.append(veredicto(comparacion));
+  // EL VEREDICTO: contra cuántos se comparó, por qué no hay ganador si no lo
+  // hay, y el ahorro contra NADRO.
+  if (comparacion && comparacion.hay_lecturas) cuerpo.append(veredicto(comparacion));
 
   // CUÁNDO SE LEYÓ, a la vista. Sin esto, "$86.05 en NADRO" no dice si se leyó
-  // hace una hora o hace tres semanas, y el ticket es literal: un pedido dice a
-  // qué precio se decidió, no a cómo está hoy. Es el instante MÁS RECIENTE de
-  // las lecturas que se comparan, calculado en Python: tomar la primera de la
-  // lista diría que una lectura de hace tres semanas es de hoy en cuanto
-  // alguien vuelva a consultar y solo dos proveedores contesten.
-  if (comparacion && comparacion.leido_en) {
-    const cuando = document.createElement('span');
-    cuando.className = 'precio-cuando';
-    cuando.textContent = 'leído el ' + instanteEnPalabras(comparacion.leido_en)
-      + (comparacion.instantes_distintos ? ' (hay lecturas de varios momentos)' : '');
-    td.append(cuando);
-  }
+  // hace una hora o hace tres semanas. Es el instante MÁS RECIENTE de las
+  // lecturas que se comparan, calculado en Python.
+  const leido = comparacion && comparacion.leido_en
+    ? 'leído el ' + instanteEnPalabras(comparacion.leido_en)
+      + (comparacion.instantes_distintos ? ' (hay lecturas de varios momentos)' : '')
+    : '';
 
   if (consulta && consulta.en_curso) {
     const esperando = document.createElement('span');
@@ -636,8 +854,8 @@ const celdaDePrecios = (r, acciones) => {
     // Se dice cuánto tarda. Una espera sin número se lee como "se colgó" a los
     // quince segundos, y ésta tarda nueve por proveedor en el mejor caso.
     esperando.textContent = 'Consultando a los cuatro proveedores… tarda un minuto.';
-    td.append(esperando);
-    return td;
+    cuerpo.append(esperando);
+    return { cuerpo, leido, boton: null };
   }
 
   if (consulta && consulta.detalle && !precios.length) {
@@ -646,30 +864,158 @@ const celdaDePrecios = (r, acciones) => {
     const fallo = document.createElement('span');
     fallo.className = 'precio-motivo';
     fallo.textContent = consulta.detalle;
-    td.append(fallo);
+    cuerpo.append(fallo);
   }
 
   // Sin el botón cuando la lista ya no está abierta: los precios congelados
   // siguen viéndose —son la razón por la que se eligió un proveedor— pero
   // volver a consultar una lista cerrada sería molestar a cuatro portales para
   // cambiar un dato que ya no decide nada.
+  let boton = null;
   if (acciones.editable) {
-    const pedir = botonDeAccion(
+    boton = botonDeAccion(
       precios.length ? 'Volver a consultar' : 'Consultar precio',
-      (boton) => acciones.consultarPrecio(r, boton));
-    pedir.title = precios.length
+      (b) => acciones.consultarPrecio(r, b));
+    boton.title = precios.length
       ? 'Vuelve a preguntarle a Doyle. Lo de hoy se guarda al lado; nada se borra.'
       : 'Le pregunta a Doyle el precio en los cuatro proveedores. Tarda hasta un minuto.';
-    pedir.setAttribute('aria-label',
+    boton.setAttribute('aria-label',
       'Consultar el precio de ' + r.descripcion + ' en los cuatro proveedores');
-    td.append(pedir);
   }
 
-  return td;
+  return { cuerpo, leido, boton };
+};
+
+const mayuscula = (texto) => texto.charAt(0).toUpperCase() + texto.slice(1);
+
+// LAS MARCAS DE UN RENGLÓN: qué le pasa a ese producto. Una lista y no una
+// cascada de `if` pintando en sitio: la misma marca se ve en dos lugares —como
+// insignia en la fila y con su frase entera en el detalle— y escribirla dos
+// veces sería la manera de que un día digan cosas distintas.
+//
+// **Las frases vienen hechas del servidor.** Lo que se escribe aquí es la
+// etiqueta corta de la insignia, que repite una bandera que ya llegó resuelta
+// —`esta_en_transito`, `esta_recibido`…—, y las pocas frases de reserva que ya
+// estaban antes, para cuando el servidor no mandó la suya. `soloFila` marca lo
+// que el detalle ya dice en otro bloque y no se repite ahí.
+const marcasDe = (r) => {
+  const marcas = [];
+  const agrega = (clase, tono, etiqueta, frase, control, soloFila) =>
+    marcas.push({ clase, tono, etiqueta, frase, control, soloFila });
+
+  // AGOTADO: es el renglón más urgente de la lista y tiene que saltar a la
+  // vista sin hacer aritmética. Lo que ya se pidió no es urgente aunque su
+  // existencia sea cero.
+  if (r.esta_agotado && !r.esta_en_transito) {
+    agrega('marca agotada', 'rojo', 'Agotado', 'No queda ninguna pieza en existencia.');
+  }
+
+  if (!r.esta_en_el_catalogo) {
+    agrega('marca hueco-catalogo', 'naranja', 'Fuera del catálogo',
+      'No está en el catálogo: revísalo en SICAR.');
+  }
+
+  // La clasificación sale del RENGLÓN y no se vuelve a deducir aquí: la regla
+  // —el anaquel le gana a la categoría— vive en un solo lugar probado, en
+  // Python. Se marca solo lo que NO es medicamento: etiquetar nueve de cada
+  // diez renglones de una farmacia es ruido que se deja de leer.
+  if (r.clasificacion && r.clasificacion !== 'medicamento') {
+    const sinAnaquel = r.clasificacion === 'sin clasificar';
+    agrega('marca' + (sinAnaquel ? ' sin-clasificar' : ' tenue abarrote'), 'gris',
+      mayuscula(r.clasificacion),
+      sinAnaquel
+        ? 'Sin clasificar: no tiene anaquel conocido. Se muestra igual para que no falte.'
+        : 'Abarrote: no se le compra a un proveedor.');
+  }
+
+  // YA SE PIDIÓ (ticket 21). El renglón NO desaparece: sigue en la tabla, con
+  // sus precios y su proveedor a la vista. Desde el ticket 24 la frase llega
+  // HECHA de Python —"Pedido hoy a NADRO, sin recibir."—; lo de abajo es solo
+  // lo que se dice cuando el servidor no la mandó.
+  if (r.esta_en_transito) {
+    agrega('marca tenue en-transito', 'gris', 'En tránsito', r.frase_del_transito
+      || ('Ya se pidió: en tránsito. No se vuelve a proponer '
+          + 'mientras esté así.'));
+  }
+
+  // ATRASADO (ticket 25). La frase es de Python y el botón hace lo mismo que
+  // el de "En camino".
+  if (r.frase_del_atraso) {
+    agrega('marca atrasado', 'naranja', 'Atrasado', r.frase_del_atraso,
+      r.se_puede_devolver
+        ? botonDeAccion('Devolver a la lista',
+            (boton) => devolverAtrasado(r.renglon_id, boton), 'tenida')
+        : null);
+  }
+
+  // PROBABLEMENTE YA LLEGÓ (ticket 26): hay una compra que encaja, en "En
+  // camino". Por eso el botón de devolver no se ofrece.
+  if (r.frase_de_la_recepcion) {
+    agrega('marca probable', 'acento', 'Probablemente llegó', r.frase_de_la_recepcion);
+  }
+
+  // YA LLEGÓ (ticket 26): con la firma de quien lo confirmó, hecha en Python.
+  // Desde el 27 dice cuántas llegaron, y se puede CORREGIR la cifra —la
+  // segunda factura, un error de captura—. La etiqueta viene de Python.
+  if (r.esta_recibido && r.frase_de_lo_recibido) {
+    agrega('marca tenue llego', 'verde', 'Recibido', r.frase_de_lo_recibido,
+      r.se_puede_corregir && r.etiqueta_a_mano
+        ? controlAMano(r.renglon_id, r.etiqueta_a_mano, r.descripcion, r.piezas_recibidas)
+        : null);
+  }
+
+  // SE DEJÓ DE ESPERAR (ticket 25): NO vuelve a esta lista —ya se armó sin
+  // él—: vuelve en la siguiente, y la frase de Python lo dice.
+  if (r.esta_cancelado) {
+    agrega('marca tenue vuelve', 'gris', 'Se dejó de esperar', r.frase_de_lo_cancelado
+      || 'Se dejó de esperar: vuelve a proponerse en la siguiente lista.');
+  }
+
+  // LO QUE SE VENDIÓ MIENTRAS VENÍA EN CAMINO (ticket 24): sin decirlo, "pide
+  // 4" en una lista de un día con una venta no se podría verificar.
+  if (r.frase_de_la_ventana) {
+    agrega('marca tenue ventana', 'gris', 'Cuenta desde otro día', r.frase_de_la_ventana);
+  }
+
+  // LO QUE FALTÓ Y ESTE RENGLÓN TRAE (ticket 27).
+  if (r.frase_de_lo_que_falto) {
+    agrega('marca tenue falto', 'morado', 'Faltante', r.frase_de_lo_que_falto);
+  }
+
+  // EL BORDE QUE LA MEMORIA NO ALCANZA (ticket 24): ya viene en camino desde
+  // una lista enviada DESPUÉS de armar ésta. Y su par del 27: lo que faltó ya
+  // llegó en otra factura. Lo guardado no se recalcula; se avisa.
+  if (r.ya_viene_en_camino) {
+    agrega('marca hay-que-mirar', 'naranja', 'Ya viene en camino', r.ya_viene_en_camino);
+  }
+  if (r.ya_no_falta) {
+    agrega('marca hay-que-mirar', 'naranja', 'Ya no falta', r.ya_no_falta);
+  }
+
+  // Sin una sola lectura, y consultándose ahora: en la fila como insignia; en
+  // el detalle lo dice el bloque de precios.
+  const casillas = (r.comparacion && r.comparacion.por_proveedor) || [];
+  if (r.porque_no_hay_lectura && !casillas.length) {
+    agrega('marca sin-precio', 'naranja', 'Sin precio', r.porque_no_hay_lectura.explicacion, null, true);
+  }
+  if (r.consulta && r.consulta.en_curso) {
+    agrega('marca consultando', 'acento', 'Consultando…', null, null, true);
+  }
+
+  return marcas;
+};
+
+const insigniaDeMarca = (m) => {
+  const s = insignia(m.etiqueta, m.tono, m.clase);
+  if (m.frase) s.title = m.frase;
+  return s;
 };
 
 const renglon = (r, acciones) => {
   const tr = document.createElement('tr');
+  tr.dataset.renglon = r.renglon_id;
+  // Lo que el filtro de la lista compara: el nombre y la clave.
+  tr.dataset.busqueda = r.descripcion + ' ' + (r.clave || '');
   // YA SE PIDIÓ (ticket 24, casilla 4): atenuado y no escondido. Y lo que se
   // dejó de esperar (ticket 25), igual: ya no se atiende en esta lista.
   // Y lo que ya llegó (ticket 26), igual: está en la lista, ya no se atiende.
@@ -679,146 +1025,23 @@ const renglon = (r, acciones) => {
   // nada: repiten banderas que ya llegaron hechas del servidor.
   if (r.esta_agotado) tr.classList.add('agotado');
   if (r.frase_del_atraso) tr.classList.add('atrasado');
+  if (r.renglon_id === RENGLON_ELEGIDO) tr.classList.add('elegido');
 
-  const clave = document.createElement('td');
-  clave.className = 'clave';
-  clave.textContent = r.clave || '—';
-
+  // EL NOMBRE ES UN BOTÓN: abre el detalle del renglón. Con el ratón basta
+  // tocar cualquier parte de la fila que no sea un control; con el teclado,
+  // éste es el que se enfoca.
   const producto = document.createElement('td');
   producto.className = 'producto';
-  producto.textContent = r.descripcion;
-  if (!r.esta_en_el_catalogo) {
-    const marca = document.createElement('span');
-    marca.className = 'marca hueco-catalogo';
-    marca.textContent = 'No está en el catálogo: revísalo en SICAR.';
-    producto.append(marca);
-  }
-
-  // La clasificación sale del RENGLÓN y no se vuelve a deducir aquí: la regla
-  // —el anaquel le gana a la categoría— vive en un solo lugar probado, en
-  // Python, y no repetida en este archivo.
-  //
-  // Se marca solo lo que NO es medicamento. Etiquetar como "medicamento" nueve
-  // de cada diez renglones de una farmacia es ruido que se deja de leer a la
-  // tercera pantalla; lo que cambia una decisión es lo que se sale de lo
-  // esperado. El interruptor entre vistas y el conteo de los sin clasificar
-  // son el ticket 06: aquí el dato solo se ve.
-  if (r.clasificacion && r.clasificacion !== 'medicamento') {
-    const sinAnaquel = r.clasificacion === 'sin clasificar';
-    const marca = document.createElement('span');
-    marca.className = 'marca' + (sinAnaquel ? ' sin-clasificar' : ' tenue abarrote');
-    marca.textContent = sinAnaquel
-      ? 'Sin clasificar: no tiene anaquel conocido.'
-      : 'Abarrote: no se le compra a un proveedor.';
-    producto.append(marca);
-  }
-
-  // YA SE PIDIÓ (ticket 21). El renglón NO desaparece: sigue en la tabla, con
-  // sus precios y su proveedor a la vista, porque el encargado tiene que poder
-  // mirar qué pidió. Lo que cambia es que se dice —y que deja de poder
-  // tocarse—: `en tránsito` significa "ya se le pidió a un proveedor y todavía
-  // no llega" (CONTEXT.md), y de ahí sale que no se vuelva a proponer mañana.
-  //
-  // Desde el ticket 24 la frase llega HECHA de Python —"Pedido hoy a NADRO,
-  // sin recibir."—, con a quién y cuándo. Lo de abajo es solo lo que se dice
-  // cuando el servidor no la mandó (una respuesta de un solo renglón): la
-  // misma de antes, que no afirma ni proveedor ni día.
-  if (r.esta_en_transito) {
-    const marca = document.createElement('span');
-    marca.className = 'marca tenue en-transito';
-    marca.textContent = r.frase_del_transito
-      || ('Ya se pidió: en tránsito. No se vuelve a proponer '
-          + 'mientras esté así.');
-    producto.append(marca);
-  }
-
-  // ATRASADO (ticket 25). En la lista de hoy casi nunca pasa —se envió hoy—,
-  // salvo que el almacén lleve días sin ventas nuevas. La frase es de Python y
-  // el botón hace lo mismo que el del bloque de abajo.
-  if (r.frase_del_atraso) {
-    const marca = document.createElement('span');
-    marca.className = 'marca atrasado';
-    marca.textContent = r.frase_del_atraso;
-    producto.append(marca);
-    if (r.se_puede_devolver) {
-      producto.append(botonDeAccion('Devolver a la lista',
-        (boton) => devolverAtrasado(r.renglon_id, boton)));
-    }
-  }
-
-  // PROBABLEMENTE YA LLEGÓ (ticket 26): hay una compra que encaja, en la
-  // recepción de arriba. Por eso el botón de devolver no se ofrece.
-  if (r.frase_de_la_recepcion) {
-    const marca = document.createElement('span');
-    marca.className = 'marca probable';
-    marca.textContent = r.frase_de_la_recepcion;
-    producto.append(marca);
-  }
-
-  // YA LLEGÓ (ticket 26): con la firma de quien lo confirmó, hecha en Python.
-  // Desde el 27 dice cuántas llegaron, y se puede CORREGIR la cifra —la
-  // segunda factura, un error de captura—. La etiqueta viene de Python.
-  if (r.esta_recibido && r.frase_de_lo_recibido) {
-    const marca = document.createElement('span');
-    marca.className = 'marca tenue llego';
-    marca.textContent = r.frase_de_lo_recibido;
-    producto.append(marca);
-    if (r.se_puede_corregir && r.etiqueta_a_mano) {
-      producto.append(controlAMano(r.renglon_id, r.etiqueta_a_mano, r.descripcion,
-        r.piezas_recibidas));
-    }
-  }
-
-  // SE DEJÓ DE ESPERAR (ticket 25): su pedido se canceló o se devolvió por
-  // atrasado. NO vuelve a esta lista —ya se armó sin él—: vuelve en la
-  // siguiente, y la frase de Python lo dice.
-  if (r.esta_cancelado) {
-    const marca = document.createElement('span');
-    marca.className = 'marca tenue vuelve';
-    marca.textContent = r.frase_de_lo_cancelado
-      || 'Se dejó de esperar: vuelve a proponerse en la siguiente lista.';
-    producto.append(marca);
-  }
-
-  // LO QUE SE VENDIÓ MIENTRAS VENÍA EN CAMINO (ticket 24, casilla 3). El
-  // renglón que vuelve después de recibirse trae ventas de antes de la lista,
-  // y sin decirlo "pide 4" en una lista de un día con una venta no se podría
-  // verificar. La frase es de Python.
-  if (r.frase_de_la_ventana) {
-    const marca = document.createElement('span');
-    marca.className = 'marca tenue';
-    marca.textContent = r.frase_de_la_ventana;
-    producto.append(marca);
-  }
-
-  // LO QUE FALTÓ Y ESTE RENGLÓN TRAE (ticket 27): "pide 6" con 2 vendidas no
-  // se podría verificar sin decir que 4 faltaron en un pedido anterior.
-  if (r.frase_de_lo_que_falto) {
-    const marca = document.createElement('span');
-    marca.className = 'marca tenue';
-    marca.textContent = r.frase_de_lo_que_falto;
-    producto.append(marca);
-  }
-
-  // EL BORDE QUE LA MEMORIA NO ALCANZA (ticket 24): este producto ya viene en
-  // camino desde una lista anterior que se envió DESPUÉS de armar ésta. La
-  // lista guardada no se recalcula; se avisa en ámbar, con la frase de Python.
-  if (r.ya_viene_en_camino) {
-    const marca = document.createElement('span');
-    marca.className = 'marca hay-que-mirar';
-    marca.textContent = r.ya_viene_en_camino;
-    producto.append(marca);
-  }
-
-  // Y SU PAR DEL TICKET 27: este renglón trae lo que faltó en un pedido
-  // anterior, pero el resto llegó en otra factura y se corrigió después de
-  // armar la lista. Lo guardado no se recalcula; se avisa en ámbar.
-  if (r.ya_no_falta) {
-    const marca = document.createElement('span');
-    marca.className = 'marca hay-que-mirar';
-    marca.textContent = r.ya_no_falta;
-    producto.append(marca);
-  }
+  const nombre = document.createElement('button');
+  nombre.type = 'button';
+  nombre.className = 'ver-renglon';
+  nombre.textContent = r.descripcion;
+  nombre.title = r.descripcion;
+  nombre.onclick = () => acciones.elegir(r, true);
+  const insignias = document.createElement('span');
+  insignias.className = 'insignias';
+  insignias.append(...marcasDe(r).map(insigniaDeMarca));
+  producto.append(nombre, insignias);
 
   const existencia = celdaDeCifra(r.existencia, 'Existencia', '', r.esta_agotado);
 
@@ -836,12 +1059,10 @@ const renglon = (r, acciones) => {
   }
 
   // LO QUE SE PUEDE TOCAR ya no lo calcula este archivo (2026-09-22, paso 2 de
-  // la revisión de arquitectura). Hasta entonces salía de dos cosas combinadas
-  // aquí —el estado de la LISTA y el del RENGLÓN— sin que ninguna prueba de
-  // Python comprobara que esa combinación seguía de acuerdo con el `WHERE` de
-  // `_DESCARTAR`, `_AJUSTAR_LA_CANTIDAD` y `_ELEGIR_PROVEEDOR`. Ahora
-  // `se_puede_editar` ya viene resuelto de `transiciones.motivo_para_no_editar`
-  // —la misma decisión, probada— y este archivo solo la lee.
+  // la revisión de arquitectura): `se_puede_editar` ya viene resuelto de
+  // `transiciones.motivo_para_no_editar` —la misma decisión que el `WHERE` de
+  // `_DESCARTAR`, `_AJUSTAR_LA_CANTIDAD` y `_ELEGIR_PROVEEDOR`, probada— y este
+  // archivo solo la lee.
   const editable = r.se_puede_editar;
 
   const cantidad = celdaDeCantidad(r, editable, acciones.ajustar);
@@ -849,23 +1070,20 @@ const renglon = (r, acciones) => {
   // Descartar: UN CLIC y sin diálogo de confirmación. Lo que hace segura la
   // operación es que se puede deshacer —el renglón baja al bloque de
   // descartados con su botón para devolverlo—, no un "¿estás seguro?" que a la
-  // tercera pantalla se cierra sin leer. La lista trae tantos renglones como
-  // productos distintos se vendieron: un diálogo por renglón sería el doble de
-  // clics en la única acción que mantiene legible la lista (ADR 0002).
+  // tercera pantalla se cierra sin leer (ADR 0002). En la fila es una cruz,
+  // como en el diseño; su nombre accesible dice qué hace y de cuál.
   const celdaAcciones = document.createElement('td');
   celdaAcciones.className = 'acciones';
   const quitar = botonDeAccion('Descartar', (boton) => acciones.descartar(r, boton));
+  quitar.className = 'quitar';
+  quitar.textContent = '×';
   // Apagado con la lista cerrada o vencida, igual que el campo de la cantidad y
-  // el de proveedor. Desde el 2026-09-20 el servidor también lo rechaza -la
-  // condicion vive en el `WHERE` de `_DESCARTAR`-, asi que esto es comodidad y
-  // no la garantia. Pero un boton que se deja tocar para contestar 409 enseña a
-  // ignorar los avisos, y este es el que mas se toca de la pantalla.
-  //
-  // Apagado y no escondido: la columna de acciones tiene ancho fijo y quitarlo
-  // movería todas las filas al cerrar la lista.
+  // el de proveedor. El servidor también lo rechaza -la condicion vive en el
+  // `WHERE` de `_DESCARTAR`-, asi que esto es comodidad y no la garantia. Pero
+  // un boton que se deja tocar para contestar 409 enseña a ignorar los avisos.
   quitar.disabled = !editable;
   quitar.title = editable
-    ? 'No se pide. Se puede devolver a la lista.'
+    ? 'Descartar: no se pide. Se puede devolver a la lista.'
     : (r.esta_en_transito
        ? 'Ya se le pidió a un proveedor: descartarlo diría que nadie lo pidió.'
        : (r.esta_cancelado
@@ -878,22 +1096,51 @@ const renglon = (r, acciones) => {
   quitar.setAttribute('aria-label', 'Descartar ' + r.descripcion);
   celdaAcciones.append(quitar);
 
-  tr.append(clave, producto, existencia, cobertura, cantidad,
-            celdaDePrecios(r, acciones),
+  tr.append(producto, existencia, cobertura, cantidad,
+            ...celdasDePrecio(r),
             celdaDeProveedor(r, editable, acciones.elegirProveedor),
             celdaAcciones);
+
+  // Un clic en la fila que no sea en un control la elige: es lo que pide el
+  // diseño, y no estorba al campo de la cantidad ni al desplegable.
+  tr.addEventListener('click', (evento) => {
+    if (evento.target.closest('button, input, select, a, label')) return;
+    acciones.elegir(r, true);
+  });
   return tr;
+};
+
+// A QUIÉN SE LE PIDE ESTE RENGLÓN, con todas sus letras (ticket 20). Son dos
+// cosas distintas y se dicen distinto: una sugerencia del sistema —con la
+// certeza que viene hecha del servidor, "el más barato con existencia"— y una
+// decisión de una persona, con su firma. El ticket 11 ya pagó por distinguir
+// "nadie la tocó" de "alguien la confirmó" en la cantidad, y aquí vale lo mismo.
+// Va en el `title` de la fila y en las firmas del detalle.
+const eleccionEnPalabras = (e) => {
+  if (!e) return '';
+  if (!e.hay) {
+    return (e.motivo || 'sin proveedor')
+      + (e.nombres_empatados && e.nombres_empatados.length
+         ? '. Igual de baratos: ' + e.nombres_empatados.join(' y ') + '.'
+         : '');
+  }
+  if (e.es_decision) {
+    return 'Lo eligió ' + (e.elegido_por || 'sin-identificar')
+      + (e.difiere_de_la_sugerencia
+          ? '. El sistema sugería ' + e.nombre_sugerido + '.'
+          : '.');
+  }
+  return 'Lo sugiere el sistema' + (e.certeza ? ': ' + e.certeza + '.' : '.');
 };
 
 // A QUIÉN SE LE PIDE ESTE RENGLÓN (ticket 20).
 //
 // Un desplegable con los cuatro y **ninguna opción vacía**: siempre hay algo
-// seleccionado, o no hay a quién pedirle y entonces no hay desplegable que
-// tocar. La opción que viene marcada es la elección —la de la persona si la
-// hubo, y si no la sugerencia del sistema— y **cuál de las dos es se dice con
-// todas sus letras debajo**, porque son dos cosas distintas: el ticket 11 ya
-// pagó por distinguir "nadie la tocó" de "alguien la confirmó" en la cantidad,
-// y aquí vale lo mismo.
+// seleccionado, o no hay a quién pedirle y entonces se antepone "Elige…". La
+// opción que viene marcada es la elección —la de la persona si la hubo, y si
+// no la sugerencia del sistema— y **cuál de las dos es se dice debajo**: en la
+// fila con una palabra ("sugerido", "elegido") y con todas sus letras en el
+// `title` y en el detalle (`eleccionEnPalabras`).
 //
 // Ninguna regla vive en este archivo. Qué proveedor va marcado, si eso es una
 // decisión, si difiere de lo sugerido y qué frase le toca llegan resueltos en
@@ -907,25 +1154,6 @@ const celdaDeProveedor = (r, editable, alElegir) => {
 
   const e = r.eleccion || null;
   if (!e) return td;
-
-  if (!e.hay) {
-    // Sin a quién pedirle. NO es un error: o hay empate —y el sistema no
-    // desempata, porque elegir por orden alfabético sería una decisión que
-    // nadie tomó— o todavía no hay precios con los que sugerir. El renglón se
-    // ve entero y espera.
-    const sin = document.createElement('span');
-    sin.className = 'eleccion-sin';
-    sin.textContent = e.motivo || 'sin proveedor';
-    td.append(sin);
-    if (e.nombres_empatados && e.nombres_empatados.length) {
-      const empate = document.createElement('span');
-      empate.className = 'eleccion-de';
-      empate.textContent = 'Igual de baratos: ' + e.nombres_empatados.join(' y ') + '.';
-      td.append(empate);
-    }
-    // Y aun así se puede elegir: la elección no se revisa contra el precio.
-    // Es lo que permite pedirle a quien no contestó hoy (quinta casilla).
-  }
 
   const campo = document.createElement('select');
   campo.className = 'eleccion-campo';
@@ -941,35 +1169,42 @@ const celdaDeProveedor = (r, editable, alElegir) => {
   if (!e.hay) {
     // Con "sin proveedor" no se puede dejar el desplegable enseñando el
     // primero de la lista como si estuviera elegido: eso sería exactamente
-    // inventar una decisión. Se antepone una opción que dice lo que pasa.
+    // inventar una decisión. Se antepone una opción que dice lo que pasa. Y
+    // aun así se puede elegir: la elección no se revisa contra el precio, y es
+    // lo que permite pedirle a quien no contestó hoy.
     const ninguno = document.createElement('option');
     ninguno.value = '';
-    ninguno.textContent = '— elige —';
+    ninguno.textContent = 'Elige…';
     ninguno.selected = true;
     campo.prepend(ninguno);
   }
   campo.addEventListener('change', () => alElegir(r, campo));
   td.append(campo);
 
-  if (e.hay) {
-    const quien = document.createElement('span');
-    if (e.es_decision) {
-      quien.className = 'eleccion-de' + (e.difiere_de_la_sugerencia ? ' distinta' : '');
-      quien.textContent = 'Lo eligió ' + (e.elegido_por || 'sin-identificar')
-        + (e.difiere_de_la_sugerencia
-            ? '. El sistema sugería ' + e.nombre_sugerido + '.'
-            : '.');
-    } else {
-      // SUGERENCIA, no decisión. La certeza viene hecha del servidor —"el más
-      // barato con existencia", "el único que contestó"— y se escribe tal
-      // cual: es lo que dice QUÉ se está afirmando de ese proveedor, y el
-      // ticket 15 ya pagó por que esa frase no se elija aquí.
-      quien.className = 'eleccion-de sugerida';
-      quien.textContent = 'Lo sugiere el sistema'
-        + (e.certeza ? ': ' + e.certeza + '.' : '.');
-    }
-    td.append(quien);
+  // LA PALABRA DE DEBAJO. Sin a quién pedirle NO es un error: o hay empate —y
+  // el sistema no desempata, porque elegir por orden alfabético sería una
+  // decisión que nadie tomó— o todavía no hay precios con los que sugerir.
+  const quien = document.createElement('span');
+  if (r.esta_en_transito) {
+    quien.className = 'eleccion-de';
+    quien.textContent = 'ya se le pidió';
+  } else if (!e.hay) {
+    quien.className = 'eleccion-sin';
+    quien.textContent = e.nombres_empatados && e.nombres_empatados.length
+      ? 'empate ' + e.nombres_empatados.join(' y ')
+      : (e.motivo || 'sin proveedor');
+  } else if (e.es_decision) {
+    // Cuando la persona eligió DISTINTO de lo que el sistema sugería, se
+    // marca: es el par que vuelve auditable la elección, igual que "el sistema
+    // propuso 3" al lado de un 10.
+    quien.className = 'eleccion-de' + (e.difiere_de_la_sugerencia ? ' distinta' : '');
+    quien.textContent = e.difiere_de_la_sugerencia ? 'distinto de lo sugerido' : 'elegido';
+  } else {
+    quien.className = 'eleccion-de sugerida';
+    quien.textContent = 'sugerido';
   }
+  quien.title = eleccionEnPalabras(e);
+  td.append(quien);
 
   return td;
 };
@@ -1107,35 +1342,54 @@ const pintarInterruptor = (vistas, activa, alElegir) => {
 // dejar el hueco vacío — una pantalla que no dice en qué estado está la lista
 // es peor que una que dice una palabra fea.
 const ESTADOS = { abierto: 'Abierta', cerrado: 'Cerrada', vencido: 'Vencida' };
+// El tono de la insignia del estado. Acompaña a la palabra, que es la que dice.
+const TONOS_DEL_ESTADO = { abierto: 'verde', cerrado: 'gris', vencido: 'naranja' };
 
 // Cuándo se armó la lista, que es lo que el ticket pide que se vea, y en qué
 // estado está. Es distinto del corte: el corte dice DE QUÉ DÍA son las ventas
 // y esto dice CUÁNDO SE HIZO la lista. Con el respaldo de SICAR llegando hasta
 // 2.5 días tarde, confundirlos es exactamente lo que hay que poder evitar.
+//
+// Desde el diseño del 2026-09-30 son dos piezas: la insignia del estado en la
+// barra del día, y la franja de debajo que dice cuándo se armó, quién la cerró
+// y si alguien la reabrió.
 const pintarCabecera = (datos) => {
+  const estado = document.getElementById('pedido-estado');
+  estado.className = 'insignia ' + (TONOS_DEL_ESTADO[datos.estado] || 'gris');
+  estado.textContent = ESTADOS[datos.estado] || datos.estado || 'Sin guardar';
+  estado.hidden = false;
+
   const armado = document.getElementById('armado');
   armado.replaceChildren();
+  armado.className = 'armado ' + (datos.estado || '');
 
-  const estado = document.createElement('span');
-  estado.className = 'estado ' + (datos.estado || '');
-  estado.textContent = ESTADOS[datos.estado] || datos.estado || 'Sin guardar';
-  armado.append(estado);
-
-  if (datos.armado_en) armado.append(' · Armada el ' + instanteEnPalabras(datos.armado_en));
   if (datos.cerrado_en) {
-    armado.append(' · Se cerró el ' + instanteEnPalabras(datos.cerrado_en) +
-      ', con las ventas ' +
+    // Quién la cerró y cuándo, hecho en Python (migración 0013): "se cerró
+    // sola" para el cierre automático, "lo firmó" para uno a mano. Sin la
+    // firma —un cierre de antes de esa migración— se dice solo cuándo.
+    const titular = document.createElement('b');
+    // Sin punto después de `instanteEnPalabras`: ya termina en "p.m.", y el
+    // punto extra salía "p.m.." (lo cazó el recorrido del navegador).
+    titular.textContent = datos.frase_del_cierre || ('Se cerró el ' + instanteEnPalabras(datos.cerrado_en));
+    armado.append(titular, ' Consideró las ventas ' +
       rangoEnPalabras(datos.ventas_consideradas_desde, datos.ventas_consideradas_hasta) +
       '. La siguiente lista arranca al día siguiente de ese corte.');
   } else if (datos.estado === 'vencido') {
     // Se dice con todas sus letras: una lista vencida no es un error del
     // sistema, es un día en que nadie la cerró, y lo que quedó sin atender
     // sigue ahí para verse.
-    armado.append(' · Su día pasó y nadie la cerró.');
+    const titular = document.createElement('b');
+    titular.textContent = 'Su día pasó y nadie la cerró.';
+    armado.append(titular);
+  } else if (datos.armado_en) {
+    armado.append('Armada el ' + instanteEnPalabras(datos.armado_en));
+  }
+  if (datos.cerrado_en && datos.armado_en) {
+    armado.append(' Se había armado el ' + instanteEnPalabras(datos.armado_en));
   }
   // La firma de la última reapertura (ADR 0016), hecha en Python con la hora
   // de la farmacia. Se queda aunque la lista se vuelva a cerrar.
-  if (datos.frase_de_la_reapertura) armado.append(' · ' + datos.frase_de_la_reapertura);
+  if (datos.frase_de_la_reapertura) armado.append(' ' + datos.frase_de_la_reapertura);
   armado.hidden = false;
 };
 
@@ -1352,9 +1606,17 @@ let FECHA_ACTUAL = null;
 const ocultarLoDeOtroDia = () => {
   ['pedido-tabla', 'armado', 'cierre', 'pedido-avisos', 'vistas', 'completar',
     'particion', 'descartados', 'pedido-corrida', 'pedido-sin-clasificar',
-    'recepcion', 'en-camino', 'conciliacion'].forEach(id => {
+    'recepcion', 'en-camino', 'conciliacion',
+    // Y las piezas del diseño del 2026-09-30: el estado, los pasos, la barra
+    // de la lista, el detalle del renglón y el paso de captura.
+    'pedido-estado', 'pasos', 'barra-lista', 'inspector', 'paso-repartir',
+    'paso-capturar', 'pedido-sin-comparar'].forEach(id => {
     document.getElementById(id).hidden = true;
   });
+  document.getElementById('cierre-detalle').textContent = '';
+  document.getElementById('paso-revisar').hidden = false;
+  pintarResumenDeAvisos();
+  pintarLoQueVieneEnCaminoVacio();
 };
 
 // EL CONTENEDOR DE NAVEGACIÓN (decisión del dueño, 2026-09-27): la fecha al
@@ -1383,6 +1645,12 @@ const pintarNavegacion = (fecha, vecinos) => {
   if (vecinos && vecinos.anterior) anterior.onclick = () => cargarPedido(vecinos.anterior);
   if (vecinos && vecinos.siguiente) siguiente.onclick = () => cargarPedido(vecinos.siguiente);
   caja.hidden = false;
+  // IR A HOY (diseño del 2026-09-30): desde un día de la bitácora, de un clic
+  // y no a flechazos. Pide hoy SIN fecha, igual que la carga de la página: es
+  // la única llamada con permiso de armar el día.
+  const hoy = document.getElementById('ir-a-hoy');
+  hoy.hidden = !FECHA_DE_HOY || fecha === FECHA_DE_HOY;
+  hoy.onclick = () => cargarPedido();
 };
 
 // RECARGA LA FECHA QUE SE ESTÁ VIENDO, no siempre "hoy". La usan las cuatro
@@ -1394,6 +1662,389 @@ const pintarNavegacion = (fecha, vecinos) => {
 // de la bitácora se vuelve a leer por `GET .../dia/{fecha}`, que solo lee.
 const recargarLoQueSeVe = () =>
   cargarPedido(FECHA_ACTUAL === FECHA_DE_HOY ? undefined : FECHA_ACTUAL);
+
+// ------------------------------------- la vista del día (diseño 2026-09-30)
+
+// LO QUE LA PANTALLA RECUERDA DE CÓMO SE ESTÁ MIRANDO EL DÍA. Es estado de la
+// vista y no de los datos: en memoria, ni en el servidor ni en `localStorage`
+// —si un renglón está elegido es de quien mira—. Cambiar de día lo reinicia;
+// recargar el mismo día no.
+//
+// - `PASO`: revisar, repartir o capturar.
+// - `PEDIDO_EN_CAPTURA`: cuál pedido se está capturando en el paso tres.
+// - `RENGLON_ELEGIDO`: el que enseña el detalle de la derecha.
+// - `DETALLE_ABIERTO`: en pantalla angosta el detalle flota encima de la
+//   tabla y solo se ve cuando alguien tocó un renglón.
+let PASO = 'revisar';
+let PEDIDO_EN_CAPTURA = null;
+let RENGLON_ELEGIDO = null;
+let DETALLE_ABIERTO = false;
+let HAY_DETALLE = false;
+// Si la franja de avisos está abierta. `null` es "que decida la pantalla": se
+// abre sola cuando hay una falla, y se queda como la persona la deje.
+let AVISOS_ABIERTOS = null;
+// Lo que hacen los botones de los pasos. Lo pone `cargarPedido`, que es quien
+// tiene la lista; antes de la primera carga no hace nada.
+let IR_A_PASO = () => {};
+// Por debajo de ~1280 px el detalle no cabe al lado de la tabla y flota
+// encima. Es el mismo corte de la hoja de estilos.
+const ENCIMA = window.matchMedia('(max-width: 80rem)');
+
+const reiniciarLaVistaDelDia = () => {
+  PASO = 'revisar';
+  PEDIDO_EN_CAPTURA = null;
+  RENGLON_ELEGIDO = null;
+  DETALLE_ABIERTO = false;
+};
+
+// Las cuatro columnas de proveedor del encabezado, con los nombres que manda
+// el servidor (`datos.puente`) y en su orden, que es el mismo de cada fila.
+const pintarEncabezado = () => {
+  const fila = document.getElementById('pedido-encabezado');
+  fila.querySelectorAll('th.precio-celda, th.escala-celda').forEach(th => th.remove());
+  const antes = document.getElementById('encabezado-proveedor');
+  if (EN_ESCALA) {
+    const th = document.createElement('th');
+    th.className = 'escala-celda';
+    th.scope = 'col';
+    th.textContent = 'Precio · de más barato a más caro';
+    fila.insertBefore(th, antes);
+    return;
+  }
+  PROVEEDORES.forEach(p => {
+    const th = document.createElement('th');
+    th.className = 'precio-celda';
+    th.scope = 'col';
+    th.textContent = p.nombre;
+    fila.insertBefore(th, antes);
+  });
+};
+
+// El detalle se ve si hay un renglón que enseñar, y en pantalla angosta solo
+// si alguien lo abrió.
+const ajustarElDetalle = () => {
+  document.getElementById('inspector').hidden =
+    !HAY_DETALLE || (ENCIMA.matches && !DETALLE_ABIERTO);
+};
+
+// LAS FIRMAS DE UN RENGLÓN: quién decidió la cantidad y el proveedor, o que
+// nadie lo hizo. Es una firma, no un permiso (regla 3 de CLAUDE.md), y se
+// muestra porque es lo que permite preguntar "¿por qué pediste diez?" a la
+// persona correcta.
+const firmasDelRenglon = (r) => {
+  const firma = (que, quien, clase) => {
+    const li = document.createElement('li');
+    const dice = document.createElement('span');
+    dice.textContent = que;
+    if (clase) dice.className = clase;
+    const firmado = document.createElement('span');
+    firmado.className = 'quien';
+    firmado.textContent = quien;
+    li.append(dice, firmado);
+    return li;
+  };
+  const firmas = [];
+  // LA CANTIDAD (ticket 11). Quién la cambió, a la vista. Aparece aunque la
+  // cantidad haya quedado igual que la propuesta: confirmar el número del
+  // sistema también es una decisión, y es la que dice que la reposición 1 a 1
+  // acertó ese día. Las dos cifras se dicen cuando no son la misma: es lo que
+  // hace evidente que la propuesta del sistema NO se sobreescribió.
+  if (r.fue_ajustada) {
+    firmas.push(firma('Cantidad: ' + r.cantidad_a_pedir
+        + (r.difiere_de_la_propuesta
+           ? ' (el sistema propuso ' + r.cantidad_propuesta + ')'
+           : ', la misma que propuso el sistema'),
+      'ajustada por ' + (r.ajustada_por || 'sin-identificar')
+        + (r.ajustada_en ? ' · ' + instanteEnPalabras(r.ajustada_en) : '')));
+  } else {
+    firmas.push(firma('Cantidad: ' + r.cantidad_a_pedir + ', la que propuso el sistema',
+      'Reposición 1 a 1 de lo vendido'));
+  }
+  // A QUIÉN (ticket 20): sugerencia o decisión, con todas sus letras.
+  const e = r.eleccion;
+  if (e) {
+    firmas.push(firma(e.hay ? 'Proveedor: ' + e.nombre : 'Proveedor: sin elegir',
+      eleccionEnPalabras(e), e.es_decision && e.difiere_de_la_sugerencia ? 'distinta' : ''));
+  }
+  return firmas;
+};
+
+// EL DETALLE DEL RENGLÓN ELEGIDO. Todo lo que la fila no alcanza a decir en
+// una línea vive aquí: cada frase del servidor, cada motivo de cada hueco y
+// quién decidió qué. Nada se calcula: se acomoda lo que el renglón ya trae.
+const pintarDetalle = (r, acciones) => {
+  HAY_DETALLE = !!r;
+  if (!r) { ajustarElDetalle(); return; }
+  const parte = (nombre) => document.getElementById('inspector-' + nombre);
+
+  parte('nombre').textContent = r.descripcion;
+  parte('clave').textContent = r.clave || '';
+  parte('clase').textContent = [
+    r.clave ? '' : 'Sin código de barras',
+    // El anaquel viene del servidor ("GENERICO 3"); vacío o nulo no se escribe.
+    r.anaquel || '',
+    r.clasificacion ? mayuscula(r.clasificacion) : '',
+  ].filter(Boolean).join(' · ');
+
+  // Las tres cifras de la fila, grandes. `null` es "no se sabe", nunca un
+  // cero: un cero aquí se leería "agotado".
+  const hay = parte('hay');
+  hay.className = r.esta_agotado ? 'urgente' : '';
+  hay.textContent = r.existencia === null || r.existencia === undefined ? 'sin dato' : cifra(r.existencia);
+  parte('vendidas').textContent = cifra(r.piezas_vendidas);
+  const pedir = parte('pedir');
+  pedir.replaceChildren(String(r.cantidad_a_pedir));
+  if (r.difiere_de_la_propuesta) {
+    const propuesta = document.createElement('span');
+    propuesta.className = 'propuesta';
+    propuesta.textContent = 'el sistema propuso ' + r.cantidad_propuesta;
+    pedir.append(propuesta);
+  }
+
+  // QUÉ PASA CON ESTE PRODUCTO: cada marca con su frase entera y, si la hay,
+  // su acción —devolver lo atrasado, corregir lo recibido—.
+  const marcas = marcasDe(r).filter(m => !m.soloFila && m.frase);
+  parte('marcas').replaceChildren(...marcas.map(m => {
+    const li = document.createElement('li');
+    const frase = document.createElement('span');
+    frase.className = 'frase';
+    frase.textContent = m.frase;
+    li.append(insigniaDeMarca(m), frase);
+    if (m.control) li.append(m.control);
+    return li;
+  }));
+  parte('marcas-bloque').hidden = !marcas.length;
+
+  const precios = preciosDelDetalle(r, acciones);
+  parte('precios').replaceChildren(precios.cuerpo);
+  parte('leido').textContent = precios.leido;
+
+  parte('firmas').replaceChildren(...firmasDelRenglon(r));
+
+  const botones = [];
+  if (precios.boton) botones.push(precios.boton);
+  if (r.se_puede_editar) {
+    const quitar = botonDeAccion('Descartar', (b) => acciones.descartar(r, b), 'plana');
+    quitar.setAttribute('aria-label', 'Descartar ' + r.descripcion);
+    botones.push(quitar);
+  }
+  parte('acciones').replaceChildren(...botones);
+  ajustarElDetalle();
+};
+
+// LOS TRES PASOS. Se enseñan con una lista abierta, o con una que ya tiene
+// pedidos —lo que se pidió un día se tiene que poder ver aunque ya se haya
+// cerrado—. Sin eso, la lista es solo la tabla.
+const PASOS = ['revisar', 'repartir', 'capturar'];
+
+const pintarPasos = (lista) => {
+  const conPasos = !!(lista && lista.renglones && lista.renglones.length
+    && (lista.estado === 'abierto' || (lista.pedidos && lista.pedidos.length)));
+  if (!conPasos) PASO = 'revisar';
+  document.getElementById('pasos').hidden = !conPasos;
+  const actual = PASOS.indexOf(PASO);
+  document.querySelectorAll('#pasos button').forEach(boton => {
+    const i = PASOS.indexOf(boton.dataset.paso);
+    if (i === actual) boton.setAttribute('aria-current', 'step');
+    else boton.removeAttribute('aria-current');
+    boton.classList.toggle('hecho', i < actual);
+  });
+  PASOS.forEach(p => { document.getElementById('paso-' + p).hidden = p !== PASO; });
+};
+
+// LA FRANJA DE AVISOS. Cada renglón es una de las notas de siempre; aquí solo
+// se mira cuáles están a la vista y de qué tono las pintó su función, para
+// decir arriba cuántas piden algo. No decide nada: lee lo que ya se pintó.
+const nivelDeLaNota = (nota) => {
+  const clases = nota.id === 'pedido-avisos'
+    ? [...nota.children].map(hijo => hijo.className).join(' ')
+    : nota.className;
+  if (nota.id === 'completar') return /\bmal\b/.test(clases) ? 'mal' : 'aviso';
+  if (/\bmal\b/.test(clases)) return 'mal';
+  if (/\b(aviso|tope|espera)\b/.test(clases)) return 'aviso';
+  if (/\bfalla\b/.test(clases)) return 'mal';
+  if (/\b(todo|bien)\b/.test(clases)) return 'ok';
+  return 'informa';
+};
+
+const pintarResumenDeAvisos = () => {
+  const caja = document.getElementById('avisos');
+  const lista = document.getElementById('avisos-lista');
+  let visibles = 0;
+  let fallas = 0;
+  const porAtender = [];
+  const enOrden = [];
+  lista.querySelectorAll('.aviso-fila').forEach(fila => {
+    const nota = fila.firstElementChild;
+    const seVe = !nota.hidden && nota.textContent.trim() !== '';
+    fila.hidden = !seVe;
+    if (!seVe) return;
+    visibles += 1;
+    // La etiqueta del botón de completar dice qué trae: completar, abrir una
+    // sesión, o las dos cosas.
+    if (nota.id === 'completar') {
+      const sesiones = !!nota.querySelector('.sesiones');
+      const faltantes = !!nota.querySelector(':scope > b');
+      fila.dataset.etiqueta = sesiones && !faltantes ? 'Sesión' : 'Completar';
+    }
+    const nivel = nivelDeLaNota(nota);
+    fila.className = 'aviso-fila ' + nivel;
+    if (nivel === 'mal' || nivel === 'aviso') porAtender.push(fila.dataset.etiqueta);
+    else enOrden.push(fila.dataset.etiqueta);
+    if (nivel === 'mal') fallas += 1;
+  });
+  caja.hidden = !visibles;
+  if (!visibles) return;
+
+  const abierta = AVISOS_ABIERTOS === null ? fallas > 0 : AVISOS_ABIERTOS;
+  lista.hidden = !abierta;
+  const boton = document.getElementById('avisos-resumen');
+  boton.setAttribute('aria-expanded', abierta ? 'true' : 'false');
+  document.getElementById('avisos-ver').textContent = abierta ? 'Ocultar' : 'Ver';
+  document.getElementById('avisos-punto').className =
+    'punto' + (fallas ? ' mal' : porAtender.length ? ' aviso' : '');
+
+  const texto = document.getElementById('avisos-texto');
+  const titular = document.createElement('b');
+  titular.textContent = porAtender.length
+    ? plural(porAtender.length, 'cosa por atender', 'cosas por atender')
+    : 'Nada que atender';
+  const resto = document.createElement('span');
+  resto.className = 'resto';
+  resto.textContent = ' · ' + (porAtender.length ? porAtender : enOrden).join(' · ');
+  texto.replaceChildren(titular, resto);
+};
+
+// EL FILTRO DE LA LISTA. Es de la persona y se ve: lo que esconde lo esconde
+// porque alguien tecleó algo en el campo, y se dice cuántos quedaron a la
+// vista. No es el sistema decidiendo qué renglón se ve —eso no pasa nunca
+// (ADR 0002)—: es buscar con los ojos, más rápido.
+const sinAcentos = (texto) => texto.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+
+const aplicarElFiltro = () => {
+  const buscado = sinAcentos(document.getElementById('pedido-filtro').value.trim());
+  const filas = document.querySelectorAll('#pedido-renglones tr');
+  let aLaVista = 0;
+  filas.forEach(tr => {
+    tr.hidden = !!buscado && !sinAcentos(tr.dataset.busqueda || '').includes(buscado);
+    if (!tr.hidden) aLaVista += 1;
+  });
+  const aviso = document.getElementById('pedido-filtrados');
+  aviso.hidden = !buscado;
+  aviso.textContent = buscado ? aLaVista + ' de ' + filas.length + ' a la vista' : '';
+};
+
+// LO QUE LA BARRA LATERAL CUENTA. Un número en una cápsula junto a cada
+// sección; ninguno se calcula con una regla nueva: son las mismas banderas que
+// ya llegaron del servidor, contadas.
+const pintarCuenta = (nombre, cuantos, tono) => {
+  const cuenta = document.getElementById('cuenta-' + nombre);
+  cuenta.hidden = !cuantos;
+  cuenta.textContent = cuantos ? String(cuantos) : '';
+  cuenta.className = 'cuenta-pestana' + (tono ? ' ' + tono : '');
+};
+
+// Cuántos renglones de la lista de HOY quedan por atender. Un día de la
+// bitácora no cambia el número de la barra: la barra dice cómo está hoy.
+const pintarCuentaDeLaLista = (trabajables) => {
+  if (!FECHA_DE_HOY || FECHA_ACTUAL !== FECHA_DE_HOY) return;
+  pintarCuenta('pedido', trabajables.filter(r =>
+    !r.esta_en_transito && !r.esta_cancelado && !r.esta_recibido).length, 'gris');
+};
+
+// LO QUE LA BARRA CUENTA CON CADA CARGA DE HOY. "En camino" cuenta lo que
+// pide a una persona: lo que probablemente ya llegó y lo atrasado, en ámbar si
+// hay algo atrasado. "Sesiones", las que una lectura encontró caducadas —la
+// sección misma, al abrirse, le pregunta a Doyle y la pone al día—.
+const pintarCuentasDeLaCarga = (datos) => {
+  pintarLoQueVieneEnCaminoVacio();
+  if (!FECHA_DE_HOY || FECHA_ACTUAL !== FECHA_DE_HOY) return;
+  pintarCuenta('sesiones', (datos.sesiones_caducadas || []).length, 'rojo');
+  const propuestas = ((datos.recepcion && datos.recepcion.propuestas) || []).length;
+  const atrasados = ((datos.en_camino && datos.en_camino.renglones) || []).filter(v => v.atrasado).length;
+  pintarCuenta('camino', propuestas + atrasados, atrasados ? 'naranja' : 'acento');
+};
+
+// "En camino" se lee junto con la lista del día: un día sin lista lo deja
+// vacío, y se dice por qué en vez de enseñar una página en blanco.
+const pintarLoQueVieneEnCaminoVacio = () => {
+  document.getElementById('camino-sin-lista').hidden =
+    !document.getElementById('recepcion').hidden || !document.getElementById('en-camino').hidden;
+};
+
+// LOS DATOS, en "Estado": el último día con ventas, cómo le fue al lote sobre
+// la lista de hoy y cuándo se armó. Las frases largas viven en los avisos de
+// la lista; aquí va lo corto.
+const pintarEstadoDeLosDatos = (datos) => {
+  if (!FECHA_DE_HOY || FECHA_ACTUAL !== FECHA_DE_HOY) return;
+  const filas = [fila('Último día con ventas', true, enPalabras(datos.fecha_de_ventas))];
+  if (datos.corrida) {
+    filas.push(fila('Lote de anoche', !datos.corrida.se_interrumpio,
+      datos.corrida.consultados + ' de ' + datos.corrida.en_la_lista + ' consultados'
+        + (datos.corrida.se_corto_por_tiempo ? ' · se detuvo al tope' : '')));
+  } else if (datos.corrida_ausente) {
+    filas.push(fila('Lote de anoche', datos.corrida_ausente.nivel === 'falla' ? false : null,
+      datos.corrida_ausente.frase));
+  }
+  if (datos.armado_en) {
+    filas.push(fila('Lista del día', null, (ESTADOS[datos.estado] || datos.estado || '')
+      + ' · armada el ' + instanteEnPalabras(datos.armado_en)));
+  }
+  pintar('estado-datos', filas);
+  pintarEstadoLateral();
+};
+
+// LA TARJETA DE ESTADO DE LA BARRA LATERAL: si todo contesta, y hasta qué día
+// hay ventas. Lo que dice sale de `/api/modulos` y de la lista de hoy.
+let ESTADO_DE_LOS_MODULOS = null;
+
+const unirNombres = (nombres) => nombres.length < 2
+  ? nombres.join('')
+  : nombres.slice(0, -1).join(', ') + ' y ' + nombres[nombres.length - 1];
+
+const pintarEstadoLateral = () => {
+  const punto = document.getElementById('estado-lateral-punto');
+  const texto = document.getElementById('estado-lateral-texto');
+  const detalle = document.getElementById('estado-lateral-detalle');
+  const ventas = FECHA_DE_HOY ? 'Ventas hasta el ' + diaEnPalabras(FECHA_DE_HOY) + '.' : '';
+  const modulos = ESTADO_DE_LOS_MODULOS;
+  if (!modulos) { detalle.textContent = ventas; return; }
+  if (modulos.falla) {
+    punto.className = 'punto mal';
+    texto.textContent = 'No se pudo consultar';
+    detalle.textContent = modulos.falla;
+    return;
+  }
+  const caidos = modulos.lista.filter(m => m.ok === false);
+  punto.className = 'punto ' + (caidos.length ? 'mal' : 'ok');
+  texto.textContent = caidos.length
+    ? (caidos.length === 1 ? caidos[0].nombre + ' no responde' : caidos.length + ' módulos no responden')
+    : 'Todo responde';
+  detalle.textContent = (caidos.length ? '' : unirNombres(modulos.lista.map(m => m.nombre)) + '. ') + ventas;
+};
+
+// Los controles de la vista del día que están en el HTML desde el principio:
+// los tres pasos, la franja de avisos, el filtro y la cruz del detalle.
+const iniciarLaVistaDelDia = () => {
+  document.querySelectorAll('#pasos button').forEach(boton => {
+    boton.onclick = () => IR_A_PASO(boton.dataset.paso);
+  });
+  document.getElementById('avisos-resumen').onclick = () => {
+    AVISOS_ABIERTOS = document.getElementById('avisos-lista').hidden;
+    pintarResumenDeAvisos();
+  };
+  document.getElementById('pedido-filtro').addEventListener('input', aplicarElFiltro);
+  const cerrarElDetalle = () => {
+    DETALLE_ABIERTO = false;
+    ajustarElDetalle();
+  };
+  document.getElementById('inspector-cerrar').onclick = cerrarElDetalle;
+  document.addEventListener('keydown', (evento) => {
+    if (evento.key === 'Escape' && ENCIMA.matches && DETALLE_ABIERTO
+        && !document.getElementById('confirmar-cierre').open) cerrarElDetalle();
+  });
+  ENCIMA.addEventListener('change', ajustarElDetalle);
+};
 
 // `fecha` (`AAAA-MM-DD`) es la que traen los `vecinos` de otro día: nunca la
 // teclea nadie ni sale del reloj del navegador. Sin ella se pide **hoy**, que
@@ -1408,6 +2059,10 @@ async function cargarPedido(fecha) {
   // misma en cuanto llega la respuesta, por cualquiera de las salidas.
   document.getElementById('pedido-navegacion-anterior').disabled = true;
   document.getElementById('pedido-navegacion-siguiente').disabled = true;
+  // OTRO DÍA, OTRA VISTA: el paso, el renglón elegido y su detalle vuelven a
+  // empezar. Recargar el MISMO día (tras recibir, cancelar…) los conserva: la
+  // persona no pierde el lugar donde estaba.
+  if ((fecha || FECHA_DE_HOY) !== FECHA_ACTUAL) reiniciarLaVistaDelDia();
   const url = fecha ? '/api/pedido-sugerido/dia/' + fecha : '/api/pedido-sugerido';
   let datos = await respuestaDe(fetch(url));
 
@@ -1474,6 +2129,7 @@ async function cargarPedido(fecha) {
   // una lista, un día sin lista por calendario, o el 404 de arriba).
   if (!datos.fecha_de_ventas) {
     corte.hidden = true;
+    pintarResumenDeAvisos();
     return;
   }
 
@@ -1555,6 +2211,10 @@ async function cargarPedido(fecha) {
   // reponer puede tener, igual, tres renglones de ayer que no han llegado.
   pintarRecepcion(datos.recepcion);
   pintarEnCamino(datos.en_camino);
+  // Lo que la barra lateral cuenta de "En camino", y el "Estado" de los datos:
+  // solo con la lista de hoy, que es la que dice cómo está todo AHORA.
+  pintarCuentasDeLaCarga(datos);
+  pintarEstadoDeLosDatos(datos);
   // LA CONCILIACIÓN DIARIA (ADR 0021): aparte de las dos de arriba porque no
   // viaja en ESTA respuesta -es una lectura más cara que solo hace falta
   // cuando se abre este bloque- y por eso se pide sola, sin esperarla: no hay
@@ -1587,9 +2247,13 @@ async function cargarPedido(fecha) {
     // se pintaron arriba con los datos de HOY, y esos sí se quedan).
     tabla.hidden = true;
     ['vistas', 'completar', 'particion', 'descartados', 'pedido-corrida',
-      'pedido-sin-clasificar'].forEach(id => {
+      'pedido-sin-clasificar', 'pedido-sin-comparar', 'barra-lista', 'inspector',
+      'pasos'].forEach(id => {
       document.getElementById(id).hidden = true;
     });
+    pintarPasos(null);
+    pintarCuentaDeLaLista([]);
+    pintarResumenDeAvisos();
     return;
   }
 
@@ -1646,7 +2310,15 @@ async function cargarPedido(fecha) {
       completar: completarLoQueFalta,
       abrirSesion: abrirSesion,
       confirmarSesion: confirmarSesion,
+      elegir: elegirRenglon,
     };
+    // Los renglones que se ven con la vista de ahora. El elegido —el que
+    // enseña el detalle— tiene que estar entre ellos: si la vista lo escondió
+    // o se descartó, se elige el primero, que es el más urgente.
+    const visibles = vistas ? renglonesDe(trabajables, vistaActiva) : trabajables;
+    if (!visibles.some(r => r.renglon_id === RENGLON_ELEGIDO)) {
+      RENGLON_ELEGIDO = visibles.length ? visibles[0].renglon_id : null;
+    }
     if (vistas) {
       // Los conteos del interruptor son de la lista DE TRABAJO: decir "18" en
       // una vista donde se ven 12 porque seis están descartados haría buscar
@@ -1654,14 +2326,18 @@ async function cargarPedido(fecha) {
       vistas.forEach(v => { v.cuantos = renglonesDe(trabajables, v).length; });
       pintarInterruptor(vistas, vistaActiva, mostrar);
       pintarRenglones(
-        renglonesDe(trabajables, vistaActiva),
+        visibles,
         trabajables.length,
         vistas.find(v => v.clave !== vistaActiva.clave) || vistaActiva,
         datos.descartados,
         acciones);
     } else {
-      pintarRenglones(trabajables, trabajables.length, null, datos.descartados, acciones);
+      pintarRenglones(visibles, trabajables.length, null, datos.descartados, acciones);
     }
+    document.getElementById('barra-lista').hidden = false;
+    aplicarElFiltro();
+    pintarDetalle(datos.renglones.find(r => r.renglon_id === RENGLON_ELEGIDO), acciones);
+    pintarCuentaDeLaLista(trabajables);
     // El bloque de descartados NO se filtra por vista, y es a propósito: la
     // vista de medicamentos esconde abarrotes de lo que falta por pedir, pero
     // un abarrote que alguien descartó por error tiene que poder devolverse sin
@@ -1687,7 +2363,39 @@ async function cargarPedido(fecha) {
     // el importe. Una vista previa vieja mandaría a apretar "Partir" sobre
     // números que ya no son.
     pintarParticion(datos.particion, datos.pedidos, acciones.editable, partir, enviarPedido, tacharRenglon);
+    // EL PASO TRES: la captura de un pedido a la vez, con su botón de enviar.
+    pintarPasoCaptura(datos.pedidos, tacharRenglon, enviarPedido);
+    pintarPasos(datos);
+    pintarResumenDeAvisos();
     tabla.hidden = false;
+  };
+
+  // ELEGIR UN RENGLÓN: el que el detalle enseña. No se vuelve a pintar la
+  // tabla —se perdería el foco del campo que se esté tocando—: se mueve la
+  // marca de la fila y se pinta el detalle. `abrir` es el clic de una persona:
+  // en pantalla angosta, donde el detalle flota encima, es lo que lo abre.
+  function elegirRenglon(r, abrir) {
+    RENGLON_ELEGIDO = r.renglon_id;
+    if (abrir) DETALLE_ABIERTO = true;
+    document.querySelectorAll('#pedido-renglones tr').forEach(tr => {
+      tr.classList.toggle('elegido', Number(tr.dataset.renglon) === r.renglon_id);
+    });
+    pintarDetalle(datos.renglones.find(x => x.renglon_id === r.renglon_id), {
+      editable: datos.estado === 'abierto',
+      descartar: descartar,
+      consultarPrecio: consultarPrecio,
+      elegir: elegirRenglon,
+    });
+    if (abrir && ENCIMA.matches) document.getElementById('inspector-cerrar').focus();
+  }
+
+  // Los tres pasos y "Capturar en NADRO" llevan aquí: cambia lo que se ve, no
+  // los datos, y por eso basta con volver a pintar.
+  IR_A_PASO = (paso, pedidoId) => {
+    PASO = paso;
+    if (pedidoId !== undefined) PEDIDO_EN_CAPTURA = pedidoId;
+    repintar();
+    document.getElementById('panel-pedido').scrollTop = 0;
   };
 
   const mostrar = (vista) => {
@@ -2102,12 +2810,49 @@ async function cargarPedido(fecha) {
 // "el interruptor los escondió" de "no se vendieron": son dos cosas que en
 // pantalla se ven idénticas —el renglón no está— y solo una se arregla
 // moviendo el interruptor.
+// LOS TÍTULOS DE LOS BLOQUES DE "EN CAMINO" (diseño del 2026-09-30). Son
+// rótulos de sección, no afirmaciones: lo que dice qué pasó con cada renglón
+// llega hecho de `transito.py` y de `recepcion.py`, y va debajo de cada título.
+const ENCABEZADOS_DE_EN_CAMINO = {
+  recepcion: 'Probablemente ya llegó',
+  atrasados: 'Atrasado',
+  faltaron: 'Llegó de menos',
+  vuelven: 'Vuelve en la siguiente lista',
+  pedidos: 'Pedidos en camino',
+};
+
+// Un bloque de "En camino": su título, cuántos trae —si se sabe— y debajo lo
+// que se le pase.
+const bloqueDeEnCamino = (clave, cuantos, ...piezas) => {
+  const bloque = document.createElement('div');
+  bloque.className = 'en-camino-bloque';
+  const cabeza = document.createElement('div');
+  cabeza.className = 'titulo-bloque';
+  const titulo = document.createElement('h3');
+  titulo.textContent = ENCABEZADOS_DE_EN_CAMINO[clave];
+  cabeza.append(titulo);
+  if (cuantos) cabeza.append(insignia(String(cuantos), clave === 'atrasados' ? 'naranja' : 'acento'));
+  bloque.append(cabeza, ...piezas.filter(Boolean));
+  return bloque;
+};
+
+// Un párrafo con una frase del servidor, o nada si no la mandó.
+const parrafo = (clase, texto) => {
+  if (!texto) return null;
+  const p = document.createElement('p');
+  p.className = clase;
+  p.textContent = texto;
+  return p;
+};
+
 // LO QUE VIENE EN CAMINO DE LISTAS ANTERIORES (ticket 24, casillas 2, 4 y 5).
 //
 // Ninguna frase se compone aquí: el encabezado, "Pedido el martes a NADRO, sin
 // recibir.", lo vendido desde entonces y la advertencia de que esto solo sabe
 // de lo que pasó por Continental llegan hechos de `transito.py`, con pruebas.
-// Aquí se acomodan.
+// Aquí se acomodan, desde el diseño del 2026-09-30 en cuatro bloques: lo
+// atrasado, lo que llegó de menos, lo que vuelve en la siguiente lista, y los
+// pedidos que vienen en camino con sus renglones.
 //
 // Se pinta SIEMPRE que hay lista, también sin nada en camino: "nada viene en
 // camino" es un dato, y la advertencia importa justo entonces — un bloque vacío
@@ -2124,24 +2869,17 @@ const pintarEnCamino = (en_camino) => {
   resumen.textContent = en_camino.frase
     + (en_camino.ok === false && en_camino.detalle ? ' (' + en_camino.detalle + ')' : '');
 
-  const advertencia = document.createElement('p');
-  advertencia.className = 'advertencia';
-  advertencia.textContent = en_camino.advertencia;
+  const advertencia = parrafo('advertencia', en_camino.advertencia);
 
   // QUÉ ES "ATRASADO" AQUÍ (ticket 25), con su número, o por qué no se sabe.
   // Las dos frases llegan hechas de Python; la de los atrasados solo si hay.
-  const umbral = document.createElement('p');
-  umbral.className = 'umbral' + (en_camino.umbral_del_atraso == null ? ' mal' : '');
-  // Una u otra, no las dos: la de los atrasados ya lleva el número, y repetir
-  // "más de 7 días" dos veces seguidas lo cazó el recorrido del navegador.
-  umbral.textContent = en_camino.frase_de_los_atrasados || en_camino.frase_del_umbral || '';
-  const hayAtrasados = (en_camino.renglones || []).some(v => v.se_puede_devolver);
-  const alDevolver = document.createElement('p');
-  alDevolver.className = 'advertencia';
-  alDevolver.textContent = en_camino.advertencia_al_devolver || '';
+  // Una u otra, no las dos: la de los atrasados ya lleva el número.
+  const umbral = parrafo('umbral' + (en_camino.umbral_del_atraso == null ? ' mal' : ''),
+    en_camino.frase_de_los_atrasados || en_camino.frase_del_umbral || '');
 
-  const lista = document.createElement('ul');
-  (en_camino.renglones || []).forEach(v => {
+  // Un renglón en camino, como tarjeta: qué es, cuántas, cuándo y a quién se
+  // pidió, lo vendido desde entonces y la firma.
+  const tarjetaEnCamino = (v) => {
     const li = document.createElement('li');
     li.className = 'transito' + (v.atrasado ? ' atrasado' : '');
     const que = document.createElement('span');
@@ -2154,8 +2892,7 @@ const pintarEnCamino = (en_camino) => {
     cuando.className = 'cuando';
     cuando.textContent = v.frase;
     // La firma —quién, a qué hora, de qué lista— a la vista y no en un
-    // `title`, que en una pantalla táctil no se ve nunca. Hecha en Python: la
-    // primera versión se armaba aquí y escribía "a.m..", igual que en el 21.
+    // `title`, que en una pantalla táctil no se ve nunca. Hecha en Python.
     const firma = document.createElement('span');
     firma.className = 'vendido-desde';
     firma.textContent = v.firma || '';
@@ -2181,107 +2918,145 @@ const pintarEnCamino = (en_camino) => {
       li.append(recepcion);
     }
     if (v.se_puede_devolver) {
+      const botones = document.createElement('div');
+      botones.className = 'botones';
       const boton = botonDeAccion('Devolver a la lista',
-        (b) => devolverAtrasado(v.renglon_id, b));
+        (b) => devolverAtrasado(v.renglon_id, b), 'tenida');
       boton.setAttribute('aria-label', 'Devolver a la lista ' + v.descripcion);
-      li.append(boton);
+      botones.append(boton);
+      li.append(botones);
     }
-    lista.append(li);
-  });
+    return li;
+  };
 
+  const renglones = en_camino.renglones || [];
+  const atrasados = renglones.filter(v => v.atrasado);
+  const hayAtrasados = renglones.some(v => v.se_puede_devolver);
+
+  // 1. LO ATRASADO, primero: es lo que hay que mirar.
+  let bloqueAtrasados = null;
+  if (atrasados.length) {
+    const lista = document.createElement('ul');
+    lista.append(...atrasados.map(tarjetaEnCamino));
+    bloqueAtrasados = bloqueDeEnCamino('atrasados', atrasados.length, umbral,
+      hayAtrasados ? parrafo('advertencia', en_camino.advertencia_al_devolver) : null, lista);
+  }
+
+  // 2. LO QUE LLEGÓ DE MENOS (ticket 27): lo que faltó vuelve en la siguiente
+  // lista, y aquí se ve —con su firma— y se corrige si el resto llegó en otra
+  // factura. Todas las frases y la etiqueta son de Python.
+  let bloqueFaltaron = null;
+  if ((en_camino.faltaron || []).length) {
+    const faltaron = document.createElement('ul');
+    faltaron.className = 'faltaron tarjeta-lista';
+    en_camino.faltaron.forEach(f => {
+      const li = document.createElement('li');
+      const que = document.createElement('span');
+      que.className = 'que';
+      que.textContent = (f.clave ? f.clave + ' · ' : '') + f.descripcion;
+      const explica = document.createElement('span');
+      explica.className = 'explica';
+      explica.textContent = f.frase;
+      li.append(que,
+        controlAMano(f.renglon_id, f.etiqueta_a_mano, f.descripcion, f.piezas_recibidas),
+        explica);
+      faltaron.append(li);
+    });
+    bloqueFaltaron = bloqueDeEnCamino('faltaron', null,
+      parrafo('resumen', en_camino.frase_de_los_que_faltaron), faltaron);
+  }
+
+  // 3. LO QUE VUELVE EN LA SIGUIENTE LISTA (ticket 25): lo que se canceló o se
+  // devolvió y ninguna lista ha vuelto a traer todavía. Se enseña para que el
+  // número de mañana se pueda explicar hoy. El encabezado viene de Python.
+  let bloqueVuelven = null;
+  if ((en_camino.vuelven || []).length) {
+    const vuelven = document.createElement('ul');
+    vuelven.className = 'vuelven tarjeta-lista';
+    en_camino.vuelven.forEach(v => {
+      const li = document.createElement('li');
+      const que = document.createElement('span');
+      que.className = 'que';
+      que.textContent = (v.clave ? v.clave + ' · ' : '') + v.descripcion;
+      const explica = document.createElement('span');
+      explica.className = 'explica';
+      explica.textContent = v.frase;
+      li.append(que, explica);
+      vuelven.append(li);
+    });
+    bloqueVuelven = bloqueDeEnCamino('vuelven', null,
+      parrafo('resumen', en_camino.frase_de_los_que_vuelven), vuelven);
+  }
+
+  // 4. LOS PEDIDOS QUE VIENEN EN CAMINO, cada uno con sus renglones. Agrupar
+  // por `pedido_id` es acomodar lo que ya llegó: cada renglón dice de qué
+  // pedido es. Lo que no se encuentre en ningún pedido —un servidor viejo— se
+  // pinta aparte, nunca se pierde.
+  //
   // CANCELAR UN PEDIDO DE UNA LISTA ANTERIOR (ticket 25). Uno por pedido, con
   // lo que declara quien lo aprieta escrito AL LADO del botón — la misma
   // lección que el total dentro del botón de enviar: el diálogo de "¿seguro?"
   // se aprende a despachar sin leer; la frase junto al botón, no.
   const pedidos = document.createElement('ul');
   pedidos.className = 'pedidos-en-camino';
+  const sinAtrasar = renglones.filter(v => !v.atrasado);
+  const deCadaPedido = new Map();
+  sinAtrasar.forEach(v => {
+    if (!deCadaPedido.has(v.pedido_id)) deCadaPedido.set(v.pedido_id, []);
+    deCadaPedido.get(v.pedido_id).push(v);
+  });
   (en_camino.pedidos || []).forEach(p => {
     const li = document.createElement('li');
+    const cabeza = document.createElement('div');
+    cabeza.className = 'cabeza-pedido';
     const que = document.createElement('span');
     que.className = 'que';
     que.textContent = p.frase;
+    cabeza.append(que);
     const explica = document.createElement('span');
     explica.className = 'explica';
     // Un pedido con algo ya recibido (ticket 26) sí se capturó: no se ofrece
     // cancelarlo, y se dice por qué en vez de pintar un botón que da 409.
     if (p.se_puede_cancelar === false) {
       explica.textContent = 'No se puede cancelar: ' + p.motivo_para_no_cancelar + '.';
-      li.append(que, explica);
     } else {
       explica.textContent = p.frase_para_cancelar;
-      const boton = botonDeAccion('Cancelar: no está en el portal de ' + p.nombre,
-        (b) => cancelarPedido(p.pedido_id, b));
-      li.append(que, boton, explica);
+      cabeza.append(botonDeAccion('Cancelar: no está en el portal de ' + p.nombre,
+        (b) => cancelarPedido(p.pedido_id, b), 'plana'));
+    }
+    li.append(cabeza, explica);
+    const suyos = deCadaPedido.get(p.pedido_id) || [];
+    deCadaPedido.delete(p.pedido_id);
+    if (suyos.length) {
+      const lista = document.createElement('ul');
+      lista.className = 'renglones-del-pedido';
+      lista.append(...suyos.map(tarjetaEnCamino));
+      li.append(lista);
     }
     pedidos.append(li);
   });
-
-  // LO QUE VUELVE EN LA SIGUIENTE LISTA (ticket 25): lo que se canceló o se
-  // devolvió y ninguna lista ha vuelto a traer todavía. Se enseña para que el
-  // número de mañana se pueda explicar hoy.
-  const vuelven = document.createElement('ul');
-  vuelven.className = 'vuelven';
-  // El encabezado viene de Python: sin él, esta lista se leía como parte del
-  // pedido de arriba (recorrido del navegador, ticket 25).
-  if (en_camino.frase_de_los_que_vuelven) {
-    const encabezado = document.createElement('li');
-    encabezado.className = 'explica';
-    encabezado.textContent = en_camino.frase_de_los_que_vuelven;
-    vuelven.append(encabezado);
-  }
-  (en_camino.vuelven || []).forEach(v => {
+  const sueltos = [...deCadaPedido.values()].flat();
+  if (sueltos.length) {
     const li = document.createElement('li');
-    const que = document.createElement('span');
-    que.className = 'que';
-    que.textContent = (v.clave ? v.clave + ' · ' : '') + v.descripcion;
-    const explica = document.createElement('span');
-    explica.className = 'explica';
-    explica.textContent = v.frase;
-    li.append(que, explica);
-    vuelven.append(li);
-  });
-
-  // LO QUE LLEGÓ DE MENOS (ticket 27): lo que faltó vuelve en la siguiente
-  // lista, y aquí se ve —con su firma— y se corrige si el resto llegó en otra
-  // factura. Todas las frases y la etiqueta son de Python.
-  const faltaron = document.createElement('ul');
-  faltaron.className = 'faltaron';
-  if (en_camino.frase_de_los_que_faltaron) {
-    const encabezado = document.createElement('li');
-    encabezado.className = 'explica';
-    encabezado.textContent = en_camino.frase_de_los_que_faltaron;
-    faltaron.append(encabezado);
+    const lista = document.createElement('ul');
+    lista.className = 'renglones-del-pedido';
+    lista.append(...sueltos.map(tarjetaEnCamino));
+    li.append(lista);
+    pedidos.append(li);
   }
-  (en_camino.faltaron || []).forEach(f => {
-    const li = document.createElement('li');
-    const que = document.createElement('span');
-    que.className = 'que';
-    que.textContent = (f.clave ? f.clave + ' · ' : '') + f.descripcion;
-    const explica = document.createElement('span');
-    explica.className = 'explica';
-    explica.textContent = f.frase;
-    li.append(que, explica,
-      controlAMano(f.renglon_id, f.etiqueta_a_mano, f.descripcion, f.piezas_recibidas));
-    faltaron.append(li);
-  });
+  const bloquePedidos = bloqueDeEnCamino('pedidos', null, resumen, advertencia,
+    atrasados.length ? null : umbral,
+    pedidos.children.length ? pedidos : null);
 
-  caja.replaceChildren(
-    resumen,
-    advertencia,
-    ...(umbral.textContent ? [umbral] : []),
-    ...(hayAtrasados && alDevolver.textContent ? [alDevolver] : []),
-    ...(lista.children.length ? [lista] : []),
-    ...(pedidos.children.length ? [pedidos] : []),
-    ...(vuelven.children.length ? [vuelven] : []),
-    ...(faltaron.children.length ? [faltaron] : []));
+  caja.replaceChildren(...[bloqueAtrasados, bloqueFaltaron, bloquePedidos, bloqueVuelven].filter(Boolean));
   caja.hidden = false;
 };
 
-// LA RECEPCIÓN SUGERIDA (ticket 26, ADR 0014). Lo que probablemente ya
-// llegó, con su evidencia —proveedor, fecha, piezas, folio— para que una
-// persona la juzgue, y dos botones: confirmar (pasa a recibido, firmado) y
-// rechazar (sigue en camino; esa compra ya no se le propone). NADA pasa a
-// recibido solo.
+// LA RECEPCIÓN SUGERIDA (ticket 26, ADR 0014). Lo que seguramente ya llegó,
+// con su evidencia —proveedor, fecha, piezas, folio— para que una persona la
+// juzgue, y dos botones: confirmar (pasa a recibido, firmado) y rechazar
+// (sigue en camino; esa compra ya no se le propone). NADA pasa a recibido
+// solo.
 //
 // Todas las frases llegan hechas de `recepcion.py`, con pruebas: aquí se
 // acomodan. Lo que se manda al servidor es QUÉ COMPRAS SE VIERON: el servidor
@@ -2344,28 +3119,30 @@ const pintarRecepcion = (recepcion) => {
       compartida.textContent = p.compartida;
       li.append(compartida);
     }
+    const botones = document.createElement('div');
+    botones.className = 'botones';
     // Sin botón de confirmar cuando la evidencia no alcanza lo pedido: la
-    // frase de la cantidad, que viene de Python, ya dice por qué (y el
-    // recorrido del navegador cazó que el motivo repetido debajo la duplicaba).
+    // frase de la cantidad, que viene de Python, ya dice por qué.
     if (p.se_puede_confirmar) {
       const confirmar = botonDeAccion('Confirmar que llegó',
-        (b) => recibirORechazar('confirmar', p.renglon_id, p.compras, b));
+        (b) => recibirORechazar('confirmar', p.renglon_id, p.compras, b), 'llena');
       confirmar.setAttribute('aria-label', 'Confirmar que llegó ' + p.descripcion);
-      li.append(confirmar);
+      botones.append(confirmar);
     }
     // Lo que trae de menos (ticket 27): la etiqueta, con sus números, viene
     // hecha de Python.
     if (p.se_puede_recibir_lo_que_trae && p.etiqueta_de_lo_que_trae) {
-      li.append(botonDeAccion(p.etiqueta_de_lo_que_trae,
-        (b) => recibirParcial(p.renglon_id, p.compras, b)));
+      botones.append(botonDeAccion(p.etiqueta_de_lo_que_trae,
+        (b) => recibirParcial(p.renglon_id, p.compras, b), 'llena'));
     }
     const rechazar = botonDeAccion('Rechazar: no es este pedido',
       (b) => recibirORechazar('rechazar', p.renglon_id, p.compras, b));
     rechazar.setAttribute('aria-label', 'Rechazar la compra de ' + p.descripcion);
-    li.append(rechazar);
+    botones.append(rechazar);
     // Y siempre a mano: la compra de 10 que surtió dos pedidos solo confirma
     // uno, y el otro se recibe así.
-    if (p.etiqueta_a_mano) li.append(controlAMano(p.renglon_id, p.etiqueta_a_mano, p.descripcion));
+    if (p.etiqueta_a_mano) botones.append(controlAMano(p.renglon_id, p.etiqueta_a_mano, p.descripcion));
+    li.append(botones);
     lista.append(li);
   });
 
@@ -2378,8 +3155,7 @@ const pintarRecepcion = (recepcion) => {
     const explica = document.createElement('span');
     explica.className = 'explica';
     explica.textContent = g.frase;
-    // Uno por renglón, cada uno con su salida a mano (ticket 27): hasta el 26
-    // iban en una sola línea, porque no había nada que hacer con ninguno.
+    // Uno por renglón, cada uno con su salida a mano (ticket 27).
     const cuales = document.createElement('ul');
     cuales.className = 'cuales';
     (g.renglones || []).forEach(r => {
@@ -2396,13 +3172,13 @@ const pintarRecepcion = (recepcion) => {
   });
 
   const hayRenglones = lista.children.length || esperan.children.length;
-  caja.replaceChildren(
+  caja.replaceChildren(bloqueDeEnCamino('recepcion', lista.children.length,
     resumen,
     ...(retraso.textContent ? [retraso] : []),
     ...(lista.children.length && advertencia.textContent ? [advertencia] : []),
     ...(hayRenglones && aMano.textContent ? [aMano] : []),
     ...(lista.children.length ? [lista] : []),
-    ...(esperan.children.length ? [esperan] : []));
+    ...(esperan.children.length ? [esperan] : [])));
   caja.hidden = false;
 };
 
@@ -2450,6 +3226,7 @@ const controlAMano = (renglonId, etiqueta, descripcion, valor) => {
   campo.step = '1';
   campo.inputMode = 'numeric';
   if (valor != null) campo.value = valor;
+  campo.placeholder = 'piezas';
   campo.setAttribute('aria-label', etiqueta + ': ' + descripcion);
   const boton = botonDeAccion(etiqueta, (b) => recibirAMano(renglonId, campo.value, b));
   boton.setAttribute('aria-label', etiqueta + ': ' + descripcion);
@@ -2678,6 +3455,7 @@ const confirmarLoteDeConciliacion = async (pedidoSugeridoId, marcadas, boton) =>
 };
 
 const pintarRenglones = (visibles, total, otra, descartados, acciones) => {
+  pintarEncabezado();
   const escondidos = total - visibles.length;
   // LOS QUE YA SE PIDIERON NO SON "POR ATENDER" (ticket 21). Siguen en la
   // tabla —no desaparecen— pero contarlos aquí diría que queda trabajo donde
@@ -2947,7 +3725,7 @@ const pintarCompletar = (faltantes, sesiones, acciones) => {
     // crea. Lo encontró el recorrido del navegador del 2026-09-19.
     const boton = botonDeAccion(
       cuantos === 1 ? 'Completar el que falta' : 'Completar los ' + cuantos + ' que faltan',
-      (b) => acciones.completar(b));
+      (b) => acciones.completar(b), 'tenida');
     boton.title = 'Le pregunta a Doyle SOLO por estos renglones, uno tras otro. '
       + 'Tarda alrededor de medio minuto por renglón.';
     fila.append(boton);
@@ -2976,7 +3754,7 @@ const pintarCompletar = (faltantes, sesiones, acciones) => {
       fila.className = 'fila';
       const nombre = document.createElement('span');
       nombre.textContent = s.nombre;
-      const abrir = botonDeAccion('Abrir sesión', (b) => acciones.abrirSesion(s, b));
+      const abrir = botonDeAccion('Abrir sesión', (b) => acciones.abrirSesion(s, b), 'tenida');
       abrir.title = 'Le pide a Doyle que abra el navegador del portal y te '
         + 'abre el visor para que lo veas. Continental no abre navegadores: '
         + 'se lo pide a Doyle.';
@@ -3053,16 +3831,6 @@ const copiarClave = async (clave, boton) => {
   }, copiada ? 1200 : 6000);
 };
 
-// Qué bloque de captura está abierto, por pedido. Es ESTADO DE LA VISTA y vive
-// en memoria —ni en el servidor ni en `localStorage`—: repintar recrea el
-// `<details>`, y sin esto cada tachón cerraría la lista que uno está
-// recorriendo. Lo que se guarda en el servidor es el AVANCE, que es un dato del
-// pedido; si un bloque está abierto es de quien mira.
-//
-// Sin entrada, el bloque se abre solo si la captura va a medias: al recargar a
-// la mitad de 40 renglones, lo primero que se ve es por dónde se iba.
-const CAPTURAS_ABIERTAS = new Map();
-
 // EL ARCHIVO DEL PEDIDO (ticket 23). La URL viene HECHA del servidor
 // (`pedido.csv`): aquí no se arma nada, y `null` quiere decir que no hay qué
 // exportar —un pedido vacío contestaría 409—. Un enlace y no un `fetch`: la
@@ -3070,45 +3838,32 @@ const CAPTURAS_ABIERTAS = new Map();
 // otra pestaña, para que un error se lea ahí sin tirar la pantalla de trabajo;
 // y sin el atributo de descarga, que haría guardar el JSON de un error con
 // nombre de CSV.
-const enlaceCsv = (pedido) => {
+const enlaceCsv = (pedido, texto) => {
   if (!pedido.csv) return null;
   const enlace = document.createElement('a');
   enlace.className = 'exportar';
   enlace.href = pedido.csv;
   enlace.target = '_blank';
   enlace.rel = 'noopener';
-  enlace.textContent = 'Bajar este pedido en CSV (para Excel)';
+  enlace.textContent = texto || 'Bajar este pedido en CSV (para Excel)';
   enlace.title = 'Se arma en este momento con lo que el pedido tiene ahora, y no '
     + 'se guarda en ninguna parte: cada vez que lo bajes sale al día.';
   return enlace;
 };
 
-// LA PANTALLA DE CAPTURA DE UN PEDIDO (ticket 22). Todo lo que dice viene
-// HECHO del servidor: la frase del avance —con cuántos faltan—, la invitación a
-// enviar y cada conteo. Aquí no se filtra ni se suma nada, por lo mismo que el
-// conteo de descartados sale de Python desde el ticket 10: dos pestañas
-// bastan para que un número que el navegador va llevando se separe de la
-// verdad. Lo único que decide esta función es cómo se ve.
-const pintarCaptura = (pedido, alTachar, conBoton) => {
+// LA LISTA DE CAPTURA DE UN PEDIDO (ticket 22). Todo lo que dice viene HECHO
+// del servidor. Aquí no se filtra ni se suma nada, por lo mismo que el conteo
+// de descartados sale de Python desde el ticket 10: dos pestañas bastan para
+// que un número que el navegador va llevando se separe de la verdad. Lo único
+// que decide esta función es cómo se ve.
+//
+// Desde el diseño del 2026-09-30 ya no es un `<details>` debajo de su pedido:
+// es la pantalla del paso tres, un pedido a la vez, y el avance y el botón de
+// enviar van en el pie (`pintarPasoCaptura`).
+const pintarCaptura = (pedido, alTachar) => {
   const captura = pedido.captura;
-  const caja = document.createElement('details');
+  const caja = document.createElement('div');
   caja.className = 'captura' + (captura.todo_capturado ? ' completa' : '');
-  const recordado = CAPTURAS_ABIERTAS.get(pedido.pedido_id);
-  caja.open = recordado === undefined
-    ? (captura.capturados > 0 && !captura.todo_capturado)
-    : recordado;
-  caja.addEventListener('toggle', () => CAPTURAS_ABIERTAS.set(pedido.pedido_id, caja.open));
-
-  const resumen = document.createElement('summary');
-  const titulo = document.createElement('b');
-  titulo.textContent = 'Capturar en el portal de ' + captura.nombre;
-  const avance = document.createElement('span');
-  avance.className = 'avance';
-  // La frase trae "faltan N" dentro (casilla 2), y va en el resumen para que
-  // se vea con el bloque cerrado.
-  avance.textContent = captura.frase;
-  resumen.append(titulo, ' · ', avance);
-  caja.append(resumen);
 
   const lista = document.createElement('ol');
   captura.lineas.forEach(linea => {
@@ -3116,10 +3871,12 @@ const pintarCaptura = (pedido, alTachar, conBoton) => {
     li.className = linea.esta_capturado ? 'hecho' : '';
 
     // LA CASILLA (casilla 1). Se manda lo que quedó marcado y no un "alterna".
+    // Solo un borrador se tacha: lo enviado ya está en el portal.
     const casilla = document.createElement('input');
     casilla.type = 'checkbox';
     casilla.id = 'captura-' + linea.renglon_id;
     casilla.checked = linea.esta_capturado;
+    casilla.disabled = !pedido.es_borrador;
     casilla.dataset.capturaRenglon = linea.renglon_id;
     // Quién la tachó y cuándo, a la vista con el puntero encima. Es una firma
     // y nunca un permiso (regla 3).
@@ -3173,22 +3930,35 @@ const pintarCaptura = (pedido, alTachar, conBoton) => {
   aviso.className = 'nota-captura';
   aviso.setAttribute('role', 'status');
   caja.append(aviso);
-
-  // LLEVA A ENVIAR, SIN OBLIGAR (casilla 5). La frase viene hecha: con todo
-  // tachado dice que el siguiente paso es enviar; a medias, que tachar no es
-  // requisito. `null` cuando el botón está apagado por otra razón —el motivo
-  // del ticket 21 ya lo dice— y entonces no se escribe nada. Y tampoco cuando
-  // este pedido no tiene su botón al lado (`conBoton`): la frase la decide
-  // Python, pero si hay adónde llevar lo sabe la pantalla.
-  if (captura.invitacion && conBoton) {
-    const invitacion = document.createElement('p');
-    invitacion.className = 'invitacion' + (captura.todo_capturado ? ' lista' : '');
-    invitacion.textContent = captura.invitacion + '.';
-    caja.append(invitacion);
-  }
   return caja;
 };
 
+// EL TONO DE CADA ESTADO DE UN PEDIDO, para su insignia. La palabra es la del
+// glosario y llega del servidor (`estado_a_la_vista`); el tono la acompaña.
+const TONOS_DEL_PEDIDO = {
+  borrador: 'gris', enviado: 'acento', cancelado: 'rojo',
+  recibido: 'verde', 'recibido parcial': 'naranja',
+};
+
+const insigniaDelPedido = (pedido) => {
+  const estado = pedido ? (pedido.estado_a_la_vista || pedido.estado) : null;
+  return estado
+    ? insignia(mayuscula(estado), TONOS_DEL_PEDIDO[estado] || 'gris')
+    : insignia('Sin partir', 'gris');
+};
+
+// EN QUÉ SE PARTE LA LISTA (ticket 20): EL PASO DOS.
+//
+// Dos cosas distintas en el mismo paso, y se dicen por separado:
+//
+//   - la PARTICIÓN, que es el cálculo de ahora mismo: en cuántos pedidos
+//     quedaría y cuánto sumaría cada uno si se apretara el botón;
+//   - los PEDIDOS, que son las filas que ya existen, con su estado.
+//
+// Ningún número se calcula aquí. Los totales, el parcial, cuántas líneas van
+// sin precio y cuáles proveedores no tiene SICAR llegan de `particion.partir`,
+// que es puro y tiene su tabla de casos. Desde el diseño del 2026-09-30 cada
+// pedido es una tarjeta, y la captura y el envío viven en el paso tres.
 const pintarParticion = (particion, pedidos, editable, alPartir, alEnviar, alTachar) => {
   const caja = document.getElementById('particion');
   if (!particion) { caja.hidden = true; caja.replaceChildren(); return; }
@@ -3198,10 +3968,9 @@ const pintarParticion = (particion, pedidos, editable, alPartir, alEnviar, alTac
   // LOS QUE YA NO ESTÁN EN LA PARTICIÓN, Y POR QUÉ HAY QUE PINTARLOS IGUAL
   // (ticket 21). Al enviar un pedido, sus renglones pasan a `en tránsito` y
   // dejan de contar como "por repartir": el pedido enviado desaparece de
-  // `particion.pedidos`, que es el cálculo de lo que queda por hacer. Si esta
-  // función solo recorriera esa lista, **el pedido recién enviado se borraría
-  // de la pantalla** — justo el que el encargado acaba de crear y el único del
-  // que necesita ver la firma.
+  // `particion.pedidos`. Si esta función solo recorriera esa lista, **el pedido
+  // recién enviado se borraría de la pantalla** — justo el que el encargado
+  // acaba de crear y el único del que necesita ver la firma.
   //
   // Así que se pinta la UNIÓN: primero lo que se partiría ahora, y después los
   // pedidos guardados que ya no aparecen ahí.
@@ -3211,6 +3980,8 @@ const pintarParticion = (particion, pedidos, editable, alPartir, alEnviar, alTac
   const enviados = (pedidos || []).filter(p => p.fue_enviado).length;
   const cancelados = (pedidos || []).filter(p => p.fue_cancelado).length;
 
+  const cabeza = document.createElement('div');
+  cabeza.className = 'particion-cabeza';
   const titular = document.createElement('b');
   titular.textContent = (particion.hay
     ? 'Esta lista se parte en ' + plural(particion.pedidos.length, 'pedido', 'pedidos')
@@ -3233,20 +4004,17 @@ const pintarParticion = (particion, pedidos, editable, alPartir, alEnviar, alTac
     + (cancelados
        ? ' · ' + plural(cancelados, 'pedido cancelado', 'pedidos cancelados')
        : '');
-  caja.append(titular);
 
   const detalle = document.createElement('span');
   detalle.className = 'detalle';
   detalle.textContent = particion.hay
-    ? plural(particion.renglones_repartidos, 'renglón repartido', 'renglones repartidos')
-      + '. Cada pedido se puede volver a armar mientras siga en borrador: '
-      + 'cambia el proveedor de un renglón y vuelve a partir.'
+    ? 'Cada pedido se puede volver a armar mientras siga en borrador: cambia el '
+      + 'proveedor de un renglón o su cantidad en el paso uno, y vuelve a partir.'
     // Con algo cancelado, la frase es de Python (ticket 25): la vieja decía
     // "todo lo que había se capturó en los portales", y no es verdad. Y desde
-    // el 26 también con algo recibido: la vieja decía "están en tránsito" sobre
-    // renglones que ya llegaron (lo cazó el recorrido del navegador).
-    // La de Python se usa SIEMPRE que llega: dice cuántos van en camino,
-    // cuántos se cancelaron y cuántos llegaron, y la de abajo queda de reserva.
+    // el 26 también con algo recibido. La de Python se usa SIEMPRE que llega:
+    // dice cuántos van en camino, cuántos se cancelaron y cuántos llegaron, y
+    // la de abajo queda de reserva.
     : (particion.sin_nada_por_repartir
        ? particion.sin_nada_por_repartir
        : (enviados
@@ -3254,30 +4022,43 @@ const pintarParticion = (particion, pedidos, editable, alPartir, alEnviar, alTac
             + 'portales y sus renglones están en tránsito. Ya se puede cerrar.'
           : 'Elige a quién se le pide cada renglón, o consulta los precios para '
             + 'que el sistema pueda sugerirlo.'));
-  caja.append(detalle);
+  cabeza.append(titular, detalle);
+  caja.append(cabeza);
+
+  const grilla = document.createElement('div');
+  grilla.className = 'pedidos-grilla';
+
+  // El botón que lleva a capturar un pedido: al paso tres, con ése elegido.
+  const botonDeCapturar = (g) => botonDeAccion('Capturar en ' + g.nombre,
+    () => IR_A_PASO('capturar', g.pedido_id), 'tenida');
 
   // Un pedido por proveedor, con su total. El estado sale del pedido GUARDADO
   // cuando lo hay: "borrador" es un hecho de la tabla, no de este cálculo.
   particion.pedidos.forEach(p => {
-    const fila = document.createElement('div');
-    fila.className = 'pedido';
+    const tarjeta = document.createElement('div');
+    tarjeta.className = 'pedido';
+    const guardado = guardados.get(p.proveedor);
 
+    const encabezado = document.createElement('div');
+    encabezado.className = 'pedido-cabeza';
     const quien = document.createElement('span');
     quien.className = 'quien';
     quien.textContent = p.nombre;
-
-    const que = document.createElement('span');
-    que.textContent = plural(p.renglones, 'renglón', 'renglones')
-      + ' · ' + plural(p.piezas, 'pieza', 'piezas');
+    encabezado.append(quien, insigniaDelPedido(guardado));
 
     // EL TOTAL, O POR QUÉ NO SE SABE. `null` no se pinta como una cifra y
     // jamás como "$0.00": un cero ahí se leería "este pedido no cuesta nada",
     // que es lo contrario de lo que pasa. El parcial sí se enseña, con el
     // conteo de lo que le falta al lado — el dato que hay no se esconde.
     const cuanto = document.createElement('span');
-    cuanto.className = 'cuanto' + (p.hay_total ? '' : ' nose');
+    cuanto.className = 'total' + (p.hay_total ? '' : ' nose');
     cuanto.textContent = p.hay_total ? '$' + p.total_sin_iva : 'total sin saber';
-    fila.append(quien, que, cuanto);
+
+    const que = document.createElement('span');
+    que.className = 'que';
+    que.textContent = plural(p.renglones, 'renglón', 'renglones')
+      + ' · ' + plural(p.piezas, 'pieza', 'piezas');
+    tarjeta.append(encabezado, cuanto, que);
 
     if (!p.hay_total && p.renglones) {
       const marca = document.createElement('span');
@@ -3285,22 +4066,22 @@ const pintarParticion = (particion, pedidos, editable, alPartir, alEnviar, alTac
       marca.textContent = plural(p.sin_precio, 'renglón va sin precio', 'renglones van sin precio')
         + ' de ' + p.nombre + ', así que el total no se puede sumar. Lo que sí '
         + 'se sabe suma $' + p.parcial_sin_iva + '. Se pide igual.';
-      fila.append(marca);
+      tarjeta.append(marca);
     }
 
     // SICAR NO LO CONOCE. Se dice y no se esconde: el pedido se arma igual,
-    // con `proveedor_id` en NULL. Hoy es el caso de QuePharma, a quien la
-    // farmacia nunca le ha comprado.
+    // con `proveedor_id` en NULL. Hoy es el caso de QuePharma.
     if (!p.tiene_puente) {
       const marca = document.createElement('span');
       marca.className = 'marca tenue';
       marca.textContent = p.nombre + ' ' + p.estado_del_puente
         + ': se le puede pedir igual, pero la compra no se va a poder cruzar '
         + 'sola con SICAR cuando llegue.';
-      fila.append(marca);
+      tarjeta.append(marca);
     }
 
-    const guardado = guardados.get(p.proveedor);
+    const acciones = document.createElement('div');
+    acciones.className = 'acciones';
     if (guardado) {
       const marca = document.createElement('span');
       marca.className = 'marca tenue';
@@ -3312,110 +4093,80 @@ const pintarParticion = (particion, pedidos, editable, alPartir, alEnviar, alTac
       marca.textContent = 'Pedido ' + guardado.pedido_id + ', '
         + (guardado.estado_a_la_vista || guardado.estado)
         + ', armado ' + instanteEnPalabras(guardado.armado_en);
-      fila.append(marca);
+      tarjeta.append(marca);
       if (guardado.frase_de_la_recepcion) {
         const llegada = document.createElement('span');
         llegada.className = 'envio hecho';
         llegada.textContent = guardado.frase_de_la_recepcion;
-        fila.append(llegada);
+        tarjeta.append(llegada);
       }
 
       // QUÉ SIGNIFICA ENVIAR, y ya lo dice el servidor (ticket 21). La frase
       // viene HECHA de `particion.frase_del_envio`: aquí no se elige entre dos
-      // literales ni se compone nada. Es la lección del ticket 15 aplicada al
-      // sitio donde más caro sale — es la frase que impide que alguien crea
-      // que Continental le mandó el pedido a NADRO.
-      const envio = document.createElement('span');
-      envio.className = 'envio' + (guardado.fue_enviado ? ' hecho' : '');
-      envio.textContent = guardado.frase_del_envio
-        + (guardado.fue_enviado && guardado.enviado_en
-           ? ' Fue ' + instanteEnPalabras(guardado.enviado_en)
-           : '');
-      fila.append(envio);
-
-      // LA PANTALLA DE CAPTURA (ticket 22), entre la frase del envío y el
-      // botón: se captura, y lo que sigue es enviar.
-      // Solo un BORRADOR se captura: `!fue_enviado` era lo mismo hasta el
-      // ticket 25, y un cancelado le habría pintado casillas a un pedido que
-      // ya no existe en ningún portal.
-      if (guardado.es_borrador && guardado.captura && guardado.captura.cuantos) {
-        fila.append(pintarCaptura(guardado, alTachar, true));
+      // literales ni se compone nada. Es la frase que impide que alguien crea
+      // que Continental le mandó el pedido a NADRO. En un borrador va en el
+      // paso tres, junto al botón de enviar, que es donde se lee antes de
+      // apretarlo; aquí solo la de lo ya enviado, que es la firma.
+      if (!guardado.es_borrador) {
+        const envio = document.createElement('span');
+        envio.className = 'envio' + (guardado.fue_enviado ? ' hecho' : '');
+        envio.textContent = guardado.frase_del_envio
+          + (guardado.fue_enviado && guardado.enviado_en
+             ? ' Fue ' + instanteEnPalabras(guardado.enviado_en)
+             : '');
+        tarjeta.append(envio);
       }
 
+      // A CAPTURAR (ticket 22). Solo un BORRADOR se captura: `!fue_enviado`
+      // era lo mismo hasta el ticket 25, y un cancelado le habría pintado
+      // casillas a un pedido que ya no existe en ningún portal.
+      if (guardado.es_borrador && guardado.captura && guardado.captura.cuantos) {
+        acciones.append(botonDeCapturar(guardado));
+      }
       // EL CSV (ticket 23), en borrador y en enviado: el primero sirve para
       // capturar o revisar, y el segundo es el respaldo de lo que se pidió.
-      const archivo = enlaceCsv(guardado);
-      if (archivo) fila.append(archivo);
-
-      // EL BOTÓN, CON EL TOTAL DENTRO. La primera casilla del ticket pide que
-      // el total en pesos se vea ANTES de enviar, y el sitio donde de verdad
-      // se ve es la etiqueta del botón que se va a apretar. Cuando no se puede
-      // saber, dice eso — nunca "$0.00".
-      if (guardado.es_borrador) {
-        const acciones = document.createElement('div');
-        acciones.className = 'acciones';
-        const boton = botonDeAccion(
-          'Enviar a ' + p.nombre + ' — '
-            + (guardado.hay_total ? '$' + guardado.total_sin_iva : 'total sin saber'),
-          (b) => alEnviar(guardado.pedido_id, p.nombre, b));
-        // `se_puede_enviar` lo decide `particion.motivo_para_no_enviar`, que es
-        // la MISMA decisión que el `WHERE` del UPDATE. Esto no es la garantía:
-        // es poder decirlo antes, en vez de dejar que alguien lo apriete y
-        // reciba un 409.
-        boton.disabled = !guardado.se_puede_enviar;
-        boton.title = guardado.motivo_para_no_enviar || guardado.frase_del_envio;
-        // Adonde lleva tachar el último (ticket 22): el foco viene aquí, y con
-        // todo tachado se resalta. NUNCA se apaga por la captura — la línea de
-        // arriba es la única que decide eso.
-        boton.dataset.enviar = guardado.pedido_id;
-        if (guardado.captura && guardado.captura.todo_capturado) boton.classList.add('listo');
-        acciones.append(boton);
-        if (guardado.motivo_para_no_enviar) {
-          const porque = document.createElement('span');
-          porque.className = 'marca';
-          porque.textContent = guardado.motivo_para_no_enviar + '.';
-          acciones.append(porque);
-        }
-        fila.append(acciones);
-      }
+      const archivo = enlaceCsv(guardado, 'CSV');
+      if (archivo) acciones.append(archivo);
     }
-
-    caja.append(fila);
+    if (acciones.children.length) tarjeta.append(acciones);
+    grilla.append(tarjeta);
   });
 
   // LOS PEDIDOS QUE YA NO ESTÁN EN LA PARTICIÓN. Son los enviados -sus
   // renglones ya no se reparten- y los que se quedaron vacíos. Se pintan desde
-  // el pedido GUARDADO, que trae todo lo suyo: su nombre, su total, cuántos
-  // renglones tiene dentro y su frase de envío. No hay vista previa que
-  // enseñar porque no hay nada que volver a partir, y eso es lo correcto: un
-  // pedido enviado ya no se edita.
+  // el pedido GUARDADO, que trae todo lo suyo. No hay vista previa que enseñar
+  // porque no hay nada que volver a partir, y eso es lo correcto: un pedido
+  // enviado ya no se edita.
   fueraDeLaParticion.forEach(g => {
-    const fila = document.createElement('div');
-    fila.className = 'pedido';
+    const tarjeta = document.createElement('div');
+    tarjeta.className = 'pedido';
 
+    const encabezado = document.createElement('div');
+    encabezado.className = 'pedido-cabeza';
     const quien = document.createElement('span');
     quien.className = 'quien';
     quien.textContent = g.nombre;
-
-    const que = document.createElement('span');
-    que.textContent = plural(g.renglones, 'renglón', 'renglones');
+    encabezado.append(quien, insigniaDelPedido(g));
 
     const cuanto = document.createElement('span');
-    cuanto.className = 'cuanto' + (g.hay_total ? '' : ' nose');
+    cuanto.className = 'total' + (g.hay_total ? '' : ' nose');
     cuanto.textContent = g.hay_total ? '$' + g.total_sin_iva : 'total sin saber';
-    fila.append(quien, que, cuanto);
+
+    const que = document.createElement('span');
+    que.className = 'que';
+    que.textContent = plural(g.renglones, 'renglón', 'renglones');
 
     const marca = document.createElement('span');
     marca.className = 'marca tenue';
     marca.textContent = 'Pedido ' + g.pedido_id + ', ' + (g.estado_a_la_vista || g.estado)
       + ', armado ' + instanteEnPalabras(g.armado_en);
-    fila.append(marca);
+    tarjeta.append(encabezado, cuanto, que, marca);
     // LO QUE LLEGÓ (ticket 27): la frase del pedido recibido, de Python.
     if (g.frase_de_la_recepcion) {
       const llegada = document.createElement('span');
       llegada.className = 'envio hecho';
       llegada.textContent = g.frase_de_la_recepcion;
-      fila.append(llegada);
+      tarjeta.append(llegada);
     }
 
     const envio = document.createElement('span');
@@ -3427,84 +4178,246 @@ const pintarParticion = (particion, pedidos, editable, alPartir, alEnviar, alTac
       + (g.fue_cancelado && g.cancelado_en
          ? ' Se canceló ' + instanteEnPalabras(g.cancelado_en)
          : '');
-    fila.append(envio);
-
-    // CANCELAR (ticket 25): solo un pedido enviado, y con lo que se declara
-    // escrito junto al botón. La frase y la decisión son de Python; la
-    // garantía es el `WHERE` de `_CANCELAR_EL_PEDIDO`.
-    if (g.se_puede_cancelar && g.frase_para_cancelar) {
-      const acciones = document.createElement('div');
-      acciones.className = 'acciones';
-      const boton = botonDeAccion('Cancelar: no está en el portal de ' + g.nombre,
-        (b) => cancelarPedido(g.pedido_id, b));
-      const porque = document.createElement('span');
-      porque.className = 'marca tenue';
-      porque.textContent = g.frase_para_cancelar;
-      acciones.append(boton, porque);
-      fila.append(acciones);
-    }
-
-    // UN BORRADOR TAMBIÉN PUEDE CAER AQUÍ CON RENGLONES DENTRO, y ésa es la
-    // trampa del ticket 22: la vista previa se recalcula con los precios de
-    // este instante, y si llegó un LEVIC más barato ya no pone a NADRO... pero
-    // el pedido GUARDADO de NADRO todavía los tiene. Se capturan igual: lo que
-    // se captura es lo que al enviar pasa a `en tránsito`, y eso es
-    // `pedido_id`. Su botón de enviar NO se pinta aquí —así quedó desde el
-    // ticket 21—, y por eso la invitación a enviar tampoco: una frase que dice
-    // "el siguiente paso es enviar" sin botón al lado manda a buscar uno que no
-    // está.
-    if (g.es_borrador && g.captura && g.captura.cuantos) {
-      fila.append(pintarCaptura(g, alTachar, false));
-    }
-
-    // EL CSV también aquí, y sobre todo aquí: los enviados caen en este
-    // recorrido, y son justo el pedido que más interesa respaldar. Pintarlo
-    // solo arriba repetiría el error del ticket 21.
-    const archivo = enlaceCsv(g);
-    if (archivo) fila.append(archivo);
+    tarjeta.append(envio);
 
     // Un pedido que se quedó SIN renglones también cae aquí, y sigue sin
     // poderse enviar: el motivo viene hecho de `particion.motivo_para_no_enviar`
-    // y se escribe en vez de esconder la fila. El rol no tiene DELETE, así que
-    // ese pedido existe; esconderlo sería la falla silenciosa.
+    // y se escribe en vez de esconder la tarjeta. El rol no tiene DELETE, así
+    // que ese pedido existe; esconderlo sería la falla silenciosa.
     if (g.es_borrador && g.motivo_para_no_enviar) {
       const porque = document.createElement('span');
       porque.className = 'marca';
       porque.textContent = g.motivo_para_no_enviar + '.';
-      fila.append(porque);
+      tarjeta.append(porque);
     }
 
-    caja.append(fila);
+    const acciones = document.createElement('div');
+    acciones.className = 'acciones';
+    // CANCELAR (ticket 25): solo un pedido enviado, y con lo que se declara
+    // escrito junto al botón. La frase y la decisión son de Python; la
+    // garantía es el `WHERE` de `_CANCELAR_EL_PEDIDO`.
+    if (g.se_puede_cancelar && g.frase_para_cancelar) {
+      acciones.append(botonDeAccion('Cancelar: no está en el portal de ' + g.nombre,
+        (b) => cancelarPedido(g.pedido_id, b), 'plana'));
+      const porque = document.createElement('span');
+      porque.className = 'marca tenue';
+      porque.textContent = g.frase_para_cancelar;
+      tarjeta.append(porque);
+    }
+    // UN BORRADOR TAMBIÉN PUEDE CAER AQUÍ CON RENGLONES DENTRO, y ésa es la
+    // trampa del ticket 22: la vista previa se recalcula con los precios de
+    // este instante, y si llegó un LEVIC más barato ya no pone a NADRO... pero
+    // el pedido GUARDADO de NADRO todavía los tiene. Se capturan igual: lo que
+    // se captura es lo que al enviar pasa a `en tránsito`, y eso es `pedido_id`.
+    if (g.es_borrador && g.captura && g.captura.cuantos) acciones.append(botonDeCapturar(g));
+    // EL CSV también aquí, y sobre todo aquí: los enviados caen en este
+    // recorrido, y son justo el pedido que más interesa respaldar.
+    const archivo = enlaceCsv(g, 'CSV');
+    if (archivo) acciones.append(archivo);
+    if (acciones.children.length) tarjeta.append(acciones);
+    grilla.append(tarjeta);
   });
+
+  if (grilla.children.length) caja.append(grilla);
 
   // LOS QUE NO SE REPARTEN A NADIE. Se cuentan y se dicen: un renglón que se
   // cayera de la partición en silencio es mercancía que va a faltar sin que
   // nadie se entere, que es lo mismo que CONTEXT.md prohíbe para los productos
-  // sin anaquel.
+  // sin anaquel. "Resolver" lleva al paso uno, donde se elige.
   if (particion.cuantos_sin_proveedor) {
+    const fila = document.createElement('div');
+    fila.className = 'sin-decidir';
     const sin = document.createElement('span');
     sin.className = 'detalle';
     sin.textContent = plural(particion.cuantos_sin_proveedor,
       'renglón se queda fuera', 'renglones se quedan fuera')
       + ': todavía no hay a quién pedírselos. No se pierden — siguen en la '
       + 'lista y entran en cuanto alguien elija proveedor.';
-    caja.append(sin);
-  }
-
-  if (particion.hay) {
-    const fila = document.createElement('div');
-    fila.className = 'fila';
-    const boton = botonDeAccion(
-      pedidos && pedidos.length ? 'Volver a partir' : 'Partir en pedidos',
-      (b) => alPartir(b));
-    boton.disabled = !editable;
-    boton.title = 'Arma un pedido por proveedor con los renglones de arriba. '
-      + 'Se puede volver a hacer mientras los pedidos sigan en borrador.';
-    fila.append(boton);
+    fila.append(insignia(plural(particion.cuantos_sin_proveedor, 'sin decidir', 'sin decidir'), 'naranja'),
+      sin, botonDeAccion('Resolver', () => IR_A_PASO('revisar'), 'plana'));
     caja.append(fila);
   }
 
+  // PARTIR, y después capturar. Partir se puede apretar cuantas veces haga
+  // falta: la garantía de que no se dupliquen es de la BASE —uno por
+  // proveedor dentro de la misma lista—. Con borradores ya armados, lo
+  // principal es empezar a capturar; volver a partir queda al lado.
+  const borradores = (pedidos || []).filter(g => g.es_borrador && g.captura && g.captura.cuantos);
+  const pie = document.createElement('div');
+  pie.className = 'particion-pie';
+  if (particion.hay) {
+    const boton = botonDeAccion(
+      pedidos && pedidos.length ? 'Volver a partir' : 'Partir en pedidos',
+      (b) => alPartir(b), borradores.length ? 'grande' : 'llena grande');
+    boton.disabled = !editable;
+    boton.title = 'Arma un pedido por proveedor con los renglones del paso uno. '
+      + 'Se puede volver a hacer mientras los pedidos sigan en borrador.';
+    pie.append(boton);
+  }
+  if (borradores.length) {
+    pie.prepend(botonDeAccion('Empezar a capturar',
+      () => IR_A_PASO('capturar', borradores[0].pedido_id), 'llena grande'));
+  }
+  if (particion.hay) {
+    const cuantos = document.createElement('span');
+    cuantos.className = 'detalle';
+    cuantos.textContent = plural(particion.renglones_repartidos, 'renglón repartido', 'renglones repartidos') + '.';
+    pie.append(cuantos);
+  }
+  if (pie.children.length) caja.append(pie);
+
   caja.hidden = false;
+};
+
+// CAPTURAR Y ENVIAR (tickets 21 y 22): EL PASO TRES. A la izquierda los
+// pedidos de esta lista, cada uno con cuánto lleva tachado; a la derecha el
+// elegido, renglón por renglón, y al pie su botón de enviar.
+const pintarPasoCaptura = (pedidos, alTachar, alEnviar) => {
+  const caja = document.getElementById('captura-panel');
+  caja.replaceChildren();
+  // Los que se capturan —borradores con algo dentro— y los que ya se
+  // enviaron, para ver su firma. Los cancelados ya no existen en ningún
+  // portal y no se enseñan aquí: siguen en el paso dos con su motivo.
+  const deEstePaso = (pedidos || []).filter(g => g.es_borrador
+    ? !!(g.captura && g.captura.cuantos)
+    : g.fue_enviado);
+
+  if (!deEstePaso.length) {
+    const vacio = document.createElement('div');
+    vacio.className = 'captura-trabajo';
+    const frase = document.createElement('p');
+    frase.className = 'nota';
+    frase.textContent = 'Todavía no hay ningún pedido que capturar: la lista se parte en '
+      + 'pedidos en el paso dos.';
+    vacio.append(frase, botonDeAccion('Ir a repartir', () => IR_A_PASO('repartir'), 'tenida'));
+    caja.append(vacio);
+    return;
+  }
+
+  // El elegido: el que se pidió, o el primer borrador, o el primero.
+  const guardado = deEstePaso.find(g => g.pedido_id === PEDIDO_EN_CAPTURA)
+    || deEstePaso.find(g => g.es_borrador)
+    || deEstePaso[0];
+  PEDIDO_EN_CAPTURA = guardado.pedido_id;
+
+  const lateral = document.createElement('nav');
+  lateral.className = 'captura-pedidos';
+  lateral.setAttribute('aria-label', 'Pedidos de esta lista');
+  const titulo = document.createElement('h3');
+  titulo.textContent = 'Pedidos de esta lista';
+  lateral.append(titulo);
+  deEstePaso.forEach(g => {
+    const boton = document.createElement('button');
+    boton.type = 'button';
+    if (g.pedido_id === guardado.pedido_id) boton.setAttribute('aria-current', 'true');
+    boton.onclick = () => IR_A_PASO('capturar', g.pedido_id);
+    const fila = document.createElement('span');
+    fila.className = 'fila-nombre';
+    const nombre = document.createElement('b');
+    nombre.textContent = g.nombre;
+    const avance = document.createElement('span');
+    const captura = g.captura || { capturados: 0, cuantos: 0 };
+    avance.className = 'avance-corto' + (g.fue_enviado ? ' listo' : '');
+    avance.textContent = g.fue_enviado ? 'Enviado' : captura.capturados + ' de ' + captura.cuantos;
+    fila.append(nombre, avance);
+    // Cuánto lleva tachado, en una barra: las dos cifras vienen del servidor
+    // y aquí solo se dibujan. Lo enviado se ve lleno.
+    const barra = document.createElement('span');
+    barra.className = 'barra-avance' + (g.fue_enviado || captura.todo_capturado ? ' completa' : '');
+    const relleno = document.createElement('span');
+    relleno.style.width = (g.fue_enviado ? 100
+      : captura.cuantos ? Math.round(captura.capturados * 100 / captura.cuantos) : 0) + '%';
+    barra.append(relleno);
+    boton.append(fila, barra);
+    lateral.append(boton);
+  });
+
+  const trabajo = document.createElement('div');
+  trabajo.className = 'captura-trabajo';
+  const cabeza = document.createElement('div');
+  cabeza.className = 'captura-cabeza';
+  const texto = document.createElement('div');
+  const h = document.createElement('h3');
+  h.textContent = 'Captura en ' + guardado.nombre;
+  const sub = document.createElement('p');
+  sub.textContent = guardado.es_borrador
+    ? 'Abre el portal en otra ventana, teclea cada renglón y táchalo aquí.'
+    : 'Este pedido ya está en el portal: aquí queda lo que se capturó.';
+  texto.append(h, sub);
+  cabeza.append(texto);
+  const archivo = enlaceCsv(guardado, 'Descargar CSV');
+  if (archivo) cabeza.append(archivo);
+  trabajo.append(cabeza);
+
+  if (guardado.captura && guardado.captura.cuantos) trabajo.append(pintarCaptura(guardado, alTachar));
+
+  // EL PIE: cuánto va, el botón de enviar y qué significa enviar.
+  const pie = document.createElement('div');
+  pie.className = 'captura-pie';
+  const fila = document.createElement('div');
+  fila.className = 'fila';
+  const avance = document.createElement('span');
+  const captura = guardado.captura;
+  avance.className = 'avance' + (captura && captura.todo_capturado ? ' completa' : '');
+  // La frase trae "faltan N" dentro (casilla 2) y viene hecha del servidor.
+  avance.textContent = guardado.fue_enviado
+    ? 'Pedido a ' + guardado.nombre + ' enviado'
+    : (captura ? captura.frase : '');
+  fila.append(avance);
+
+  if (guardado.es_borrador) {
+    // EL BOTÓN, CON EL TOTAL DENTRO (ticket 21): el total en pesos se ve ANTES
+    // de enviar, y el sitio donde de verdad se ve es la etiqueta del botón que
+    // se va a apretar. Cuando no se puede saber, dice eso — nunca "$0.00".
+    // "Ya está en el portal" es lo que el botón firma: Continental no le manda
+    // nada a nadie (ADR 0009).
+    const boton = botonDeAccion(
+      'Ya está en el portal — Enviar '
+        + (guardado.hay_total ? '$' + guardado.total_sin_iva : '(total sin saber)'),
+      (b) => alEnviar(guardado.pedido_id, guardado.nombre, b), 'llena grande');
+    // `se_puede_enviar` lo decide `particion.motivo_para_no_enviar`, que es
+    // la MISMA decisión que el `WHERE` del UPDATE. Esto no es la garantía:
+    // es poder decirlo antes, en vez de dejar que alguien lo apriete y
+    // reciba un 409.
+    boton.disabled = !guardado.se_puede_enviar;
+    boton.title = guardado.motivo_para_no_enviar || guardado.frase_del_envio;
+    // Adonde lleva tachar el último (ticket 22): el foco viene aquí, y con
+    // todo tachado se resalta. NUNCA se apaga por la captura — la línea de
+    // arriba es la única que decide eso.
+    boton.dataset.enviar = guardado.pedido_id;
+    if (captura && captura.todo_capturado) boton.classList.add('listo');
+    fila.append(boton);
+  } else if (guardado.fue_enviado && guardado.enviado_en) {
+    fila.append(insignia('Enviado · ' + horaEnPalabras(guardado.enviado_en), 'verde'));
+  }
+  pie.append(fila);
+
+  if (guardado.es_borrador && guardado.motivo_para_no_enviar) {
+    const porque = document.createElement('span');
+    porque.className = 'marca';
+    porque.textContent = guardado.motivo_para_no_enviar + '.';
+    pie.append(porque);
+  }
+  // LLEVA A ENVIAR, SIN OBLIGAR (casilla 5). La frase viene hecha: con todo
+  // tachado dice que el siguiente paso es enviar; a medias, que tachar no es
+  // requisito. `null` cuando el botón está apagado por otra razón.
+  if (guardado.es_borrador && captura && captura.invitacion) {
+    const invitacion = document.createElement('p');
+    invitacion.className = 'invitacion' + (captura.todo_capturado ? ' lista' : '');
+    invitacion.textContent = captura.invitacion + '.';
+    pie.append(invitacion);
+  }
+  // QUÉ SIGNIFICA ENVIAR, o quién lo capturó: la frase del servidor.
+  const envio = document.createElement('p');
+  envio.className = 'envio' + (guardado.fue_enviado ? ' hecho' : '');
+  envio.textContent = guardado.frase_del_envio
+    + (guardado.fue_enviado && guardado.enviado_en
+       ? ' Fue ' + instanteEnPalabras(guardado.enviado_en)
+       : '');
+  pie.append(envio);
+  trabajo.append(pie);
+
+  caja.append(lateral, trabajo);
 };
 
 // Los descartados, aparte. El bloque se esconde entero cuando no hay ninguno:
@@ -3660,7 +4573,11 @@ async function confirmarSesion(sesion, boton, idNota = 'pedido-accion', alTermin
 // estaba, y un enlace puede mandar directo a Buscar. `replaceState` y no
 // `location.hash =`: cambiar de pestaña no es navegar, y la flecha de "atrás"
 // no debe ponerse a recorrer pestañas.
-const PESTANAS = ['pedido', 'buscar', 'vigilancia', 'sesiones'];
+// Desde el diseño del 2026-09-30 son seis y van en la barra lateral: la lista
+// del día y lo que viene en camino (el grupo "Pedido"), las tres de Doyle, y
+// el estado. `#pedido` sigue siendo la lista del día: un enlace viejo no se
+// rompe.
+const PESTANAS = ['pedido', 'camino', 'buscar', 'vigilancia', 'sesiones', 'estado'];
 
 // Un nombre que no es de ninguna pestaña —un `#loquesea` pegado a mano— cae
 // en el pedido, que es la pantalla de siempre: nunca una página en blanco.
@@ -3691,10 +4608,13 @@ const iniciarPestanas = () => {
     // Las flechas pasan de una pestaña a otra, como en cualquier lista de
     // pestañas: con el teclado se llega a la que no está a la vista sin
     // recorrer la página entera con Tab (la de fuera tiene `tabindex=-1`).
+    // Arriba y abajo porque ahora van en vertical; izquierda y derecha
+    // porque en el teléfono vuelven a ir en fila.
     boton.onkeydown = (e) => {
-      if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+      const adelante = e.key === 'ArrowDown' || e.key === 'ArrowRight';
+      if (!adelante && e.key !== 'ArrowUp' && e.key !== 'ArrowLeft') return;
       e.preventDefault();
-      const paso = e.key === 'ArrowRight' ? 1 : PESTANAS.length - 1;
+      const paso = adelante ? 1 : PESTANAS.length - 1;
       const otra = PESTANAS[(i + paso) % PESTANAS.length];
       mostrarPestana(otra, true);
       history.replaceState(null, '', '#' + otra);
@@ -3787,7 +4707,7 @@ const tarjetaDePortal = (p) => {
     const fila = document.createElement('div');
     fila.className = 'fila';
     fila.append(
-      botonDeAccion('Abrir sesión', (b) => abrirSesion(p, b, 'buscar-accion')),
+      botonDeAccion('Abrir sesión', (b) => abrirSesion(p, b, 'buscar-accion'), 'tenida'),
       botonDeAccion('Ya entré', (b) => confirmarSesion(p, b, 'buscar-accion')));
     tarjeta.append(fila);
   }
@@ -3901,7 +4821,7 @@ const pintarAvisosDeVigilancia = (frase) => {
   const ver = botonDeAccion('Ver', () => {
     mostrarPestana('vigilancia');
     history.replaceState(null, '', '#vigilancia');
-  });
+  }, 'plana');
   p.replaceChildren(frase + ' ', ver);
   p.hidden = false;
 };
@@ -3971,12 +4891,12 @@ const vigilado = (a) => {
   botones.className = 'fila';
   if (a.aviso_pendiente) {
     botones.append(botonDeAccion('Ya lo vi', (b) => trasTocarLaVigilancia(
-      respuestaDe(fetch('/api/vigilancia/' + a.articulo_id + '/visto', { method: 'POST' }), 'al_guardar'), b)));
+      respuestaDe(fetch('/api/vigilancia/' + a.articulo_id + '/visto', { method: 'POST' }), 'al_guardar'), b), 'tenida'));
   }
   botones.append(
-    botonDeAccion('Buscarlo', () => buscarDesdeOtraPestana(a.termino)),
+    botonDeAccion('Buscarlo', () => buscarDesdeOtraPestana(a.termino), a.disponible ? 'tenida' : ''),
     botonDeAccion('Quitar', (b) => trasTocarLaVigilancia(
-      respuestaDe(fetch('/api/vigilancia/' + a.articulo_id, { method: 'DELETE' }), 'al_guardar'), b)));
+      respuestaDe(fetch('/api/vigilancia/' + a.articulo_id, { method: 'DELETE' }), 'al_guardar'), b), 'plana'));
   li.append(botones);
   return li;
 };
@@ -3998,6 +4918,8 @@ const cargarVigilancia = async () => {
   nota('vigilancia-vacia', datos.frase || '');
   document.getElementById('vigilancia-lista').replaceChildren(...datos.articulos.map(vigilado));
   pintarAvisosDeVigilancia(datos.avisos);
+  // La barra lateral cuenta los avisos que nadie ha visto todavía.
+  pintarCuenta('vigilancia', datos.articulos.filter(a => a.aviso_pendiente).length, 'verde');
 };
 
 const iniciarVigilancia = () => {
@@ -4046,7 +4968,11 @@ async function cancelarSesion(sesion, boton, idNota, alTerminar) {
 
 const tarjetaDeSesion = (s) => {
   const tarjeta = document.createElement('article');
-  tarjeta.className = 'portal' + (s.hay_que_abrirla ? ' sin-dato' : '');
+  // Tres aspectos y no tres tonos: la que espera a que alguien entre lleva un
+  // anillo; la que hay que abrir, ámbar; la que sirve, verde. La palabra de la
+  // insignia es la que lo dice.
+  tarjeta.className = 'portal' + (s.se_puede_confirmar ? ' esperando-sesion'
+    : s.hay_que_abrirla ? ' sin-dato' : ' sirve');
   const titulo = document.createElement('h3');
   const estado = document.createElement('span');
   estado.className = 'estado-portal';
@@ -4059,11 +4985,11 @@ const tarjetaDeSesion = (s) => {
   botones.className = 'fila';
   if (s.se_puede_confirmar) {
     botones.append(
-      botonDeAccion('Ya entré', (b) => confirmarSesion(s, b, 'sesiones-accion', cargarSesiones)),
+      botonDeAccion('Ya entré', (b) => confirmarSesion(s, b, 'sesiones-accion', cargarSesiones), 'llena'),
       botonDeAccion('Cancelar', (b) => cancelarSesion(s, b, 'sesiones-accion', cargarSesiones)));
   } else {
     const abrir = botonDeAccion(s.rotulo_de_abrir,
-      (b) => abrirSesion(s, b, 'sesiones-accion', cargarSesiones));
+      (b) => abrirSesion(s, b, 'sesiones-accion', cargarSesiones), s.hay_que_abrirla ? 'tenida' : '');
     abrir.disabled = !s.se_puede_abrir;
     botones.append(abrir);
   }
@@ -4088,6 +5014,7 @@ const cargarSesiones = async () => {
   if (datos.evidencia_sin_leer) notaDeFalla('sesiones-falla', datos.evidencia_sin_leer);
   else nota('sesiones-falla', '');
   caja.replaceChildren(...datos.sesiones.map(tarjetaDeSesion));
+  pintarCuenta('sesiones', datos.sesiones.filter(x => x.hay_que_abrirla).length, 'rojo');
 };
 
 // ------------------------------------------------------------- el esqueleto
@@ -4111,9 +5038,13 @@ async function cargar() {
     pintar('modulos', respuesta.modulos.length
       ? respuesta.modulos.map(m => fila(m.nombre, m.ok, m.detalle || m.url))
       : [fila('Ninguno configurado', null)]);
+    ESTADO_DE_LOS_MODULOS = { lista: respuesta.modulos };
   } else {
     pintar('modulos', [fila('No se pudo consultar', false, respuesta.detalle)]);
+    ESTADO_DE_LOS_MODULOS = { falla: respuesta.detalle || 'No se pudo consultar a los módulos.' };
   }
+  // La tarjeta de abajo de la barra lateral: si todo contesta.
+  pintarEstadoLateral();
 }
 
 // ¿DOYLE CONTESTA? (ticket 29, casilla 1). Aparte de la lista y al mismo
@@ -4134,6 +5065,7 @@ async function revisarDoyle() {
 }
 
 iniciarPestanas();
+iniciarLaVistaDelDia();
 iniciarBuscar();
 iniciarVigilancia();
 cargarPedido();

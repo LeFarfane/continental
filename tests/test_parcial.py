@@ -1873,8 +1873,12 @@ def test_la_lista_mixta_recibe_su_frase_de_python(
 
 def test_la_pantalla_no_titula_entera_una_lista_con_algo_sin_proveedor():
     pantalla = _pantalla()
-    inicio = pantalla.index("const titular = document.createElement('b');")
-    cuerpo = pantalla[inicio : pantalla.index("caja.append(titular);", inicio)]
+    # Anclado en `pintarParticion` y en el renglón que pone su titular. Hasta
+    # el 2026-09-30 se anclaba en el PRIMER `const titular` del archivo —que
+    # era de otra función— y el recorte cruzaba media pantalla hasta llegar
+    # aquí: pasaba, pero por casualidad.
+    inicio = pantalla.index("const pintarParticion")
+    cuerpo = pantalla[inicio : pantalla.index("cabeza.append(titular, detalle);", inicio)]
     assert "cuantos_sin_proveedor" in cuerpo
     assert "Esta lista se pidió en parte" in cuerpo
 

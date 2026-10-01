@@ -150,6 +150,17 @@ def test_el_javascript_no_pinta_colores():
     assert ".style.background" not in js
 
 
+#: Los únicos colores que valen lo mismo en los dos temas, a propósito, y por
+#: qué. El tema oscuro los redefine igual —la prueba de abajo sigue exigiendo
+#: que estén en las dos listas—: así queda escrito que fue una decisión y no
+#: un olvido.
+_IGUALES_EN_LOS_DOS_TEMAS = {
+    # El texto de un botón lleno de acento es blanco en claro y en oscuro: así
+    # lo dibuja el sistema de diseño del 2026-09-30 (Cupertino), y así iOS.
+    "--acento-contraste",
+}
+
+
 def test_el_tema_oscuro_redefine_cada_color_del_claro():
     css = _css()
     claro = _variables(_bloque(css, ":root"))
@@ -160,7 +171,10 @@ def test_el_tema_oscuro_redefine_cada_color_del_claro():
         "un color que el tema oscuro no redefine se queda claro sobre fondo "
         f"oscuro: faltan {sorted(set(claro) - set(oscuro))}"
     )
-    assert all(oscuro[k] != claro[k] for k in claro)
+    distintos = [k for k in claro if k not in _IGUALES_EN_LOS_DOS_TEMAS]
+    assert all(oscuro[k] != claro[k] for k in distintos), [
+        k for k in distintos if oscuro[k] == claro[k]
+    ]
 
 
 def test_los_controles_del_navegador_siguen_el_tema():
@@ -195,10 +209,13 @@ def test_las_cifras_usan_digitos_de_ancho_fijo():
 
 
 def test_el_encabezado_se_queda_arriba_en_una_lista_larga():
+    """Con fondo propio, o las filas se verían a través de él. Desde el diseño
+    del 2026-09-30 la tabla es una tarjeta sobre el lienzo, así que su fondo es
+    el de la tarjeta (`--superficie`) y no el del lienzo (`--fondo`)."""
     regla = _regla(_css(), "thead th")
 
     assert "position: sticky" in regla
-    assert "background: var(--fondo)" in regla
+    assert "background: var(--superficie)" in regla
 
 
 # ------------------------------------------- la jerarquía, sin solo el color
@@ -208,11 +225,21 @@ def test_el_encabezado_se_queda_arriba_en_una_lista_larga():
 _SIN_SOLO_COLOR = [
     ("td.numero.urgente", "font-weight: 700", "agotado: negrita"),
     ("tr.agotado > td:first-child", "box-shadow: inset 4px", "agotado: barra continua"),
-    (".precio.gana", "border-left: 3px solid", "el más barato: borde y fondo"),
+    # Desde el diseño del 2026-09-30 cada proveedor es una columna angosta: el
+    # ganador se distingue por la NEGRITA de su cifra y por el fondo, y en el
+    # detalle por la palabra ("el más barato con existencia").
+    (".precio.gana b", "font-weight: 700", "el más barato: negrita y fondo"),
     (".veredicto .ahorro.gana, .veredicto .ahorro.cuesta", "border: 1px solid", "el ahorro: recuadro"),
     (".veredicto .ahorro.cuesta", "border-style: dashed", "lo que cuesta de más: recuadro punteado"),
     (".veredicto .ahorro.nose", "font-style: italic", "sin ahorro que calcular: cursiva"),
     (".precio .sindato", "font-style: italic", "sin dato: cursiva"),
+    # La variante «escala» (una columna): lo mismo, sin depender del verde.
+    (".escala-ganador b", "font-weight: 700", "escala, el más barato: negrita"),
+    (".escala-ganador.sinconfirmar b::after, .escala-ganador.unico b::after", 'content: "?"',
+     "escala, ganador sin confirmar o único: signo"),
+    (".escala-punto.notiene", "border-color: var(--mal-vivo)", "escala, no lo tiene: punto hueco"),
+    (".escala-pie .notiene", "line-through", "escala, extremo que no lo tiene: tachado"),
+    (".escala-ganador .sindato", "font-style: italic", "escala, sin dato: cursiva"),
     (".precio .hay.notiene", "font-weight: 600", "no lo tiene: negrita"),
     (".marca.sin-clasificar::before", 'content: "?"', "sin clasificar: signo"),
     (".marca.en-transito::before", 'content: "→"', "en tránsito: signo"),
@@ -231,6 +258,22 @@ _SIN_SOLO_COLOR = [
                          ids=[q for _, _, q in _SIN_SOLO_COLOR])
 def test_lo_que_se_distingue_por_color_se_distingue_tambien_sin_el(selector, declara, que):
     assert declara in _regla(_css(), selector), que
+
+
+def test_la_comparacion_en_la_fila_ramifica_por_una_sola_constante():
+    """Volver de la escala a la rejilla es cambiar UNA línea. Si alguien
+    ramifica por otra cosa, o borra una de las dos variantes, esa promesa se
+    rompe sin que nada falle."""
+    js = _texto(JS)
+    assert re.search(r"const COMPARACION_EN_LA_FILA = '(escala|rejilla)';", js)
+    assert "COMPARACION_EN_LA_FILA === 'escala'" in js
+    pinta = js[js.index("const celdasDePrecio ="):]
+    pinta = pinta[: pinta.index(";") + 1]
+    assert "EN_ESCALA" in pinta and "celdaDeEscala" in pinta and "celdasDeRejilla" in pinta
+    encabezado = js[js.index("const pintarEncabezado"):]
+    encabezado = encabezado[: encabezado.index("\n};")]
+    assert "EN_ESCALA" in encabezado
+    assert "th.escala-celda" in encabezado and "th.precio-celda" in encabezado
 
 
 @pytest.mark.parametrize("clase", [
@@ -256,11 +299,15 @@ def test_los_signos_no_se_le_leen_al_lector_de_pantalla():
 
 
 def test_la_tabla_se_apila_por_debajo_de_la_computadora():
-    """Por debajo de 76rem (~1200 px) la tabla deja de ser rejilla: cada
-    renglón es una tarjeta que se envuelve. Cubre la tableta y el teléfono;
-    el recorrido midió `scrollWidth == innerWidth` a 375 px."""
+    """Por debajo de 52rem (~830 px) la tabla deja de ser rejilla: cada
+    renglón es una tarjeta que se envuelve. Cubre la tableta vertical y el
+    teléfono; el recorrido midió `scrollWidth == innerWidth` a 375 px.
+
+    Eran 76rem hasta el diseño del 2026-09-30: la tabla vieja medía ~1200 px
+    porque los cuatro precios iban apilados en una columna de 25 a 36rem.
+    Ahora cada proveedor es una columna de ~5rem y la tabla cabe en ~800 px."""
     css = _css()
-    apilada = _bloque(css, "@media (max-width: 76rem)")
+    apilada = _bloque(css, "@media (max-width: 52rem)")
 
     assert "clip-path: inset(50%)" in _regla(apilada, "thead")
     fila = _regla(apilada, "tr")
