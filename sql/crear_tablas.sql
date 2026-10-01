@@ -127,6 +127,12 @@
 --      'sistema' si lo disparó el día siguiente-. NO crea tabla, y NO rompe
 --      el código de antes: la columna admite nulos y no tiene DEFAULT.
 --
+--  17. `sql/migraciones/0017-el-anaquel-congelado-en-el-renglon.sql`
+--      (2026-09-30), que le da a `renglon` el anaquel con que se propuso, para
+--      que el detalle del renglón lo enseñe sin releer el catálogo. NO crea
+--      tabla, y NO rompe el código de antes: la columna admite nulos y no
+--      tiene DEFAULT.
+--
 -- Las trece son idempotentes, así que correrlas sobre una base que ya las
 -- tiene -o sobre una recién creada con este archivo- no rompe nada.
 --
@@ -658,6 +664,12 @@ CREATE TABLE IF NOT EXISTS pedidos.renglon (
     -- trae de vuelta, ya sumadas a `cantidad_propuesta`.
     piezas_recibidas        numeric(12,3),
     piezas_que_faltaron     integer NOT NULL DEFAULT 0,
+    -- EL ANAQUEL CONGELADO (migración 0017). El lugar físico tal como lo trajo
+    -- el catálogo al proponer el renglón, junto a la `clasificacion` que sale
+    -- de él. Admite nulos y no tiene DEFAULT ni CHECK: NULL es "no se sabe"
+    -- (una fila de antes de la 0017), '' es "no hay anaquel que enseñar", y
+    -- cualquier otro texto es el anaquel tal cual.
+    anaquel                 text,
 
     CONSTRAINT pk_renglon
         PRIMARY KEY (renglon_id),

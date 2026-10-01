@@ -1556,6 +1556,10 @@ def columnas_del_renglon(
         # dato del CÁLCULO —lo decide la memoria al armar— y viene en el
         # renglón propuesto.
         "piezas_que_faltaron": renglon.piezas_que_faltaron,
+        # EL ANAQUEL CONGELADO (migración 0017), junto a la clasificación que
+        # sale de él. `""` se guarda como `""` y no como NULL: NULL es "no se
+        # sabe" —una fila de antes de la 0017— y no hay que confundirlos.
+        "anaquel": renglon.anaquel,
         # DESDE QUÉ DÍA SE SUMARON SUS VENTAS, si no es el principio de la
         # lista (ticket 24, ADR 0012). Casi siempre `None`. Es un dato del
         # CÁLCULO —lo decide la memoria de lo ya pedido al armar— y por eso
@@ -1593,6 +1597,9 @@ def renglon_desde_columnas(fila) -> Renglon:
         # La del ticket 27, con `.get` por lo mismo: sin la 0011 es "no trae
         # nada que faltó".
         piezas_que_faltaron=int(fila.get("piezas_que_faltaron") or 0),
+        # El de la 0017, con `.get` por lo mismo: sin la columna —o en una fila
+        # vieja— es `None`, "no se sabe", y no una cadena vacía inventada.
+        anaquel=fila.get("anaquel"),
     )
 
 
@@ -3421,7 +3428,7 @@ _LEER_RENGLONES = text(
            cancelado_por, cancelado_en,
            recibido_por, recibido_en, recibido_con_compras,
            compras_rechazadas, recepcion_rechazada_por, recepcion_rechazada_en,
-           piezas_recibidas, piezas_que_faltaron
+           piezas_recibidas, piezas_que_faltaron, anaquel
     from pedidos.renglon
     where negocio = :negocio and pedido_sugerido_id = :pedido_sugerido_id
     order by renglon_id
@@ -3444,7 +3451,7 @@ _LEER_RENGLON_POR_ID = text(
            cancelado_por, cancelado_en,
            recibido_por, recibido_en, recibido_con_compras,
            compras_rechazadas, recepcion_rechazada_por, recepcion_rechazada_en,
-           piezas_recibidas, piezas_que_faltaron
+           piezas_recibidas, piezas_que_faltaron, anaquel
     from pedidos.renglon
     where negocio = :negocio and renglon_id = :renglon_id
     """
@@ -3565,6 +3572,7 @@ _LO_YA_PEDIDO = text(
            r.recibido_por, r.recibido_en, r.recibido_con_compras,
            r.compras_rechazadas, r.recepcion_rechazada_por,
            r.recepcion_rechazada_en, r.piezas_recibidas, r.piezas_que_faltaron,
+           r.anaquel,
            s.fecha_del_pedido, s.ventas_consideradas_hasta,
            s.ventas_consideradas_desde,
            p.proveedor, p.enviado_por, p.enviado_en,
@@ -3626,6 +3634,7 @@ _EN_TRANSITO = text(
            r.recibido_por, r.recibido_en, r.recibido_con_compras,
            r.compras_rechazadas, r.recepcion_rechazada_por,
            r.recepcion_rechazada_en, r.piezas_recibidas, r.piezas_que_faltaron,
+           r.anaquel,
            s.fecha_del_pedido, s.ventas_consideradas_hasta,
            s.ventas_consideradas_desde,
            p.proveedor, p.enviado_por, p.enviado_en,
@@ -3716,12 +3725,12 @@ _INSERTAR_RENGLONES = text(
         (negocio, pedido_sugerido_id, producto_id, clave, descripcion,
          piezas_vendidas, cantidad_propuesta, esta_en_el_catalogo, existencia,
          dias_de_cobertura, clasificacion, estado, ventas_desde,
-         piezas_que_faltaron)
+         piezas_que_faltaron, anaquel)
     values
         (:negocio, :pedido_sugerido_id, :producto_id, :clave, :descripcion,
          :piezas_vendidas, :cantidad_propuesta, :esta_en_el_catalogo,
          :existencia, :dias_de_cobertura, :clasificacion, :estado,
-         :ventas_desde, :piezas_que_faltaron)
+         :ventas_desde, :piezas_que_faltaron, :anaquel)
     """
 )
 

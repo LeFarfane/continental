@@ -828,6 +828,23 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
          END),
  NULL),
 
+-- EL ANAQUEL CONGELADO (migración 0017). Sin la columna la lista del día no se
+-- puede leer -`_LEER_RENGLONES` la nombra- ni armar -`_INSERTAR_RENGLONES` la
+-- escribe-, y el lote de la noche se corta. Es `text` y ADMITE nulos: NULL es
+-- "no se sabe", la verdad de todo renglón anterior a la 0017.
+(40,
+ 'El renglón guarda el anaquel con que se propuso',
+ 'text, admite nulos',
+ (SELECT coalesce(
+           (SELECT format_type(a.atttypid, a.atttypmod)
+                   || CASE WHEN a.attnotnull THEN ', NOT NULL' ELSE ', admite nulos' END
+              FROM pg_attribute a
+             WHERE a.attrelid = to_regclass('pedidos.renglon')
+               AND NOT a.attisdropped
+               AND a.attname = 'anaquel'),
+           'NO EXISTE anaquel')),
+ NULL),
+
 -- AVISO y no MAL: una tabla temporal vive en la sesión, no puede leer nada que
 -- el rol no pueda leer ya, y desaparece al desconectarse. El permiso llega por
 -- el TEMPORARY que PUBLIC tiene sobre la base por omisión, y quitarlo sería

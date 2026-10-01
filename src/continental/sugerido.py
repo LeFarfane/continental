@@ -168,6 +168,16 @@ class Renglon:
     `piezas_vendidas`: sin la cifra, un 6 al lado de 2 vendidas no se podría
     verificar. Son **piezas y no ventas**: lo que faltó se sabe como "pedí 10,
     llegaron 6", no como qué días se vendieron esas 4 (ver el ADR).
+
+    **`anaquel` es el lugar físico tal como lo trajo el catálogo cuando se
+    propuso el renglón** (`dim_producto.ubicacion`, migración 0017), y viaja
+    aquí por la misma razón que `clasificacion`, que sale de él: se congela con
+    el renglón en vez de releerse del catálogo. Tres valores, y no son lo
+    mismo: `"GENERICO 3"` es un anaquel; `""` es "no hay lugar que enseñar"
+    —el catálogo no lo tiene ubicado (688 de 3,429 artículos) o el producto ni
+    siquiera está en el catálogo—; y `None` es **"no se sabe"**: un renglón
+    guardado antes de la 0017. Nunca se rellena con el anaquel de hoy: sería
+    reescribir la historia (regla 4).
     """
 
     producto_id: int
@@ -181,6 +191,7 @@ class Renglon:
     clasificacion: str
     ventas_desde: dt.date | None = None
     piezas_que_faltaron: int = 0
+    anaquel: str | None = None
 
     @property
     def esta_agotado(self) -> bool:
@@ -420,6 +431,10 @@ def _renglon(
             if producto
             else SIN_CLASIFICAR
         ),
+        # El mismo anaquel de donde salió la clasificación, tal cual. Sin
+        # catálogo no hay anaquel que mirar: cadena vacía, igual que un
+        # producto del catálogo sin ubicación.
+        anaquel=producto.anaquel if producto else "",
     )
 
 
