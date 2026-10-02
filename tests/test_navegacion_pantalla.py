@@ -35,18 +35,17 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from conftest import pantalla_completa
+import pytest
+from conftest import cuerpo_de_funcion, pantalla_completa
 
 
 def _script() -> str:
     return pantalla_completa().split("<script>", 1)[1]
 
 
-def _funcion(nombre: str, *, hasta: int = 2200) -> str:
-    """El cuerpo de una función con nombre, para acotar dónde se busca."""
-    script = _script()
-    inicio = script.index(nombre)
-    return script[inicio : inicio + hasta]
+def _funcion(nombre: str) -> str:
+    """El cuerpo exacto de una función con nombre, para acotar dónde se busca."""
+    return cuerpo_de_funcion(_script(), nombre)
 
 
 # ------------------------------------------------- el HTML del contenedor
@@ -114,7 +113,9 @@ def test_al_abrir_la_pantalla_se_pide_hoy_sin_fecha():
     script = _script()
 
     assert re.search(r"\r?\ncargarPedido\(\);\r?\n", script)
-    assert "localStorage" not in _funcion("cargarPedido(fecha)", hasta=6000)
+    # Se busca el USO (`localStorage.getItem`...), no la palabra: un comentario
+    # dentro de la función explica justo por qué no se usa, y nombrarlo no es usarlo.
+    assert not re.search(r"localStorage\s*\.", _funcion("cargarPedido(fecha)"))
 
 
 def test_las_flechas_navegan_con_la_fecha_del_vecino():
@@ -127,7 +128,7 @@ def test_las_flechas_navegan_con_la_fecha_del_vecino():
 def test_las_flechas_se_esconden_sin_vecino_y_no_solo_se_deshabilitan():
     """Regla 4: sin dato no hay botón que 404earía o mentiría sobre qué hay
     al lado. `vecinos` en `null` (o ausente) esconde las dos."""
-    cuerpo = _funcion("const pintarNavegacion", hasta=900)
+    cuerpo = _funcion("const pintarNavegacion")
 
     assert "anterior.hidden = !(vecinos && vecinos.anterior)" in cuerpo
     assert "siguiente.hidden = !(vecinos && vecinos.siguiente)" in cuerpo
@@ -135,7 +136,7 @@ def test_las_flechas_se_esconden_sin_vecino_y_no_solo_se_deshabilitan():
 
 
 def test_la_etiqueta_del_centro_dice_hoy_cuando_es_hoy():
-    cuerpo = _funcion("const pintarNavegacion", hasta=900)
+    cuerpo = _funcion("const pintarNavegacion")
 
     assert "FECHA_DE_HOY" in cuerpo
     assert "' (hoy)'" in cuerpo
@@ -149,7 +150,7 @@ def test_una_falla_de_verdad_se_distingue_del_404_que_no_sabe_por_que():
     ticket 29); el 404 de la bitácora no la trae y por eso no cae en esa
     rama —si cayera, se leería "no se pudo armar" sobre un día que solo no
     tiene lista, que es un motivo distinto."""
-    cuerpo = _funcion("async function cargarPedido(fecha)", hasta=3200)
+    cuerpo = _funcion("async function cargarPedido(fecha)")
 
     assert (
         "if (datos.ok === false && (datos.que_hacer || datos.sin_respuesta)) {"
@@ -162,7 +163,7 @@ def test_el_404_de_la_bitacora_no_inventa_una_causa():
     justo lo que el servidor ya dijo que no distingue (`app.
     pedido_sugerido_de_un_dia`). El JavaScript no compone esa frase: solo
     pinta `datos.detalle`, tal cual llega."""
-    cuerpo = _funcion("async function cargarPedido(fecha)", hasta=4000)
+    cuerpo = _funcion("async function cargarPedido(fecha)")
 
     assert "nota('pedido-nota', datos.detalle || '', 'aviso');" in cuerpo
     # Ninguna de las tres explicaciones del 404 se ESCRIBE como texto que
@@ -177,7 +178,7 @@ def test_domingo_o_festivo_no_compone_la_frase_la_pinta():
     """La frase ("Domingo: la farmacia no abre…" / "Independencia: día
     festivo…") la redacta `fallas.frase_del_dia_sin_lista` en Python —lección
     de los tickets 15 y 21—. El JavaScript solo la muestra."""
-    cuerpo = _funcion("async function cargarPedido(fecha)", hasta=4000)
+    cuerpo = _funcion("async function cargarPedido(fecha)")
 
     assert "if (datos.dia_sin_lista) {" in cuerpo
     assert "nota('pedido-nota', datos.dia_sin_lista.frase, 'aviso');" in cuerpo
@@ -193,7 +194,7 @@ def test_ningun_dia_sin_lista_pierde_las_flechas_de_navegacion():
     """Las tres formas de respuesta traen `vecinos` (ver `_dia_sin_lista` y el
     404 en `app.py`): domingo, festivo y el 404 ambiguo siguen ofreciendo
     llegar al día de al lado, no solo la lista completa."""
-    cuerpo = _funcion("async function cargarPedido(fecha)", hasta=4000)
+    cuerpo = _funcion("async function cargarPedido(fecha)")
 
     assert cuerpo.count("pintarNavegacion(") >= 3
 
@@ -201,13 +202,13 @@ def test_ningun_dia_sin_lista_pierde_las_flechas_de_navegacion():
 def test_lo_que_pinto_un_dia_anterior_se_apaga_antes_de_los_tres_casos_sin_lista():
     """Sin esto, navegar de un día con renglones a un domingo dejaría la
     tabla, el cierre o el recuadro de completar pegados de otro día."""
-    cuerpo = _funcion("async function cargarPedido(fecha)", hasta=4000)
+    cuerpo = _funcion("async function cargarPedido(fecha)")
 
     assert cuerpo.count("ocultarLoDeOtroDia();") == 3
 
 
 def test_ocultar_lo_de_otro_dia_apaga_la_tabla_y_los_bloques_de_una_lista():
-    cuerpo = _funcion("const ocultarLoDeOtroDia", hasta=600)
+    cuerpo = _funcion("const ocultarLoDeOtroDia")
 
     for id_ in (
         "pedido-tabla", "armado", "cierre", "pedido-avisos", "vistas",
@@ -232,7 +233,7 @@ def test_no_hay_un_segundo_candado_para_lo_pasado_el_estado_sigue_siendo_el_unic
     # si apareciera `fecha ===` o `=== FECHA_DE_HOY` cerca de `editable`, la
     # pantalla estaría decidiendo la edición dos veces, con dos reglas que
     # podrían no coincidir.
-    cuerpo = _funcion("const repintar = () => {", hasta=700)
+    cuerpo = _funcion("const repintar = () => {")
     assert "FECHA_DE_HOY" not in cuerpo
     assert "FECHA_ACTUAL" not in cuerpo
 
@@ -272,3 +273,47 @@ def test_recibir_o_cancelar_recargan_el_dia_que_se_esta_viendo_no_siempre_hoy():
     # la misma razón que las otras cuatro.
     assert script.count("await recargarLoQueSeVe();") == 5
     assert "await cargarPedido();" not in script
+
+
+# --------------------------------- el helper que acota las funciones del JS
+
+
+_MUESTRA = (
+    "const a = () => {\n"
+    "  return 1;\n"
+    "};\n"
+    "\n"
+    "async function b(x) {\n"
+    "  if (x) {\n"
+    "    return 2;\n"
+    "  }\n"
+    "  return 3;\n"
+    "}\n"
+    "const c = () =>\n"
+    "  a();\n"
+    "const d = 4;\n"
+)
+
+
+def test_cuerpo_de_funcion_corta_en_el_cierre_y_no_despues():
+    cuerpo = cuerpo_de_funcion(_MUESTRA, "async function b(x)")
+
+    assert cuerpo.startswith("async function b(x) {")
+    assert cuerpo.endswith("\n}")
+    assert "return 3;" in cuerpo
+    assert "const c" not in cuerpo and "const a" not in cuerpo
+    assert cuerpo_de_funcion(_MUESTRA, "const c = () =>") == "const c = () =>\n  a();"
+
+
+def test_cuerpo_de_funcion_da_lo_mismo_en_lf_y_en_crlf():
+    en_crlf = _MUESTRA.replace("\n", "\r\n")
+
+    for nombre in ("const a = () => {", "async function b(x)", "const c = () =>"):
+        assert cuerpo_de_funcion(en_crlf, nombre) == cuerpo_de_funcion(_MUESTRA, nombre)
+
+
+def test_cuerpo_de_funcion_falla_si_no_existe_o_no_cierra():
+    with pytest.raises(AssertionError, match="function zeta"):
+        cuerpo_de_funcion(_MUESTRA, "function zeta")
+    with pytest.raises(AssertionError, match="function e"):
+        cuerpo_de_funcion("function e() {\n  return 1;\n", "function e")

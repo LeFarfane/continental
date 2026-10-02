@@ -13,3 +13,11 @@
 # UPDATE de Continental rebotaria con una violacion de restriccion que nadie
 # sabria explicar. Misma razon que arriba, distinto sintoma.
 *.sql      text eol=lf
+
+# Las pruebas leen la pantalla EN BINARIO (tests/conftest.py, `_del_disco`) y
+# buscan texto dentro de ella; con CRLF cada linea suma un caracter y una
+# busqueda acotada puede quedarse corta solo en la torre. Ademas, lo que se
+# sirve en atlas (Linux) va en LF. Mismo criterio que arriba, para lo estatico.
+*.js       text eol=lf
+*.css      text eol=lf
+*.html     text eol=lf

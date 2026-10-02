@@ -471,6 +471,44 @@ def pantalla_completa() -> str:
     return _armar(_del_disco("/static/index.html"), _del_disco)
 
 
+def cuerpo_de_funcion(script: str, nombre: str) -> str:
+    """El cuerpo REAL de la declaración que contiene `nombre`, de su línea de
+    inicio a su cierre, no una ventana de N caracteres.
+
+    Las pruebas del JavaScript cortaban `script[inicio : inicio + 9000]`. Eso
+    se rompió el 2026-10-01: la pantalla se lee en binario, y en un checkout
+    con CRLF cada línea suma un carácter, así que `cargarConciliacion(...)`,
+    a 8,864 caracteres del inicio de `cargarPedido` con LF (170 líneas), caía
+    a ~9,034 y quedaba fuera de la ventana; con LF ya sobraban solo 136. Y una
+    ventana larga hacía que los `not in` miraran código de OTRAS funciones.
+
+    Normaliza CRLF a LF, toma la sangría de la línea donde aparece `nombre` y
+    cierra en la primera línea posterior con esa misma sangría que empiece por
+    `}`. Si la línea de inicio no abre llave (flecha de una sola expresión),
+    cierra en la primera línea no vacía con sangría menor o igual. Si no
+    encuentra el nombre o el cierre, falla: nunca devuelve "hasta el final".
+    """
+    lineas = script.replace("\r\n", "\n").split("\n")
+    donde = next((i for i, linea in enumerate(lineas) if nombre in linea), None)
+    assert donde is not None, f"no encontré la función {nombre!r} en el script"
+
+    def sangria(linea: str) -> int:
+        return len(linea) - len(linea.lstrip(" "))
+
+    base = sangria(lineas[donde])
+    abre_llave = lineas[donde].rstrip().endswith("{")
+    for fin in range(donde + 1, len(lineas)):
+        linea = lineas[fin]
+        if not linea.strip():
+            continue
+        if abre_llave:
+            if sangria(linea) == base and linea.lstrip().startswith("}"):
+                return "\n".join(lineas[donde : fin + 1])
+        elif sangria(linea) <= base:
+            return "\n".join(lineas[donde:fin])
+    raise AssertionError(f"no encontré dónde cierra la función {nombre!r}")
+
+
 def pantalla_servida(cliente: TestClient) -> str:
     """La pantalla entera **como la sirve la aplicación**: `/` y lo que enlaza.
 

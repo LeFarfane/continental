@@ -20,18 +20,16 @@ from __future__ import annotations
 
 import re
 
-from conftest import pantalla_completa
+from conftest import cuerpo_de_funcion, pantalla_completa
 
 
 def _script() -> str:
     return pantalla_completa().split("<script>", 1)[1]
 
 
-def _funcion(nombre: str, *, hasta: int = 2200) -> str:
-    """El cuerpo de una función con nombre, para acotar dónde se busca."""
-    script = _script()
-    inicio = script.index(nombre)
-    return script[inicio : inicio + hasta]
+def _funcion(nombre: str) -> str:
+    """El cuerpo exacto de una función con nombre, para acotar dónde se busca."""
+    return cuerpo_de_funcion(_script(), nombre)
 
 
 # ------------------------------------------------- el HTML del contenedor
@@ -53,7 +51,7 @@ def test_el_contenedor_nace_escondido_dentro_de_la_vista_del_dia():
 def test_el_contenedor_se_esconde_al_navegar_a_otro_dia():
     """Sin esto, navegar a un domingo o a un 404 de la bitácora dejaría la
     conciliación de un día pegada a la pantalla de otro (ADR 0020)."""
-    cuerpo = _funcion("const ocultarLoDeOtroDia", hasta=400)
+    cuerpo = _funcion("const ocultarLoDeOtroDia")
 
     assert "'conciliacion'" in cuerpo
 
@@ -62,13 +60,13 @@ def test_el_contenedor_se_esconde_al_navegar_a_otro_dia():
 
 
 def test_cargar_pedido_pide_la_conciliacion_con_el_id_de_la_lista():
-    cuerpo = _funcion("async function cargarPedido(fecha)", hasta=9000)
+    cuerpo = _funcion("async function cargarPedido(fecha)")
 
     assert "cargarConciliacion(datos.pedido_sugerido_id);" in cuerpo
 
 
 def test_cargar_conciliacion_pide_su_propia_ruta_y_se_esconde_sin_id():
-    cuerpo = _funcion("const cargarConciliacion", hasta=500)
+    cuerpo = _funcion("const cargarConciliacion")
 
     assert (
         "fetch('/api/pedido-sugerido/' + pedidoSugeridoId + '/conciliacion')"
@@ -82,7 +80,7 @@ def test_cargar_conciliacion_pide_su_propia_ruta_y_se_esconde_sin_id():
 def test_no_espera_a_la_conciliacion_para_pintar_el_resto_de_la_lista():
     """Una compra de hace tres días no tiene por qué retrasar pintar la lista
     de hoy: `cargarConciliacion` no lleva `await` en `cargarPedido`."""
-    cuerpo = _funcion("async function cargarPedido(fecha)", hasta=9000)
+    cuerpo = _funcion("async function cargarPedido(fecha)")
 
     assert "await cargarConciliacion" not in cuerpo
 
@@ -91,7 +89,7 @@ def test_no_espera_a_la_conciliacion_para_pintar_el_resto_de_la_lista():
 
 
 def test_pintar_conciliacion_usa_create_element_y_no_innerhtml():
-    cuerpo = _funcion("const pintarConciliacion", hasta=5200)
+    cuerpo = _funcion("const pintarConciliacion")
 
     assert "innerHTML" not in cuerpo
     assert "createElement" in cuerpo
@@ -101,7 +99,7 @@ def test_las_frases_se_pintan_tal_cual_nunca_se_componen():
     """La lección de los tickets 15, 21, 24, 25 y 26, repetida aquí: ninguna
     palabra de negocio se escribe en el JavaScript. `datos.frase`,
     `c.frase`, `c.frase_del_pago`, `r.frase` — todo llega hecho."""
-    cuerpo = _funcion("const pintarConciliacion", hasta=5200)
+    cuerpo = _funcion("const pintarConciliacion")
 
     assert "resumen.textContent = datos.frase" in cuerpo
     assert "que.textContent = c.frase;" in cuerpo
@@ -120,7 +118,7 @@ def test_las_frases_se_pintan_tal_cual_nunca_se_componen():
 
 
 def test_solo_lo_accionable_ofrece_el_checkbox_del_lote():
-    cuerpo = _funcion("const pintarConciliacion", hasta=5200)
+    cuerpo = _funcion("const pintarConciliacion")
 
     assert "if (c.accionable) {" in cuerpo
     idx_if = cuerpo.index("if (c.accionable) {")
@@ -149,7 +147,7 @@ def test_lo_sin_comprar_y_lo_comprado_sin_proponer_nunca_llevan_checkbox():
 
 
 def test_el_boton_de_lote_solo_manda_lo_que_sigue_marcado():
-    cuerpo = _funcion("const confirmarLoteDeConciliacion", hasta=1200)
+    cuerpo = _funcion("const confirmarLoteDeConciliacion")
 
     assert "[...marcadas.entries()]" in cuerpo
     assert "fetch('/api/pedido-sugerido/' + pedidoSugeridoId" in cuerpo
@@ -161,13 +159,13 @@ def test_confirmar_el_lote_recarga_la_pantalla_entera():
     """La misma regla que confirmar una recepción, cancelar un pedido o
     recibir a mano: cambia el estado de los renglones y no se deduce a
     mano, se recarga (ADR 0020: se queda en el día que se estaba viendo)."""
-    cuerpo = _funcion("const confirmarLoteDeConciliacion", hasta=1200)
+    cuerpo = _funcion("const confirmarLoteDeConciliacion")
 
     assert "await recargarLoQueSeVe();" in cuerpo
 
 
 def test_una_falla_al_confirmar_no_esconde_el_detalle_al_navegador_regla_5():
-    cuerpo = _funcion("const confirmarLoteDeConciliacion", hasta=1200)
+    cuerpo = _funcion("const confirmarLoteDeConciliacion")
 
     assert "notaDeFalla('pedido-accion', respuesta);" in cuerpo
 
