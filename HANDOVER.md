@@ -738,15 +738,20 @@ puede hacer `SELECT` sobre esa tabla: medido el 2026-09-28, `pedidos.renglon` y
 de alta en Metabase (Admin → Bases de datos → Agregar).
 
 **Y «Ya entré» en LEVIC consulta la lista del día solo en LEVIC** (plan B de
-LEVIC, 2026-09-28). La sesión de LEVIC muere a los ~20 minutos sin uso (13 min
-aguantó, 30 min murió; la medición exacta corre desde las 11:15 del 28 con
-`scripts/medir_la_sesion.py`), así que el lote de las 22:00 casi nunca la
-encuentra viva: los minutos justo después de abrirla son los únicos seguros.
-`pedido.consultar_al_abrir_sesion: [levic]` en el YAML; la consulta va en un
-hilo, renglón por renglón, con el tope de «Completar», y sus lecturas llevan el
-origen `al abrir sesión` (migración 0016). Doyle recibe `proveedores` en `POST
-/api/buscar`; mientras Doyle no lo conozca, lo ignora y busca en los cuatro.
-No se dispara si la página seguía en el login.
+LEVIC, 2026-09-28). La sesión de LEVIC muere **entre 15 y 20 minutos sin uso**
+(medido el 2026-09-28 con `scripts/medir_la_sesion.py`: a los 15 contestó, a
+los 20 pidió login). `pedido.consultar_al_abrir_sesion: [levic]` en el YAML; la
+consulta va en un hilo, renglón por renglón, con el tope de «Completar», y sus
+lecturas llevan el origen `al abrir sesión` (migración 0016). Doyle filtra por
+`proveedores` en `POST /api/buscar` desde el 2026-10-04; antes lo ignoraba y
+buscaba en los cuatro. No se dispara si la página seguía en el login.
+
+**Y Doyle mantiene viva la sesión de LEVIC** (ADR 0009 de Doyle, 2026-10-04):
+si nadie ha usado LEVIC en 15 minutos, de 8:00 a 22:00, Doyle la visita con
+una búsqueda de la sonda. Se pausa sola si encuentra el login. Esas visitas
+**no** quedan en `pedidos.lectura_de_portal`: las hace Doyle, que no escribe
+en el almacén, y serían el mismo producto hasta 56 veces al día. La bitácora
+está en `journalctl -u doyle` (líneas `[visita]`).
 
 **Y la lista del viernes 25 quedó solo con el viernes** (decisión del dueño):
 `sql/mantenimiento/2026-09-28-la-lista-del-viernes-solo-con-el-viernes.sql`,
