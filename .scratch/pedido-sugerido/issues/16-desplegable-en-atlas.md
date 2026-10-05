@@ -42,7 +42,7 @@
         `docs/despliegue-en-atlas.md`. Antes hacen falta A.1 a A.5: remoto de
         git, clonar plano en `~/proyectos/Continental`, venv, `.env` y el rol
         de Postgres del ticket 07.
-- [ ] Ruta del túnel de Cloudflare para `farmacia.farfanlab.uk`, con Access delante.
+- [x] Ruta del túnel de Cloudflare para `farmacia.farfanlab.uk`, con Access delante.
       - **No se puede ejecutar desde aquí:** vive en el dashboard de Zero
         Trust, no en un archivo de atlas.
       - **Documentada paso a paso** en `docs/despliegue-en-atlas.md`, parte B,
@@ -82,7 +82,7 @@
         de reiniciar.
       - Contra el repo real se detiene en 1/5 con "este repo no tiene ningún
         remoto configurado", que es la verdad de hoy.
-- [ ] El correo que Access verifica llega y se ve en la pantalla: es la firma de quién está trabajando.
+- [x] El correo que Access verifica llega y se ve en la pantalla: es la firma de quién está trabajando. ✅ 2026-10-04: Eduardo entró por el túnel y la sección "Estado" dice su correo de Cloudflare (B.3).
       - **Todo lo que depende de Continental está demostrado.**
         `tests/test_salud.py` ya probaba que `/api/salud` devuelve el correo de
         `Cf-Access-Authenticated-User-Email` y `sin-identificar` cuando no hay

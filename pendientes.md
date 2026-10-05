@@ -29,7 +29,7 @@ pegables. Si los dos no coinciden, manda Notion.
 | 2 | Los `grants` de farmacia-data | ✅ 2026-09-19 |
 | 7 | El DDL, el rol y el verificador | ✅ 2026-09-20 |
 | 8 | Las unidades de systemd | ✅ 2026-09-21 — el lote armado para las 22:00 |
-| 9 | El túnel y Access | ✅ 2026-09-20 — falta mirar B.3 |
+| 9 | El túnel y Access | ✅ 2026-09-20 — B.3 ✅ 2026-10-04 |
 | 5 | `clase_abc` en `dim_producto` | ✅ 2026-09-20 — el ADR 0018, implementado |
 | **12** | **Uptime Kuma 1.23 → 2.x** | ⏭️ **el siguiente — el CPU sí lo aguanta (medido)** |
 | **11** | **El recorrido en navegador del ticket 20** | 🟡 a medias hasta que Doyle dé precios |

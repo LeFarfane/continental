@@ -498,9 +498,9 @@ proteger todavía. Eso es justo lo que se busca.
 En cuanto este paso se guarda, el hostname empieza a resolver **y a exigir
 Access desde la primera petición**.
 
-### B.3 — Comprobarlo de punta a punta
+### B.3 — Comprobarlo de punta a punta — ✅ **2026-10-04**
 
-- [ ] Entrar a `https://farmacia.farfanlab.uk` desde fuera de la casa, pasar
+- [x] Entrar a `https://farmacia.farfanlab.uk` desde fuera de la casa, pasar
       el login de Access, y **mirar la sección "Estado" de la pantalla**: tiene
       que decir `Entrando como` con el correo con el que se entró, no
       `sin-identificar`. Si dice `sin-identificar`, el encabezado
