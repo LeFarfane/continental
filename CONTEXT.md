@@ -66,15 +66,29 @@ portal mismo, nunca en Continental.
 - `sin sesión` — Doyle no tiene ninguna guardada.
 - `esperando a que alguien entre` — la ventana del portal está abierta en el
   visor. **Una a la vez**: mientras una espera, las otras no se abren.
-- `caducada` — una consulta encontró que el portal mandaba al login.
-- `sirvió` — dio precio después de guardarse. No afirma que siga sirviendo.
-- `guardada, sin probar` — se guardó y, desde entonces, ninguna consulta ha
-  traído precio de ese portal ni lo ha encontrado mandando al login.
+- `caducada` — una consulta o una prueba encontró que el portal mandaba al
+  login.
+- `sirvió` — una consulta o una prueba pasó del login: el portal contestó con
+  precio, `sin resultados` o `no empareja`. No afirma que siga sirviendo.
+- `guardada, sin probar` — se guardó y, desde entonces, ni una consulta ni una
+  prueba ha dicho si pasa del login. Es como queda después de «Ya entré».
+
+Gana la etiqueta más reciente, venga de una consulta o de una prueba.
 
 > **Guardada no quiere decir que sirva.** Doyle llama *guardada* a una sesión
 > que alguien confirmó alguna vez, y lo sigue diciendo después de que el
 > portal la caduca. Lo que dice si sirve es el portal: dio precio, o mandó al
 > login.
+
+**Probar** (una sesión) — buscar «paracetamol 500» en el portal para saber si
+la sesión todavía pasa del login. Termina en `sirvió` o `caducada`, y ese
+resultado se guarda. Se prueba un portal o los cuatro juntos, siempre porque
+alguien apretó el botón. Si la prueba no termina —Doyle no responde, el portal
+no contesta— se dice el motivo y la sesión conserva su última etiqueta.
+
+> **Probar no es lo mismo que la sonda del lote.** La sonda hace la misma
+> búsqueda antes de cada lote nocturno, pero no se guarda: decide si el lote
+> corre y se olvida.
 
 **Vigilancia** — la lista de productos que hacen falta y hoy no tiene ningún
 proveedor. Doyle los busca solo, a las 9:30 y a las 19:30, y avisa cuando
