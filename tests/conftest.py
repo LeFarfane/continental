@@ -391,6 +391,55 @@ un solo bucle por corrida ya no alcanza para explicarlo— y lo siguiente que ha
 que mirar es, en este orden: los procesos vivos (por proceso, no por puerto),
 qué más estaba cargando la torre, y el volcado real con
 `pytest -q -o faulthandler_timeout=8`. Sin volcado no se diagnostica nada.
+
+### Vuelta a medir el 2026-10-04, con el suite al triple y midiendo pareado
+
+Dos semanas después, sobre `900b020` y con el arreglo ya comiteado en `005d8f0`.
+El suite pasó de 841 a **2234 pruebas y una saltada**, y de ~4 s a ~35 s: la
+escala de esta sección ya no es la de arriba, y los números de antes no se
+comparan con los de ahora.
+
+**Esta vez se midió pareado, y la razón es la deriva del 2026-09-20**: ese día
+un proceso ajeno dejó de quemar un núcleo a media tanda y las corridas del final
+costaron 3 s menos sin que nadie cambiara una línea. Así que se congelaron **dos
+copias** de `git archive HEAD` —una tal cual, otra con la fixture invertida a
+`@pytest.fixture` sin `with`, que es el comportamiento de antes del arreglo— y se
+corrieron **alternadas, pareja por pareja, invirtiendo el orden en cada una**.
+Cada pareja es su propio control de carga; la diferencia que vale es la de
+adentro de la pareja, no la de los totales.
+
+| | sin arreglo | con arreglo |
+|---|---|---|
+| bucles de eventos por corrida | **1273** | **2** |
+| corridas colgadas | 0 de 25 | 0 de 24 |
+| tiempo | 36.26-49.59 s, mediana **41.83 s** | 32.36-43.33 s, mediana **35.79 s** |
+
+**La diferencia pareada: mediana +4.86 s y media +5.48 s a favor del arreglo, y
+ganó en 23 de 24 parejas** (la que no, por 0.46 s). Eso es ~1.2 ms por bucle
+evitado, que es lo que cuesta armar un `socketpair` de respaldo en Windows.
+
+Los 2 bucles de la derecha no son un error de cuenta: uno es el de esta fixture
+y el otro es el `cliente_sin_relanzar` de `test_fallas.py`, que es de ámbito
+`module` y abre su propio `TestClient` **con `with`** —necesita
+`raise_server_exceptions=False` para que el manejador global conteste el 500—.
+El patrón se propagó solo, y está bien así.
+
+**Y el cuelgue sigue sin reproducirse.** Cero en 49 corridas de hoy, y con el
+árbol sin arreglo exponiendo **1273 bucles cada una** —31,825 creaciones de
+bucle sin un solo cuelgue—. Sumando las 112 corridas sin arreglo del 2026-09-20,
+van **0 de 137**, lo que deja la frecuencia por corrida **por debajo de 2.2% con
+95% de confianza**: sigue por debajo del piso de 1 de cada 12 que se reportó. Lo
+único que se puede afirmar es lo mismo que el 2026-09-20, con más corridas
+detrás: el arreglo quita el mecanismo y el tiempo, no un cuelgue que nadie ha
+logrado reproducir en esta máquina.
+
+Lo que había vivo en la torre al medir, porque la lección de arriba es esa: cero
+huérfanos de Continental, y sí tres `http.server` y cuatro procesos de una sesión
+de Marlowe, todos en ~0 de CPU. **Y una trampa nueva, barata de evitar:** la
+primera tanda arrancó **dos veces** —un `nohup ... &` dentro de un lanzador que
+ya corría en segundo plano— y hubo dos mediciones compitiendo por la CPU y
+escribiendo el mismo archivo. Se detectó por `Win32_Process`, no por el archivo.
+Antes de creerle a una tanda, cuenta cuántos `pytest` hay vivos.
 """
 
 from __future__ import annotations
