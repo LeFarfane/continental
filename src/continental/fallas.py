@@ -52,6 +52,13 @@ DOYLE = "doyle"
 #: ADR 0024): no contestaron, o se acabó el tiempo. No se sabe nada de la
 #: sesión, y la tarjeta conserva su etiqueta.
 PORTAL = "portal"
+#: Ya hay una prueba de sesiones corriendo, de esta o de otra computadora (ADR
+#: 0024, decisión 8): una a la vez, porque dos búsquedas encimadas en los mismos
+#: portales no comprueban nada nuevo. No es una falla: es esperar.
+PRUEBA_EN_CURSO = "prueba_en_curso"
+#: Se pidió probar solo el portal que espera en el visor a que alguien entre: esa
+#: ventana es de quien está tecleando, y una búsqueda ahí le estorbaría.
+PORTAL_EN_EL_VISOR = "portal_en_el_visor"
 #: Una corrida programada del lote ya debía haber pasado sobre esta lista y
 #: no dejó fila (ADR 0007, enmienda 2026-09-21): atlas pudo estar apagado a
 #: las 22:00, el timer sin habilitar, o la unidad en `failed`.
@@ -65,7 +72,10 @@ SERVIDOR = "servidor"
 #: la práctica es una pantalla vieja contra un servidor nuevo.
 PETICION = "peticion"
 
-CASOS = (AL_LEER, AL_GUARDAR, DOYLE, PORTAL, CONFIGURACION, SERVIDOR, PETICION, LOTE)
+CASOS = (
+    AL_LEER, AL_GUARDAR, DOYLE, PORTAL, CONFIGURACION, SERVIDOR, PETICION, LOTE,
+    PRUEBA_EN_CURSO, PORTAL_EN_EL_VISOR,
+)
 
 _QUE_HACER = {
     AL_LEER: (
@@ -97,6 +107,16 @@ _QUE_HACER = {
     PETICION: (
         "Vuelve a cargar la página: puede que esté vieja. Si vuelve a pasar, "
         "avísale {a_quien}."
+    ),
+    PRUEBA_EN_CURSO: (
+        "Espera a que termine: probar los cuatro portales tarda hasta medio "
+        "minuto. Los botones de probar se encienden solos cuando acaba. Si pasa "
+        "más de un minuto y siguen apagados, avísale {a_quien}."
+    ),
+    PORTAL_EN_EL_VISOR: (
+        "Termina primero con ese portal: entra en el visor y dale «Ya entré», "
+        "o «Cancelar» si ya no vas a entrar. Después se puede probar. Si la "
+        "ventana no está, avísale {a_quien}."
     ),
     LOTE: (
         "Revisa `systemctl status continental-lote` y el journal "

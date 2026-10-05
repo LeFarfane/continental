@@ -113,6 +113,8 @@ from continental.fallas import (
     LOTE,
     PETICION,
     PORTAL,
+    PORTAL_EN_EL_VISOR,
+    PRUEBA_EN_CURSO,
     SERVIDOR,
     estado_de_las_ventas,
     frase_de_doyle_caido,
@@ -162,7 +164,15 @@ from continental.recepcion import (
     recepcion_como_json,
     recepcion_con_hueco,
 )
-from continental.sesiones import prueba_como_json, resultados_de_la_prueba, sesiones_como_json
+from continental.sesiones import (
+    RegistroDeLaPrueba,
+    frase_de_prueba_en_curso,
+    prueba_como_json,
+    prueba_en_curso_como_json,
+    repartir_los_pedidos,
+    resultados_de_la_prueba,
+    sesiones_como_json,
+)
 from continental.sugerido import armar_la_lista
 from continental.transiciones import (
     motivo_para_no_cancelar,
@@ -210,6 +220,7 @@ from continental.web.dependencias import (
     obtener_almacenamiento,
     obtener_consultas,
     obtener_doyle,
+    obtener_prueba,
     obtener_revision,
     reloj,
 )
@@ -3884,6 +3895,7 @@ def cancelar_la_sesion(
 def las_sesiones(
     doyle: ClienteDeDoyle = Depends(obtener_doyle),
     almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+    prueba: RegistroDeLaPrueba = Depends(obtener_prueba),
 ):
     """Una tarjeta por portal: lo que dice Doyle, cruzado con lo que vieron las
     consultas guardadas (`sesiones.py`).
@@ -3891,6 +3903,12 @@ def las_sesiones(
     Dos bordes, y cada uno cae por separado: sin Doyle no hay tarjetas y es un
     `ok: false`; sin la tabla de precios, las tarjetas dicen solo lo de Doyle
     y avisan que su «guardada» no quiere decir que sirva.
+
+    Dice también si **hay una prueba corriendo** (`prueba_en_curso`, de cualquier
+    computadora: el candado es del servidor) y, por tarjeta, si se puede probar y
+    por qué no. Se lee al armar la respuesta: una pantalla que pintó antes de que
+    empezara otra prueba lo sabe en su siguiente lectura, y el servidor vuelve a
+    comprobarlo en la ruta de probar.
     """
     try:
         sesiones = doyle.sesiones()
@@ -3918,9 +3936,11 @@ def las_sesiones(
             "que_hacer": _que_hacer(AL_LEER),
         }
 
+    en_curso = prueba.en_curso()
     return {
         "ok": True,
-        "sesiones": sesiones_como_json(sesiones, evidencia, pruebas),
+        "sesiones": sesiones_como_json(sesiones, evidencia, pruebas, en_curso),
+        "prueba_en_curso": prueba_en_curso_como_json(en_curso),
         "evidencia_sin_leer": evidencia_sin_leer,
         "visor": cargar().visor_de_doyle,
     }
@@ -3938,6 +3958,7 @@ def probar_las_sesiones(
     cuerpo: PruebaPedida = PruebaPedida(),
     doyle: ClienteDeDoyle = Depends(obtener_doyle),
     almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+    prueba: RegistroDeLaPrueba = Depends(obtener_prueba),
 ):
     """«Probar»: busca el término de prueba en el portal y dice si la sesión
     **pasó del login** (`sirvió`) o la mandaron al login (`caducada`). ADR 0024.
@@ -3954,8 +3975,23 @@ def probar_las_sesiones(
     La falla viaja con su `que_hacer` y **el tipo** de la excepción, nunca su
     texto (regla 5). Sin firma: probar no cambia nada del pedido.
 
-    No lanza nada solo: la llama un botón. El candado de una prueba a la vez y
-    el portal que espera en el visor son del ticket 03.
+    No lanza nada solo: la llama un botón.
+
+    **Una prueba a la vez, para todo Continental** (ADR 0024, decisión 8): el
+    candado es `RegistroDeLaPrueba`, en memoria del proceso. Una segunda petición
+    recibe un **409** —el recurso, los portales, está ocupado, y la petición
+    sería válida en cuanto acabe la otra; no es un 400 ni un 422— con cuál corre,
+    y no lanza ninguna búsqueda. Se aparta **antes** de hablar con Doyle y se
+    suelta en `finally`: éxito, falla de Doyle o excepción, o los botones
+    quedarían apagados para siempre.
+
+    **El portal que espera en el visor no se prueba**: esa ventana es de quien
+    está tecleando. Pedir **solo** ese es otro 409 (la petición es válida y el
+    estado del portal la impide, hasta «Ya entré» o «Cancelar»). Con varios, o
+    con la lista vacía, se prueban los demás y la respuesta dice cuál se saltó
+    (`saltados`). Para saber cuál espera hay que preguntarle a Doyle: si no
+    contesta, no se prueba nada, porque probar sin saberlo podría estorbar a
+    quien está tecleando.
     """
     pedidos: list[str] = []
     for proveedor in cuerpo.proveedores:
@@ -3972,6 +4008,33 @@ def probar_las_sesiones(
         if limpio not in pedidos:
             pedidos.append(limpio)
 
+    se_aparto, corriendo = prueba.apartar(pedidos or list(NOMBRES_DE_PROVEEDOR))
+    if not se_aparto:
+        log.info("%s quiso probar las sesiones con otra prueba en curso.", quien(request))
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "detalle": frase_de_prueba_en_curso(corriendo),
+                "que_hacer": _que_hacer(PRUEBA_EN_CURSO),
+            },
+        )
+    try:
+        return _probar_apartada(request, pedidos, doyle, almacenamiento, prueba)
+    finally:
+        prueba.soltar()
+
+
+def _probar_apartada(
+    request: Request,
+    pedidos: list[str],
+    doyle: ClienteDeDoyle,
+    almacenamiento: AlmacenamientoDelPedido,
+    prueba: RegistroDeLaPrueba,
+):
+    """El cuerpo de `probar_las_sesiones` con el candado ya puesto: **quien la
+    llama lo suelta**. Está aparte para que ninguna salida —y son varias— pueda
+    olvidarse de soltarlo: el `finally` es uno solo."""
     termino = termino_de_prueba_configurado()
     if not termino:
         log.error("Falta pedido.termino_de_prueba en config/continental.yml: no se puede probar.")
@@ -3983,6 +4046,33 @@ def probar_las_sesiones(
             ),
             "que_hacer": _que_hacer(CONFIGURACION),
         }
+
+    try:
+        sesiones = doyle.sesiones()
+    except Exception as exc:  # noqa: BLE001 — sin saber quién espera, no se estorba a nadie
+        log.exception("Doyle no contestó las sesiones al probar")
+        return {
+            "ok": False,
+            "detalle": f"Doyle no responde ({type(exc).__name__}): no se pudo probar nada.",
+            "que_hacer": _que_hacer(DOYLE),
+        }
+    a_probar, saltados = repartir_los_pedidos(pedidos, sesiones)
+    if not a_probar:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "detalle": (
+                    f"{nombre_del_proveedor(saltados[0])} no se prueba: "
+                    "su ventana espera en el visor a que alguien entre y probarla "
+                    "estorbaría a quien está tecleando."
+                ),
+                "que_hacer": _que_hacer(PORTAL_EN_EL_VISOR),
+            },
+        )
+    if saltados:
+        prueba.acotar(a_probar)
+        pedidos = a_probar
 
     tope_seg, cada_seg = ajustes_de_la_consulta()
     try:
@@ -3998,7 +4088,7 @@ def probar_las_sesiones(
         }
 
     resultados = resultados_de_la_prueba(consulta.lecturas, pedidos)
-    respuesta = prueba_como_json(resultados)
+    respuesta = prueba_como_json(resultados, saltados)
     if not respuesta["ok"]:
         # Ningún portal terminó: nada que guardar, y se dice por qué cada uno.
         log.warning("%s probó las sesiones y ningún portal terminó.", quien(request))

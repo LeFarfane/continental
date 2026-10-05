@@ -116,6 +116,34 @@ persona no tenía nada parecido.
   el caso `portal` de `fallas.py`; si solo algunos, `ok: true` y
   `algunos_sin_probar`. Doyle caído, o no poder guardar, no escriben nada y la
   tarjeta conserva su etiqueta.
-- **Se queda para los tickets 03 y 04:** el candado de una prueba a la vez, el
-  motivo de cada botón apagado, saltarse el portal del visor y «Probar todas».
-  La ruta ya acepta la lista, y guarda una fila por portal que terminó.
+- **Se queda para el ticket 04:** «Probar todas». La ruta ya acepta la lista y
+  ya se salta al portal del visor; falta el botón.
+
+## Enmienda del 2026-10-05 (2) — una prueba a la vez (ticket 03)
+
+- **El candado:** `sesiones.RegistroDeLaPrueba`, un objeto de proceso en
+  memoria (`web.dependencias.obtener_prueba`), como `RegistroDeConsultas`. Lo
+  que recuerda es **qué proveedores prueba la que corre**, y la decisión de
+  apartar va dentro de un `Lock`. Un reinicio lo suelta; se pierde a lo más una
+  prueba a medias, que no había escrito nada. Se descartó guardarlo en Postgres:
+  habría que limpiarlo cuando el proceso muere a media prueba, justo cuando no
+  puede limpiarlo él.
+- **La ruta** aparta antes de hablar con Doyle y suelta en un solo `finally`
+  (`_probar_apartada` está aparte para que ninguna de sus salidas pueda
+  olvidarlo): éxito, falla de Doyle, portal sin contestar o excepción.
+- **409 en los dos rechazos**, con `ok: false`, `detalle` y `que_hacer`
+  (casos nuevos `prueba_en_curso` y `portal_en_el_visor` de `fallas.py`): el
+  recurso está ocupado o el portal está en un estado que la impide, y la misma
+  petición sería válida después. No es 400 (la petición está bien formada) ni
+  422. El 400 de un proveedor inexistente se valida antes de mirar el candado.
+- **El portal del visor:** pedir solo ese es 409. Con varios o con la lista
+  vacía se prueban los demás y la respuesta trae `saltados` (y su frase en
+  `detalle`). Para saberlo la ruta lee `doyle.sesiones()`; si Doyle no contesta
+  **no se prueba nada**, porque probar a ciegas podría estorbar a quien teclea.
+- **`GET /api/sesiones`** suma `prueba_en_curso` (`None` o `{proveedores,
+  detalle}`) y, por tarjeta, `por_que_no_se_prueba`, decidido en
+  `sesiones.motivo_para_no_probar`. El del visor gana sobre el de la prueba en
+  curso: ese dura, el otro se acaba solo.
+- **Sin sondeo:** otra computadora ve los botones apagados la próxima vez que
+  pinte (abrir, recargar, o terminar un paso suyo), no en vivo. La ruta vuelve a
+  comprobar, así que un botón pintado de más rebota con su 409 y no estorba.

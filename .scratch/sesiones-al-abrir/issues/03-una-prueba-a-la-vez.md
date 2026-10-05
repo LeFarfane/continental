@@ -4,13 +4,13 @@
 
 **Bloqueado por:** 02.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] El candado de "una prueba a la vez" vive en el servidor, en memoria del proceso. Si un reinicio lo suelta, a lo más se pierde una prueba a medias.
-- [ ] Una segunda petición de probar, mientras corre otra, recibe un 409 que dice cuál está en curso, y no lanza ninguna búsqueda.
-- [ ] `GET /api/sesiones` dice si hay una prueba en curso, y para cada tarjeta si se puede probar y, si no, por qué.
-- [ ] Mientras corre una prueba, los botones de probar de todas las tarjetas se ven apagados con su motivo. Eso incluye los de otra computadora la próxima vez que pinte.
-- [ ] La pantalla muestra que hay una prueba corriendo, porque puede tardar medio minuto.
-- [ ] El botón de probar del portal que espera en el visor queda apagado, con su motivo. Si se pide probar solo ese portal, la ruta se niega y dice por qué.
-- [ ] El candado se suelta también cuando la prueba falla: Doyle caído no deja los botones apagados para siempre.
-- [ ] Las pruebas de la API cubren: el 409 con una prueba en curso; el candado se suelta tras éxito y tras falla; el portal en el visor se rechaza; `GET /api/sesiones` refleja los dos casos.
+- [x] El candado de "una prueba a la vez" vive en el servidor, en memoria del proceso. Si un reinicio lo suelta, a lo más se pierde una prueba a medias.
+- [x] Una segunda petición de probar, mientras corre otra, recibe un 409 que dice cuál está en curso, y no lanza ninguna búsqueda.
+- [x] `GET /api/sesiones` dice si hay una prueba en curso, y para cada tarjeta si se puede probar y, si no, por qué.
+- [x] Mientras corre una prueba, los botones de probar de todas las tarjetas se ven apagados con su motivo. Eso incluye los de otra computadora la próxima vez que pinte.
+- [x] La pantalla muestra que hay una prueba corriendo, porque puede tardar medio minuto.
+- [x] El botón de probar del portal que espera en el visor queda apagado, con su motivo. Si se pide probar solo ese portal, la ruta se niega y dice por qué.
+- [x] El candado se suelta también cuando la prueba falla: Doyle caído no deja los botones apagados para siempre.
+- [x] Las pruebas de la API cubren: el 409 con una prueba en curso; el candado se suelta tras éxito y tras falla; el portal en el visor se rechaza; `GET /api/sesiones` refleja los dos casos.

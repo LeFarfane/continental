@@ -452,12 +452,14 @@ from fastapi.testclient import TestClient
 
 from continental.consultas import RegistroDeConsultas
 from continental.dobles import AlmacenamientoFalso, AlmacenFalso, DoyleFalso
+from continental.sesiones import RegistroDeLaPrueba
 from continental.vigilancia import RegistroDeRevision
 from continental.web.app import app
 from continental.web.dependencias import (
     obtener_almacen,
     obtener_almacenamiento,
     obtener_consultas,
+    obtener_prueba,
     obtener_revision,
     obtener_doyle,
 )
@@ -673,6 +675,14 @@ def revision() -> RegistroDeRevision:
     return RegistroDeRevision(lanzar=lambda tarea: tarea())
 
 
+@pytest.fixture
+def prueba() -> RegistroDeLaPrueba:
+    """El candado de «una prueba de sesiones a la vez», nuevo en cada prueba:
+    el de verdad vive en el módulo, y uno compartido dejaría una prueba
+    «corriendo» de una prueba bloqueando la siguiente."""
+    return RegistroDeLaPrueba()
+
+
 @pytest.fixture(scope="session")
 def cliente_de_sesion():
     """Un solo `TestClient` —y un solo bucle de eventos— para todo el suite.
@@ -719,6 +729,7 @@ def cliente(
     almacenamiento: AlmacenamientoFalso,
     consultas: RegistroDeConsultas,
     revision: RegistroDeRevision,
+    prueba: RegistroDeLaPrueba,
 ):
     """La aplicación real con los cuatro bordes sustituidos.
 
@@ -739,5 +750,6 @@ def cliente(
     app.dependency_overrides[obtener_almacenamiento] = lambda: almacenamiento
     app.dependency_overrides[obtener_consultas] = lambda: consultas
     app.dependency_overrides[obtener_revision] = lambda: revision
+    app.dependency_overrides[obtener_prueba] = lambda: prueba
     yield cliente_de_sesion
     app.dependency_overrides.clear()

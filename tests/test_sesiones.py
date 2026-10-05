@@ -33,9 +33,19 @@ from continental.dobles import (
     respuesta_lista,
 )
 from continental.doyle import SesionDeProveedor
-from continental.fallas import AL_GUARDAR, AL_LEER, CONFIGURACION, DOYLE, PORTAL, que_hacer
+from continental.fallas import (
+    AL_GUARDAR,
+    AL_LEER,
+    CONFIGURACION,
+    DOYLE,
+    PORTAL,
+    PORTAL_EN_EL_VISOR,
+    PRUEBA_EN_CURSO,
+    que_hacer,
+)
 from continental.precios import (
     MOTIVOS,
+    NOMBRES_DE_PROVEEDOR,
     MOTIVOS_QUE_PASARON_DEL_LOGIN,
     NO_EMPAREJA,
     PORTAL_SIN_CONTESTAR,
@@ -54,7 +64,13 @@ from continental.sesiones import (
     SIN_PROBAR,
     SIN_SESION,
     SIRVIO,
+    RegistroDeLaPrueba,
+    ResultadoDeUnPortal,
     estado_de_la_sesion,
+    motivo_para_no_probar,
+    prueba_como_json,
+    prueba_en_curso_como_json,
+    repartir_los_pedidos,
     resultado_de_la_prueba,
     resultados_de_la_prueba,
     sesiones_como_json,
@@ -718,6 +734,293 @@ def test_cancelar_sin_ventana_dice_que_hacer(cliente, doyle):
     assert datos["ok"] is False and datos["que_hacer"]
 
 
+# ------------------------------------------------ una prueba a la vez (ticket 03)
+#
+# El 409 se prueba sin hilos y sin dormir de dos maneras: tomando el candado desde
+# la prueba (`prueba.apartar`, la costura del registro), y con un Doyle que, al
+# pedirle la búsqueda, dispara la segunda petición desde dentro de la primera,
+# que es exactamente el momento en que el candado tiene que estar puesto.
+
+
+def _todas(doyle):
+    _doyle_con(
+        doyle,
+        nadro=respuesta_lista("nadro", [("A", "10.00", "1")]),
+        levic=respuesta_lista("levic", []),
+        vicma=respuesta_lista("vicma", []),
+        quepharma=respuesta_lista("quepharma", []),
+    )
+
+
+def test_el_registro_aparta_una_sola_vez_y_se_suelta():
+    registro = RegistroDeLaPrueba()
+
+    assert registro.en_curso() is None
+    assert registro.apartar(["nadro"]) == (True, ("nadro",))
+    assert registro.apartar(["levic"]) == (False, ("nadro",))  # la que corre, no la pedida
+    registro.acotar(["vicma"])
+    assert registro.en_curso() == ("vicma",)
+    registro.soltar()
+    assert registro.en_curso() is None
+    registro.acotar(["nadro"])  # sin prueba corriendo, acotar no inventa una
+    assert registro.en_curso() is None
+    assert registro.apartar(["levic"]) == (True, ("levic",))
+
+
+def test_una_segunda_prueba_con_otra_en_curso_es_409_y_no_busca_nada(cliente, doyle, prueba):
+    _todas(doyle)
+    prueba.apartar(["nadro", "levic"])  # «otra computadora» ya está probando
+
+    respuesta = cliente.post("/api/sesiones/probar", json={"proveedores": ["vicma"]})
+    datos = respuesta.json()
+
+    assert respuesta.status_code == 409 and datos["ok"] is False
+    assert "NADRO" in datos["detalle"] and "LEVIC" in datos["detalle"]  # cuál corre
+    assert datos["que_hacer"] == que_hacer(PRUEBA_EN_CURSO, config.cargar().a_quien_avisar)
+    assert doyle.pedidos == [] and doyle.consultas == []  # ni una búsqueda
+    assert prueba.en_curso() == ("nadro", "levic")  # el rechazo no suelta la ajena
+
+
+def test_la_prueba_que_corre_tiene_el_candado_y_la_segunda_rebota(cliente, doyle, prueba):
+    """Con el Doyle pidiendo la búsqueda de la primera, llega la segunda."""
+    _todas(doyle)
+    vistas = {}
+    pedir_original = doyle.pedir_busqueda
+
+    def pedir_y_en_medio_llega_otra(termino, proveedores=()):
+        vistas["segunda"] = cliente.post("/api/sesiones/probar", json={"proveedores": ["levic"]})
+        vistas["lectura"] = cliente.get("/api/sesiones").json()
+        return pedir_original(termino, proveedores)
+
+    doyle.pedir_busqueda = pedir_y_en_medio_llega_otra
+
+    primera = cliente.post("/api/sesiones/probar", json={"proveedores": ["nadro"]}).json()
+
+    assert primera["ok"] is True
+    assert vistas["segunda"].status_code == 409
+    assert "NADRO" in vistas["segunda"].json()["detalle"]
+    assert doyle.pedidos == [TERMINO]  # solo la primera buscó
+    # Y mientras corría, GET /api/sesiones lo decía.
+    lectura = vistas["lectura"]
+    assert lectura["prueba_en_curso"]["proveedores"] == ["nadro"]
+    assert all(t["se_puede_probar"] is False for t in lectura["sesiones"])
+    assert all("NADRO" in t["por_que_no_se_prueba"] for t in lectura["sesiones"])
+    # Terminada, el candado está suelto.
+    assert prueba.en_curso() is None
+
+
+def test_el_candado_se_suelta_tras_el_exito(cliente, doyle, prueba):
+    _todas(doyle)
+
+    assert cliente.post("/api/sesiones/probar", json={"proveedores": ["nadro"]}).json()["ok"] is True
+
+    assert prueba.en_curso() is None
+    assert cliente.post("/api/sesiones/probar", json={"proveedores": ["levic"]}).json()["ok"] is True
+
+
+def test_el_candado_se_suelta_tras_una_falla_de_doyle(cliente, doyle, prueba):
+    """Doyle caído no deja los botones apagados para siempre."""
+    _todas(doyle)
+    doyle.falla = RuntimeError("SECRETO")
+
+    datos = cliente.post("/api/sesiones/probar", json={"proveedores": ["nadro"]}).json()
+
+    assert datos["ok"] is False
+    assert prueba.en_curso() is None
+    doyle.falla = None
+    assert cliente.post("/api/sesiones/probar", json={"proveedores": ["nadro"]}).json()["ok"] is True
+
+
+def test_el_candado_se_suelta_aunque_la_ruta_truene_por_dentro(cliente, doyle, prueba, monkeypatch):
+    """Una excepción que nadie atrapó (aquí, al buscar el término de prueba) sube
+    como 500 y el `finally` suelta igual."""
+    _todas(doyle)
+
+    def truena():
+        raise RuntimeError("inesperado")
+
+    monkeypatch.setattr("continental.web.app.termino_de_prueba_configurado", truena)
+
+    with pytest.raises(RuntimeError):
+        cliente.post("/api/sesiones/probar", json={"proveedores": ["nadro"]})
+
+    assert prueba.en_curso() is None
+
+
+def test_el_candado_se_suelta_con_un_portal_sin_contestar_y_sin_termino(
+    cliente, doyle, prueba, monkeypatch
+):
+    _doyle_con(doyle, nadro=respuesta_con_error("nadro", PORTAL_SIN_CONTESTAR))
+    assert cliente.post("/api/sesiones/probar", json={"proveedores": ["nadro"]}).json()["ok"] is False
+    assert prueba.en_curso() is None
+
+    monkeypatch.setattr("continental.web.app.termino_de_prueba_configurado", lambda: "")
+    assert cliente.post("/api/sesiones/probar").json()["ok"] is False
+    assert prueba.en_curso() is None
+
+
+def test_un_proveedor_que_no_existe_se_valida_antes_de_mirar_el_candado(cliente, doyle, prueba):
+    prueba.apartar(["nadro"])
+
+    respuesta = cliente.post("/api/sesiones/probar", json={"proveedores": ["inventado"]})
+
+    assert respuesta.status_code == 400
+
+
+def test_probar_solo_el_portal_del_visor_es_409_y_no_busca_nada(cliente, doyle, prueba):
+    _todas(doyle)
+    doyle.sesiones_abriendose.append("nadro")
+
+    respuesta = cliente.post("/api/sesiones/probar", json={"proveedores": ["nadro"]})
+    datos = respuesta.json()
+
+    assert respuesta.status_code == 409 and datos["ok"] is False
+    assert "NADRO" in datos["detalle"] and "visor" in datos["detalle"]
+    assert datos["que_hacer"] == que_hacer(PORTAL_EN_EL_VISOR, config.cargar().a_quien_avisar)
+    assert doyle.pedidos == []
+    assert prueba.en_curso() is None  # y no deja el candado puesto
+
+
+def test_con_varios_se_salta_al_del_visor_y_lo_dice(cliente, doyle, almacenamiento):
+    _todas(doyle)
+    doyle.sesiones_abriendose.append("nadro")
+
+    datos = cliente.post("/api/sesiones/probar", json={"proveedores": ["nadro", "levic"]}).json()
+
+    assert datos["ok"] is True
+    assert [r["proveedor"] for r in datos["resultados"]] == ["levic"]
+    assert [s["proveedor"] for s in datos["saltados"]] == ["nadro"]
+    assert "NADRO" in datos["detalle"] and "no se probó" in datos["detalle"]
+    assert doyle.filtros == [("levic",)]  # a Doyle solo se le pide el que se prueba
+    assert [f["proveedor"] for f in almacenamiento.pruebas_de_sesion] == ["levic"]
+
+
+def test_con_la_lista_vacia_se_prueban_los_otros_tres(cliente, doyle):
+    _todas(doyle)
+    doyle.sesiones_abriendose.append("nadro")
+
+    datos = cliente.post("/api/sesiones/probar").json()
+
+    assert [r["proveedor"] for r in datos["resultados"]] == ["levic", "vicma", "quepharma"]
+    assert [s["proveedor"] for s in datos["saltados"]] == ["nadro"]
+    assert doyle.filtros == [("levic", "vicma", "quepharma")]
+
+
+def test_sin_nadie_en_el_visor_no_hay_saltados_y_el_filtro_no_cambia(cliente, doyle):
+    _todas(doyle)
+
+    datos = cliente.post("/api/sesiones/probar").json()
+
+    assert datos["saltados"] == [] and doyle.filtros == [()]
+
+
+def test_sin_poder_leer_las_sesiones_no_se_prueba_a_ciegas(cliente, doyle, prueba, monkeypatch):
+    """Sin saber quién espera en el visor, probar podría estorbar a quien teclea."""
+    _todas(doyle)
+
+    def sin_doyle():
+        raise RuntimeError("SECRETO")
+
+    monkeypatch.setattr(doyle, "sesiones", sin_doyle)
+
+    respuesta = cliente.post("/api/sesiones/probar", json={"proveedores": ["nadro"]})
+
+    assert respuesta.json()["ok"] is False and doyle.pedidos == []
+    assert "SECRETO" not in respuesta.text and prueba.en_curso() is None
+
+
+def test_get_sin_prueba_corriendo_deja_probar_todo_salvo_el_del_visor(cliente, doyle):
+    _todas(doyle)
+    doyle.sesiones_abriendose.append("nadro")
+
+    datos = cliente.get("/api/sesiones").json()
+    tarjetas = {t["proveedor"]: t for t in datos["sesiones"]}
+
+    assert datos["prueba_en_curso"] is None
+    assert tarjetas["nadro"]["se_puede_probar"] is False
+    assert "visor" in tarjetas["nadro"]["por_que_no_se_prueba"]
+    for otro in ("levic", "vicma", "quepharma"):
+        assert tarjetas[otro]["se_puede_probar"] is True
+        assert tarjetas[otro]["por_que_no_se_prueba"] is None
+
+
+def test_get_con_prueba_corriendo_apaga_todas_y_dice_cual(cliente, doyle, prueba):
+    _todas(doyle)
+    prueba.apartar(["nadro", "levic", "vicma", "quepharma"])
+
+    datos = cliente.get("/api/sesiones").json()
+
+    assert datos["prueba_en_curso"]["proveedores"] == ["nadro", "levic", "vicma", "quepharma"]
+    assert "los cuatro portales" in datos["prueba_en_curso"]["detalle"]
+    assert [t["se_puede_probar"] for t in datos["sesiones"]] == [False] * 4
+    assert all(t["por_que_no_se_prueba"] for t in datos["sesiones"])
+
+
+# --- la función pura, por tabla
+
+
+@pytest.mark.parametrize(
+    ("abriendo", "en_curso", "motivo"),
+    [
+        (False, None, None),
+        (True, None, "visor"),
+        (False, ("nadro",), "NADRO"),
+        (False, ("nadro", "levic", "vicma", "quepharma"), "los cuatro portales"),
+        # El del visor conserva su motivo aunque además corra una prueba: es el
+        # que dura, y el otro se acaba solo.
+        (True, ("levic",), "visor"),
+    ],
+)
+def test_el_motivo_para_no_probar_una_tarjeta(abriendo, en_curso, motivo):
+    resultado = motivo_para_no_probar(abriendo, en_curso)
+
+    if motivo is None:
+        assert resultado is None
+    else:
+        assert motivo in resultado
+
+
+@pytest.mark.parametrize(
+    ("pedidos", "esperando", "a_probar", "saltados"),
+    [
+        ([], [], ["nadro", "levic", "vicma", "quepharma"], []),
+        ([], ["nadro"], ["levic", "vicma", "quepharma"], ["nadro"]),
+        (["levic"], ["nadro"], ["levic"], []),
+        (["nadro"], ["nadro"], [], ["nadro"]),
+        (["nadro", "levic"], ["nadro"], ["levic"], ["nadro"]),
+        (["levic", "nadro"], [], ["levic", "nadro"], []),
+    ],
+)
+def test_repartir_los_pedidos_entre_los_que_se_prueban_y_los_que_se_saltan(
+    pedidos, esperando, a_probar, saltados
+):
+    sesiones = [_sesion(p, "abriendo" if p in esperando else "guardada") for p in NOMBRES_DE_PROVEEDOR]
+
+    assert repartir_los_pedidos(pedidos, sesiones) == (a_probar, saltados)
+
+
+def test_las_tarjetas_traen_el_motivo_de_cada_boton_apagado():
+    nadro, levic = sesiones_como_json(
+        [_sesion("nadro", "abriendo"), _sesion("levic")], {}, None, en_curso=("levic",)
+    )
+
+    assert (nadro["se_puede_probar"], levic["se_puede_probar"]) == (False, False)
+    assert "visor" in nadro["por_que_no_se_prueba"] and "LEVIC" in levic["por_que_no_se_prueba"]
+
+
+def test_una_prueba_en_curso_como_json():
+    assert prueba_en_curso_como_json(None) is None
+    datos = prueba_en_curso_como_json(("vicma",))
+    assert datos["proveedores"] == ["vicma"] and "VICMA" in datos["detalle"]
+
+
+def test_los_saltados_no_cuentan_como_no_probados():
+    datos = prueba_como_json([ResultadoDeUnPortal("levic", SIRVIO)], saltados=["nadro"])
+
+    assert datos["ok"] is True and datos["algunos_sin_probar"] is False
+    assert datos["saltados"][0]["proveedor"] == "nadro"
+
+
 # =========================================================================
 # LA PANTALLA
 # =========================================================================
@@ -760,3 +1063,27 @@ def test_la_tarjeta_ofrece_probar_con_la_misma_firma_que_los_otros_pasos():
 def test_la_pantalla_dice_donde_se_teclea_la_contrasena():
     """Nunca en Continental: en el portal, dentro del visor (ADR 0001 de Doyle)."""
     assert "nunca en esta página" in pantalla_completa()
+
+
+def test_la_pantalla_pinta_la_prueba_en_curso_y_el_motivo_que_dice_el_servidor():
+    """El indicador y el motivo de cada botón apagado llegan dichos; el único
+    texto que no viene del servidor es el fijo del HTML (`data-texto-local`)."""
+    script = _script()
+    pantalla = pantalla_completa()
+
+    for llave in ("datos.prueba_en_curso.detalle", "s.por_que_no_se_prueba"):
+        assert llave in script, llave
+    # Un aviso por sitio, la pestaña y la ventana, con su texto fijo.
+    for id_ in ("sesiones-corriendo", "ventana-sesiones-corriendo"):
+        assert f'id="{id_}"' in pantalla and id_ in script
+    assert pantalla.count("data-texto-local=") == 2
+
+
+def test_mientras_esta_pestana_prueba_apaga_los_botones_de_probar_de_los_dos_sitios():
+    script = _script()
+
+    assert "let probandoAqui = false;" in script
+    assert "button[data-probar]" in script  # los de ambos sitios, sin esperar al servidor
+    assert "!s.se_puede_probar || probandoAqui" in script
+    # Al terminar, bien o mal, se vuelve a leer: el servidor dice cuáles se encienden.
+    assert script.index("probandoAqui = false;") < script.index("if (alTerminar) alTerminar();", script.index("async function probarSesion"))

@@ -20,14 +20,18 @@ se le cree al portal, no al marcador.
 resultados` o `no empareja`—, no que haya dado precio: lo que se pregunta es si
 la sesión vive.
 
-Funciones puras: no tocan la red, la base ni el reloj.
+Funciones puras: no tocan la red, la base ni el reloj. **La única excepción es
+`RegistroDeLaPrueba`**, el candado de «una prueba a la vez» (ADR 0024,
+decisión 8): recuerda en memoria del proceso qué prueba corre, y por eso quién
+puede probar y quién no se decide aquí, con ese estado como un dato más.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import threading
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from continental.almacenamiento import (
     RESULTADO_CADUCADA,
@@ -211,10 +215,129 @@ def estado_de_la_sesion(
     )
 
 
+# ------------------------------------------------ una prueba a la vez
+
+#: Por qué el portal que espera en el visor no se prueba: esa ventana es de
+#: quien está tecleando, y una búsqueda ahí le estorbaría.
+POR_QUE_NO_SE_PRUEBA_EL_DEL_VISOR = (
+    "Su ventana espera en el visor a que alguien entre: probarla estorbaría a "
+    "quien está tecleando. Termina con «Ya entré» o «Cancelar»."
+)
+
+
+@dataclass
+class RegistroDeLaPrueba:
+    """Qué prueba de sesiones corre ahora, si alguna. **Una a la vez, para todo
+    Continental** (ADR 0024, decisión 8): vale entre computadoras porque vive en
+    el servidor, y entre hilos porque la decisión se toma dentro de un `Lock`.
+
+    En memoria del proceso a propósito: un reinicio lo suelta, y lo peor que
+    pasa es perder una prueba a medias —que no escribió nada— y poder lanzar
+    otra mientras el hilo viejo agoniza. Persistirlo exigiría limpiarlo cuando
+    el proceso muere a media prueba, que es justo cuando no puede hacerlo.
+
+    Es un objeto de proceso, como `consultas.RegistroDeConsultas`, y se sustituye
+    en pruebas por uno nuevo en cada prueba. **Quien aparta suelta en `finally`**:
+    éxito, falla de Doyle o excepción, o los botones quedarían apagados para
+    siempre.
+    """
+
+    _en_curso: tuple[str, ...] | None = None
+    _candado: threading.Lock = field(default_factory=threading.Lock)
+
+    def en_curso(self) -> tuple[str, ...] | None:
+        """Los proveedores de la prueba que corre, o `None` si no hay ninguna."""
+        with self._candado:
+            return self._en_curso
+
+    def apartar(self, proveedores: Sequence[str]) -> tuple[bool, tuple[str, ...]]:
+        """`(se_aparto, lo_que_corre)`. Si ya hay una prueba no aparta nada y
+        devuelve la que corre. La decisión y el registro van juntos, dentro del
+        candado, por la carrera que ya describe `RegistroDeConsultas.apartar`:
+        dos pestañas en el mostrador bastan para colarse entre comprobar y
+        registrar."""
+        with self._candado:
+            if self._en_curso is not None:
+                return False, self._en_curso
+            self._en_curso = tuple(proveedores)
+            return True, self._en_curso
+
+    def acotar(self, proveedores: Sequence[str]) -> None:
+        """Corrige a quiénes prueba la que corre (se saltó al del visor). Solo
+        quien apartó sabe a cuáles se salta, y lo sabe después de apartar."""
+        with self._candado:
+            if self._en_curso is not None:
+                self._en_curso = tuple(proveedores)
+
+    def soltar(self) -> None:
+        with self._candado:
+            self._en_curso = None
+
+
+def _nombres(proveedores: Sequence[str]) -> str:
+    if len(proveedores) == len(NOMBRES_DE_PROVEEDOR):
+        return "los cuatro portales"
+    return ", ".join(nombre_del_proveedor(p) for p in proveedores)
+
+
+def frase_de_prueba_en_curso(proveedores: Sequence[str]) -> str:
+    """Lo que dice la pantalla (y el 409) mientras corre una prueba."""
+    return (
+        f"Hay una prueba corriendo en {_nombres(proveedores)}: tarda hasta medio "
+        "minuto, y hasta que termine no se puede lanzar otra."
+    )
+
+
+def prueba_en_curso_como_json(en_curso: Sequence[str] | None) -> dict | None:
+    """El aviso de `GET /api/sesiones`: `None` si no corre ninguna prueba."""
+    if en_curso is None:
+        return None
+    return {"proveedores": list(en_curso), "detalle": frase_de_prueba_en_curso(en_curso)}
+
+
+def repartir_los_pedidos(
+    pedidos: Sequence[str], sesiones: Sequence[SesionDeProveedor]
+) -> tuple[list[str], list[str]]:
+    """`(a_probar, saltados)`: de lo que se pidió probar (vacío: los cuatro),
+    quién se prueba y a quién se salta por esperar en el visor.
+
+    Con un solo portal pedido y esperando, `a_probar` queda vacío y la ruta se
+    niega. Con varios, o con la lista vacía de «Probar todas» (ticket 04), se
+    prueban los demás y se dice a cuál se saltó. En el orden que llegaron.
+    """
+    esperando = {s.proveedor for s in sesiones if s.estado == "abriendo"}
+    quienes = list(pedidos) or list(NOMBRES_DE_PROVEEDOR)
+    return (
+        [q for q in quienes if q not in esperando],
+        [q for q in quienes if q in esperando],
+    )
+
+
+def frase_de_un_saltado(proveedor: str) -> str:
+    return (
+        f"{nombre_del_proveedor(proveedor)}: no se probó, su ventana espera en el "
+        "visor a que alguien entre."
+    )
+
+
+def motivo_para_no_probar(abriendo: bool, en_curso: Sequence[str] | None) -> str | None:
+    """Por qué el botón «Probar» de una tarjeta está apagado, o `None` si se puede.
+
+    Primero el del visor, que dura hasta que alguien termine con esa ventana;
+    la prueba en curso es pasajera y el botón se enciende solo al acabar.
+    """
+    if abriendo:
+        return POR_QUE_NO_SE_PRUEBA_EL_DEL_VISOR
+    if en_curso is not None:
+        return frase_de_prueba_en_curso(en_curso)
+    return None
+
+
 def sesiones_como_json(
     sesiones: list[SesionDeProveedor],
     evidencia: dict[str, EvidenciaDeLaSesion] | None,
     pruebas: dict[str, PruebaDeLaSesion] | None = None,
+    en_curso: Sequence[str] | None = None,
 ) -> list[dict]:
     """Una tarjeta por proveedor, en el orden del glosario.
 
@@ -227,7 +350,9 @@ def sesiones_como_json(
     Los botones los decide aquí la regla del ADR 0018 —**un portal esperando a
     la vez**—: mientras uno espera, los otros dicen por qué no se abren. La
     ruta lo vuelve a comprobar; esto es para no pintar un botón que va a
-    rebotar.
+    rebotar. Los de probar, igual: `en_curso` son los proveedores de la prueba
+    que corre (`None` si ninguna), y mientras corre **ninguna** tarjeta se puede
+    probar; cada botón apagado trae su `por_que_no_se_prueba`.
     """
     esperando = next((s for s in sesiones if s.estado == "abriendo"), None)
     orden = {c: i for i, c in enumerate(NOMBRES_DE_PROVEEDOR)}
@@ -241,6 +366,7 @@ def sesiones_como_json(
         )
         abriendo = s.estado == "abriendo"
         otro = esperando if (esperando is not None and not abriendo) else None
+        motivo_de_probar = motivo_para_no_probar(abriendo, en_curso)
         tarjetas.append({
             "proveedor": s.proveedor,
             "nombre": nombre_del_proveedor(s.proveedor),
@@ -257,10 +383,8 @@ def sesiones_como_json(
             ),
             "rotulo_de_abrir": "Abrir sesión" if s.estado == "sin_sesion" else "Volver a abrir",
             "se_puede_confirmar": abriendo,
-            # El portal que espera en el visor no se prueba: esa ventana es de
-            # quien está tecleando. El candado de una prueba a la vez y el
-            # motivo de cada botón apagado llegan con el ticket 03.
-            "se_puede_probar": not abriendo,
+            "se_puede_probar": motivo_de_probar is None,
+            "por_que_no_se_prueba": motivo_de_probar,
         })
     return tarjetas
 
@@ -334,13 +458,19 @@ def frase_de_un_portal(r: ResultadoDeUnPortal) -> str:
     return f"{nombre}: no se pudo probar ({por_que}). Conserva lo que decía antes."
 
 
-def prueba_como_json(resultados: Sequence[ResultadoDeUnPortal]) -> dict:
+def prueba_como_json(
+    resultados: Sequence[ResultadoDeUnPortal], saltados: Sequence[str] = ()
+) -> dict:
     """La respuesta de «Probar»: un resultado por portal y la frase de todos.
 
     `ok` es que **al menos un** portal terminó de probarse. Si ninguno, es una
     falla (la ruta le agrega su `que_hacer`); si solo algunos, `ok` y
     `algunos_sin_probar`, y la frase dice cuáles. Todo llega dicho: el
     JavaScript solo lo pinta.
+
+    `saltados` son los portales que ni se intentaron porque esperan en el visor
+    (`repartir_los_pedidos`): no cuentan como «no se pudo probar», que es una
+    falla, pero **se dicen**, con su frase, y vienen aparte en `saltados`.
     """
     sin_probar = [r for r in resultados if r.resultado is None]
     return {
@@ -355,5 +485,16 @@ def prueba_como_json(resultados: Sequence[ResultadoDeUnPortal]) -> dict:
             }
             for r in resultados
         ],
-        "detalle": " ".join(frase_de_un_portal(r) for r in resultados),
+        "saltados": [
+            {
+                "proveedor": p,
+                "nombre": nombre_del_proveedor(p),
+                "detalle": frase_de_un_saltado(p),
+            }
+            for p in saltados
+        ],
+        "detalle": " ".join(
+            [frase_de_un_portal(r) for r in resultados]
+            + [frase_de_un_saltado(p) for p in saltados]
+        ),
     }

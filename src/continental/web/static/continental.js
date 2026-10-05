@@ -5143,11 +5143,29 @@ async function cancelarSesion(sesion, boton, idNota, alTerminar) {
 // `al_guardar` porque, si la respuesta se pierde, la prueba pudo haberse
 // guardado: se manda a mirar las tarjetas.
 //
+// UNA PRUEBA A LA VEZ (ADR 0024, decisión 8; ticket 03). El candado es del
+// servidor —vale entre computadoras—: si otra prueba corre, contesta 409 con
+// cuál, y esa frase se pinta tal cual. Aquí solo se adelanta lo que ESTA pestaña
+// ya sabe sin preguntar: que acaba de lanzar una. Mientras `probandoAqui`, los
+// botones de probar de los dos sitios se apagan y el aviso fijo del HTML
+// (`data-texto-local`) dice por qué, sin esperar a que el servidor lo diga. Al
+// terminar —bien o mal— se vuelve a leer: el servidor es quien dice qué botones
+// se encienden, y un 409 puede traer una prueba ajena que hay que mostrar.
+let probandoAqui = false;
+
+const avisoDeLaPruebaLocal = () => {
+  SITIOS_DE_SESIONES.forEach((ids) => {
+    const aviso = document.getElementById(ids.corriendo);
+    if (aviso && probandoAqui) nota(ids.corriendo, aviso.dataset.textoLocal);
+  });
+  document.querySelectorAll('button[data-probar]').forEach((b) => { b.disabled = true; });
+};
+
 // `proveedores` lleva un solo portal; vacía querría decir los cuatro, que es lo
 // que usará «Probar todas».
 async function probarSesion(sesion, boton, idNota, alTerminar) {
-  const rotulo = boton.textContent;
-  boton.disabled = true;
+  probandoAqui = true;
+  avisoDeLaPruebaLocal();
   boton.textContent = 'Probando…';
   nota(idNota, '');
 
@@ -5157,14 +5175,13 @@ async function probarSesion(sesion, boton, idNota, alTerminar) {
     body: JSON.stringify({ proveedores: [sesion.proveedor] }),
   }), 'al_guardar');
 
-  boton.disabled = false;
-  boton.textContent = rotulo;
+  probandoAqui = false;
   if (!respuesta.ok) {
     notaDeFalla(idNota, respuesta);
-    return;
+  } else {
+    // Si algún portal no terminó, la frase del servidor lo dice y va en ámbar.
+    nota(idNota, respuesta.detalle, respuesta.algunos_sin_probar ? 'aviso' : '');
   }
-  // Si algún portal no terminó, la frase del servidor lo dice y va en ámbar.
-  nota(idNota, respuesta.detalle, respuesta.algunos_sin_probar ? 'aviso' : '');
   if (alTerminar) alTerminar();
 }
 
@@ -5175,8 +5192,10 @@ async function probarSesion(sesion, boton, idNota, alTerminar) {
 // escondida detrás de la ventana y un paso dado desde ahí tiene que decir su
 // resultado donde se ve. Van los ids; `cargarSesiones` los resuelve.
 const SITIOS_DE_SESIONES = [
-  { caja: 'sesiones-tarjetas', accion: 'sesiones-accion', falla: 'sesiones-falla' },
-  { caja: 'ventana-sesiones-tarjetas', accion: 'ventana-sesiones-accion', falla: 'ventana-sesiones-falla' },
+  { caja: 'sesiones-tarjetas', accion: 'sesiones-accion', falla: 'sesiones-falla',
+    corriendo: 'sesiones-corriendo' },
+  { caja: 'ventana-sesiones-tarjetas', accion: 'ventana-sesiones-accion',
+    falla: 'ventana-sesiones-falla', corriendo: 'ventana-sesiones-corriendo' },
 ];
 
 // La tarjeta de UN portal. `alTerminar` es a quien se le avisa cuando un paso
@@ -5211,7 +5230,11 @@ const tarjetaDeSesion = (s, sitio, alTerminar) => {
     // ofrece «Ya entré» y «Cancelar», arriba). El servidor dice si se puede.
     const probar = botonDeAccion('Probar',
       (b) => probarSesion(s, b, sitio.accion, alTerminar));
-    probar.disabled = !s.se_puede_probar;
+    probar.dataset.probar = '1';
+    // Apagado si el servidor dice que no (el del visor, una prueba corriendo) o
+    // si esta pestaña ya lanzó una y todavía no vuelve.
+    probar.disabled = !s.se_puede_probar || probandoAqui;
+    if (s.por_que_no_se_prueba) probar.title = s.por_que_no_se_prueba;
     botones.append(abrir, probar);
   }
   tarjeta.append(titulo, frase, botones);
@@ -5220,6 +5243,14 @@ const tarjetaDeSesion = (s, sitio, alTerminar) => {
     porQue.className = 'detalle';
     porQue.textContent = s.por_que_no_se_abre;
     tarjeta.append(porQue);
+  }
+  // El motivo de un «Probar» apagado se ve en la tarjeta, no solo en el título:
+  // un botón apagado sin razón se lee como pantalla trabada.
+  if (s.por_que_no_se_prueba) {
+    const porQueNo = document.createElement('p');
+    porQueNo.className = 'detalle';
+    porQueNo.textContent = s.por_que_no_se_prueba;
+    tarjeta.append(porQueNo);
   }
   return tarjeta;
 };
@@ -5236,6 +5267,11 @@ const pintarSesiones = (sitio, datos, alTerminar) => {
   }
   if (datos.evidencia_sin_leer) notaDeFalla(sitio.falla, datos.evidencia_sin_leer);
   else nota(sitio.falla, '');
+  // Que hay una prueba corriendo lo dice el servidor (puede ser de otra
+  // computadora); si es de esta pestaña y todavía no se enteró, lo dice el HTML.
+  const aviso = document.getElementById(sitio.corriendo);
+  nota(sitio.corriendo, datos.prueba_en_curso ? datos.prueba_en_curso.detalle
+    : probandoAqui ? aviso.dataset.textoLocal : '');
   sitio.caja.replaceChildren(...datos.sesiones.map((s) => tarjetaDeSesion(s, sitio, alTerminar)));
 };
 

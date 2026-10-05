@@ -20,6 +20,7 @@ from continental.almacenamiento import AlmacenamientoDelPedido, AlmacenamientoPo
 from continental.config import cargar
 from continental.consultas import RegistroDeConsultas
 from continental.doyle import ClienteDeDoyle, DoylePorHttp
+from continental.sesiones import RegistroDeLaPrueba
 from continental.vigilancia import RegistroDeRevision
 
 
@@ -119,6 +120,19 @@ def obtener_revision() -> RegistroDeRevision:
     """El registro de «Revisar ahora». Se sustituye en pruebas por uno cuyo
     `lanzar` ejecuta ahí mismo: ninguna prueba arranca un hilo."""
     return _REVISION
+
+
+#: El candado de «una prueba de sesiones a la vez» (ADR 0024, decisión 8),
+#: **para todo el proceso**: tiene que valer entre computadoras, y uno por
+#: petición no recordaría que otra ya está corriendo.
+_PRUEBA = RegistroDeLaPrueba()
+
+
+def obtener_prueba() -> RegistroDeLaPrueba:
+    """El candado de las pruebas de sesiones. Se sustituye en pruebas por uno
+    nuevo en cada una: el de verdad se comparte, y una prueba que dejara el
+    candado puesto bloquearía a todas las siguientes."""
+    return _PRUEBA
 
 
 def reloj() -> dt.datetime:
