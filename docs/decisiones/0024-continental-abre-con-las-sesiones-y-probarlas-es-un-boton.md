@@ -116,7 +116,7 @@ persona no tenía nada parecido.
   el caso `portal` de `fallas.py`; si solo algunos, `ok: true` y
   `algunos_sin_probar`. Doyle caído, o no poder guardar, no escriben nada y la
   tarjeta conserva su etiqueta.
-- **Se queda para el ticket 04:** «Probar todas». La ruta ya acepta la lista y
+- **«Probar todas» (ticket 04, abajo):** la ruta ya aceptaba la lista y
   ya se salta al portal del visor; falta el botón.
 
 ## Enmienda del 2026-10-05 (2) — una prueba a la vez (ticket 03)
@@ -147,3 +147,22 @@ persona no tenía nada parecido.
 - **Sin sondeo:** otra computadora ve los botones apagados la próxima vez que
   pinte (abrir, recargar, o terminar un paso suyo), no en vivo. La ruta vuelve a
   comprobar, así que un botón pintado de más rebota con su 409 y no estorba.
+
+## Enmienda del 2026-10-05 (3) — «Probar todas» (ticket 04)
+
+- **El botón** está arriba de las tarjetas, en la pestaña y en la ventana. Es
+  texto fijo del HTML (uno por sitio, `data-probar-todas`); `pintarSesiones`,
+  la única función que pinta, lo enciende, lo apaga y escribe su motivo. Manda
+  `{"proveedores": []}`: el cliente no enumera los portales y el servidor los
+  reparte en **una sola búsqueda** (ADR 0019), saltando al que espera en el visor.
+- **El servidor decide si se puede:** `GET /api/sesiones` suma `probar_todas`
+  (`{se_puede, por_que_no}`), de la función pura `sesiones.probar_todas_como_json`.
+  Con una prueba corriendo no se puede (su motivo se acaba solo). **Con un portal
+  en el visor sí se puede**: se prueban los otros tres y la respuesta dice cuál
+  se saltó. Solo si ninguno es probable queda apagado con el motivo del visor,
+  que es el mismo caso que la ruta contesta con 409; el ADR 0018 (un portal
+  esperando a la vez) hoy hace ese caso inalcanzable con cuatro portales.
+- **Mientras corre**, el botón de las tarjetas y los dos «Probar todas» se apagan
+  sin esperar al servidor (`probandoAqui`). La nota de resultado va en ámbar si
+  algún portal se saltó o no contestó, y es la frase del servidor, que los
+  nombra. Un portal que no contestó no guarda fila y conserva su etiqueta.

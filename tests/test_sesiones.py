@@ -70,6 +70,7 @@ from continental.sesiones import (
     motivo_para_no_probar,
     prueba_como_json,
     prueba_en_curso_como_json,
+    probar_todas_como_json,
     repartir_los_pedidos,
     resultado_de_la_prueba,
     resultados_de_la_prueba,
@@ -1087,3 +1088,161 @@ def test_mientras_esta_pestana_prueba_apaga_los_botones_de_probar_de_los_dos_sit
     assert "!s.se_puede_probar || probandoAqui" in script
     # Al terminar, bien o mal, se vuelve a leer: el servidor dice cuáles se encienden.
     assert script.index("probandoAqui = false;") < script.index("if (alTerminar) alTerminar();", script.index("async function probarSesion"))
+
+
+# =========================================================================
+# «PROBAR TODAS» (ticket 04)
+# =========================================================================
+
+
+def _doyle_de_cuatro(doyle):
+    """Los cuatro portales contestan, uno por cada veredicto posible."""
+    _doyle_con(
+        doyle,
+        nadro=respuesta_lista("nadro", [("A", "10.00", "1")]),
+        levic=respuesta_con_sesion_caducada("levic"),
+        vicma=respuesta_con_error("vicma", "Timeout 30000ms exceeded"),
+        quepharma=respuesta_lista("quepharma", []),
+    )
+
+
+def test_probar_todas_es_una_sola_busqueda_para_los_cuatro(cliente, doyle):
+    """ADR 0019: Doyle reparte un término entre los cuatro en el mismo trabajo;
+    cuatro búsquedas serían cuatro trabajos y cuatro esperas."""
+    _todas(doyle)
+
+    cliente.post("/api/sesiones/probar", json={"proveedores": []})
+
+    assert doyle.pedidos == [TERMINO]
+    assert doyle.filtros == [()]  # sin filtro: Doyle prueba los cuatro
+
+
+def test_probar_todas_con_uno_en_el_visor_lo_salta_y_pide_solo_los_otros_tres(
+    cliente, doyle, almacenamiento
+):
+    _todas(doyle)
+    doyle.sesiones_abriendose.append("vicma")
+
+    datos = cliente.post("/api/sesiones/probar", json={"proveedores": []}).json()
+
+    assert doyle.pedidos == [TERMINO] and doyle.filtros == [("nadro", "levic", "quepharma")]
+    assert [s["proveedor"] for s in datos["saltados"]] == ["vicma"]
+    assert "VICMA: no se probó, su ventana espera en el visor" in datos["detalle"]
+    assert sorted(f["proveedor"] for f in almacenamiento.pruebas_de_sesion) == [
+        "levic", "nadro", "quepharma",
+    ]
+
+
+def test_resultado_mixto_guarda_tres_filas_y_nombra_al_que_no_contesto(
+    cliente, doyle, almacenamiento
+):
+    """Dos `sirvió`, una `caducada`, una sin contestar: tres filas, no cuatro."""
+    _doyle_de_cuatro(doyle)
+
+    datos = cliente.post("/api/sesiones/probar", json={"proveedores": []}).json()
+
+    assert datos["ok"] is True and datos["algunos_sin_probar"] is True
+    assert [(r["proveedor"], r["resultado"]) for r in datos["resultados"]] == [
+        ("nadro", SIRVIO), ("levic", CADUCADA), ("vicma", None), ("quepharma", SIRVIO),
+    ]
+    assert sorted((f["proveedor"], f["resultado"]) for f in almacenamiento.pruebas_de_sesion) == [
+        ("levic", CADUCADA), ("nadro", SIRVIO), ("quepharma", SIRVIO),
+    ]
+    assert "VICMA: no se pudo probar" in datos["detalle"]
+    # El que no contestó conserva su etiqueta de antes.
+    assert _etiqueta(cliente, "vicma") == SIN_PROBAR
+
+
+def test_probar_todas_con_el_saltado_y_el_que_no_contesto_los_dice_a_los_dos(
+    cliente, doyle, almacenamiento
+):
+    _doyle_de_cuatro(doyle)
+    doyle.sesiones_abriendose.append("nadro")
+
+    datos = cliente.post("/api/sesiones/probar", json={"proveedores": []}).json()
+
+    assert datos["algunos_sin_probar"] is True
+    assert [s["proveedor"] for s in datos["saltados"]] == ["nadro"]
+    assert "NADRO: no se probó" in datos["detalle"] and "VICMA: no se pudo probar" in datos["detalle"]
+    assert [f["proveedor"] for f in almacenamiento.pruebas_de_sesion] == ["levic", "quepharma"]
+
+
+def test_probar_todas_mientras_otra_prueba_corre_es_409_y_no_busca_nada(cliente, doyle, prueba):
+    _todas(doyle)
+    prueba.apartar(["levic"])
+
+    respuesta = cliente.post("/api/sesiones/probar", json={"proveedores": []})
+
+    assert respuesta.status_code == 409 and doyle.pedidos == []
+    assert "LEVIC" in respuesta.json()["detalle"]
+
+
+def test_get_dice_si_probar_todas_se_puede_y_por_que_no(cliente, doyle, prueba):
+    _todas(doyle)
+
+    assert cliente.get("/api/sesiones").json()["probar_todas"] == {
+        "se_puede": True, "por_que_no": None,
+    }
+
+    doyle.sesiones_abriendose.append("nadro")  # uno en el visor: los otros tres sí
+    assert cliente.get("/api/sesiones").json()["probar_todas"]["se_puede"] is True
+
+    prueba.apartar(["nadro", "levic", "vicma", "quepharma"])
+    datos = cliente.get("/api/sesiones").json()["probar_todas"]
+    assert datos["se_puede"] is False and "los cuatro portales" in datos["por_que_no"]
+
+
+@pytest.mark.parametrize(
+    ("en_visor", "en_curso", "se_puede", "motivo"),
+    [
+        ([], None, True, None),
+        (["nadro"], None, True, None),
+        ([], ("nadro",), False, "NADRO"),
+        # Con una prueba corriendo gana ese motivo, que se acaba solo.
+        (["nadro"], ("levic",), False, "LEVIC"),
+        # Si ninguno es probable no hay nada que lanzar (el 409 de la ruta).
+        (list(NOMBRES_DE_PROVEEDOR), None, False, "visor"),
+    ],
+)
+def test_la_decision_de_probar_todas_es_una_funcion_pura(en_visor, en_curso, se_puede, motivo):
+    sesiones = [_sesion(p, "abriendo" if p in en_visor else "guardada") for p in NOMBRES_DE_PROVEEDOR]
+
+    datos = probar_todas_como_json(sesiones, en_curso)
+
+    assert datos["se_puede"] is se_puede
+    if motivo is None:
+        assert datos["por_que_no"] is None
+    else:
+        assert motivo in datos["por_que_no"]
+
+
+def test_el_boton_probar_todas_esta_en_la_pestana_y_en_la_ventana():
+    pantalla = pantalla_completa()
+
+    for id_ in ("sesiones-probar-todas", "ventana-sesiones-probar-todas"):
+        assert f'id="{id_}"' in pantalla and id_ in _script()
+    assert pantalla.count('data-rotulo="Probar todas"') == 2
+
+
+def test_probar_todas_sale_por_la_funcion_que_pinta_y_manda_la_lista_vacia():
+    script = _script()
+    pintar = script[script.index("const pintarSesiones"):script.index("const cargarSesiones")]
+
+    # Un solo camino: la función compartida lo pinta con lo que dice el servidor.
+    assert "datos.probar_todas" in pintar and "sitio.todas" in pintar
+    assert "probarSesiones([], " in pintar
+    # Vacía quiere decir los cuatro: el JavaScript no los enumera.
+    assert "proveedores: proveedores" in script or "proveedores })" in script
+
+
+def test_probar_todas_apaga_los_botones_de_las_tarjetas_y_se_apaga_con_la_prueba():
+    script = _script()
+
+    # Mientras corre (esta pestaña, o cualquiera según el servidor) todo se apaga.
+    assert "button[data-probar]" in script and "data-probar-todas" in script
+    assert "!datos.probar_todas.se_puede || probandoAqui" in script
+    assert "datos.probar_todas.por_que_no" in script
+
+
+def test_la_nota_de_probar_todas_va_en_ambar_si_algo_se_salto_o_no_contesto():
+    assert "respuesta.algunos_sin_probar || respuesta.saltados.length" in _script()

@@ -5158,12 +5158,16 @@ const avisoDeLaPruebaLocal = () => {
     const aviso = document.getElementById(ids.corriendo);
     if (aviso && probandoAqui) nota(ids.corriendo, aviso.dataset.textoLocal);
   });
-  document.querySelectorAll('button[data-probar]').forEach((b) => { b.disabled = true; });
+  // Los de cada tarjeta y los dos «Probar todas» (uno por sitio).
+  document.querySelectorAll('button[data-probar], button[data-probar-todas]')
+    .forEach((b) => { b.disabled = true; });
 };
 
-// `proveedores` lleva un solo portal; vacía querría decir los cuatro, que es lo
-// que usará «Probar todas».
-async function probarSesion(sesion, boton, idNota, alTerminar) {
+// `proveedores` lleva los portales a probar; **vacía quiere decir los cuatro**
+// (el servidor los reparte en una sola búsqueda, ADR 0019, y salta al que espera
+// en el visor). La lista vacía es lo que manda «Probar todas»: el cliente no
+// enumera los portales.
+async function probarSesiones(proveedores, boton, idNota, alTerminar) {
   probandoAqui = true;
   avisoDeLaPruebaLocal();
   boton.textContent = 'Probando…';
@@ -5172,18 +5176,23 @@ async function probarSesion(sesion, boton, idNota, alTerminar) {
   const respuesta = await respuestaDe(fetch('/api/sesiones/probar', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ proveedores: [sesion.proveedor] }),
+    body: JSON.stringify({ proveedores: proveedores }),
   }), 'al_guardar');
 
   probandoAqui = false;
   if (!respuesta.ok) {
     notaDeFalla(idNota, respuesta);
   } else {
-    // Si algún portal no terminó, la frase del servidor lo dice y va en ámbar.
-    nota(idNota, respuesta.detalle, respuesta.algunos_sin_probar ? 'aviso' : '');
+    // Si algún portal no terminó o se saltó, la frase del servidor dice cuál y
+    // por qué, y va en ámbar.
+    nota(idNota, respuesta.detalle,
+      respuesta.algunos_sin_probar || respuesta.saltados.length ? 'aviso' : '');
   }
   if (alTerminar) alTerminar();
 }
+
+const probarSesion = (sesion, boton, idNota, alTerminar) =>
+  probarSesiones([sesion.proveedor], boton, idNota, alTerminar);
 
 // UN «SITIO» ES DONDE SE PINTAN LAS SESIONES: sus tarjetas y las dos notas que
 // las acompañan (lo que dijo el último paso, y la falla de leerlas). Hay dos
@@ -5193,9 +5202,10 @@ async function probarSesion(sesion, boton, idNota, alTerminar) {
 // resultado donde se ve. Van los ids; `cargarSesiones` los resuelve.
 const SITIOS_DE_SESIONES = [
   { caja: 'sesiones-tarjetas', accion: 'sesiones-accion', falla: 'sesiones-falla',
-    corriendo: 'sesiones-corriendo' },
+    corriendo: 'sesiones-corriendo', todas: 'sesiones-probar-todas' },
   { caja: 'ventana-sesiones-tarjetas', accion: 'ventana-sesiones-accion',
-    falla: 'ventana-sesiones-falla', corriendo: 'ventana-sesiones-corriendo' },
+    falla: 'ventana-sesiones-falla', corriendo: 'ventana-sesiones-corriendo',
+    todas: 'ventana-sesiones-probar-todas' },
 ];
 
 // La tarjeta de UN portal. `alTerminar` es a quien se le avisa cuando un paso
@@ -5260,6 +5270,17 @@ const tarjetaDeSesion = (s, sitio, alTerminar) => {
 // espejo. Si Doyle no contesta se pinta el hueco con su motivo y el contenedor
 // queda vacío —nunca tarjetas vacías—, también en la ventana.
 const pintarSesiones = (sitio, datos, alTerminar) => {
+  // «Probar todas» arriba de las tarjetas: el botón y su rótulo son texto fijo
+  // del HTML; aquí solo se enciende, se apaga y se dice por qué. Sin sesiones
+  // que leer no hay nada que probar, y queda apagado.
+  const todas = document.getElementById(sitio.todas);
+  const motivoDeTodas = document.getElementById(sitio.todas + '-motivo');
+  todas.textContent = todas.dataset.rotulo;
+  todas.onclick = () => probarSesiones([], todas, sitio.accion, alTerminar);
+  todas.disabled = !datos.ok || !datos.probar_todas.se_puede || probandoAqui;
+  motivoDeTodas.textContent = datos.ok && datos.probar_todas.por_que_no
+    ? datos.probar_todas.por_que_no : '';
+  motivoDeTodas.hidden = !motivoDeTodas.textContent;
   if (!datos.ok) {
     notaDeFalla(sitio.falla, datos);
     sitio.caja.replaceChildren();

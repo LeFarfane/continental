@@ -333,6 +333,25 @@ def motivo_para_no_probar(abriendo: bool, en_curso: Sequence[str] | None) -> str
     return None
 
 
+def probar_todas_como_json(
+    sesiones: Sequence[SesionDeProveedor], en_curso: Sequence[str] | None
+) -> dict:
+    """Si «Probar todas» se puede apretar y, si no, por qué (ADR 0024, decisión 3).
+
+    Con una prueba corriendo, no (el candado es uno para todos, y ese motivo se
+    acaba solo). Con un portal esperando en el visor **sí**: se prueban los
+    demás y la respuesta dice cuál se saltó. Solo si ninguno es probable —todos
+    esperando en el visor, que el ADR 0018 hoy no deja, o ni una sesión que
+    leer— no hay nada que lanzar: es el mismo caso que la ruta contesta con 409.
+    """
+    if en_curso is not None:
+        return {"se_puede": False, "por_que_no": frase_de_prueba_en_curso(en_curso)}
+    a_probar, _ = repartir_los_pedidos([], sesiones)
+    if not a_probar:
+        return {"se_puede": False, "por_que_no": POR_QUE_NO_SE_PRUEBA_EL_DEL_VISOR}
+    return {"se_puede": True, "por_que_no": None}
+
+
 def sesiones_como_json(
     sesiones: list[SesionDeProveedor],
     evidencia: dict[str, EvidenciaDeLaSesion] | None,

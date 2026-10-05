@@ -1263,6 +1263,9 @@ li.transito.atrasado { opacity: 1; box-shadow: inset 4px 0 0 var(--aviso-vivo); 
    palabra escrita; la que espera a que alguien entre, con un anillo. */
 .portales.sesiones .portal { padding-bottom: 4px; }
 .portales.sesiones .que-paso { color: var(--tenue); min-height: 2.25rem; }
+/* «Probar todas» arriba de las cuatro tarjetas, en la pestaña y en la ventana. */
+.probar-todas { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.probar-todas .detalle { margin: 0; flex: 1 1 12rem; }
 
 /* ------------------------------------------------------------------ Estado
 

@@ -169,6 +169,7 @@ from continental.sesiones import (
     frase_de_prueba_en_curso,
     prueba_como_json,
     prueba_en_curso_como_json,
+    probar_todas_como_json,
     repartir_los_pedidos,
     resultados_de_la_prueba,
     sesiones_como_json,
@@ -3941,14 +3942,15 @@ def las_sesiones(
         "ok": True,
         "sesiones": sesiones_como_json(sesiones, evidencia, pruebas, en_curso),
         "prueba_en_curso": prueba_en_curso_como_json(en_curso),
+        "probar_todas": probar_todas_como_json(sesiones, en_curso),
         "evidencia_sin_leer": evidencia_sin_leer,
         "visor": cargar().visor_de_doyle,
     }
 
 
 class PruebaPedida(BaseModel):
-    #: Los proveedores a probar; vacío o ausente quiere decir los cuatro. La
-    #: lista existe para «Probar todas» (ticket 04), que la manda vacía.
+    #: Los proveedores a probar; vacío o ausente quiere decir los cuatro. «Probar
+    #: todas» (ticket 04) la manda vacía: el cliente no enumera los portales.
     proveedores: list[str] = []
 
 

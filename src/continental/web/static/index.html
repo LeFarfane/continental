@@ -345,6 +345,10 @@
           «Abrir sesión» abre el portal en el visor, ahí tecleas el usuario y la contraseña
           —nunca en esta página—, y vuelves a darle a «Ya entré». De un portal a la vez.</p>
       </div>
+      <div class="fila probar-todas">
+        <button type="button" class="accion llena" id="sesiones-probar-todas" data-probar-todas data-rotulo="Probar todas" disabled>Probar todas</button>
+        <p class="detalle" id="sesiones-probar-todas-motivo" hidden></p>
+      </div>
       <p class="nota" id="sesiones-accion" hidden></p>
       <p class="nota" id="sesiones-falla" hidden></p>
       <p class="nota" id="sesiones-corriendo" role="status" hidden
@@ -408,6 +412,10 @@
     <h3 id="ventana-sesiones-titulo">Sesiones de los portales</h3>
     <p class="sub-ventana">Sin sesión, un portal no da precios. La contraseña se teclea en el
       portal, dentro del visor, nunca en esta página.</p>
+    <div class="fila probar-todas">
+      <button type="button" class="accion llena" id="ventana-sesiones-probar-todas" data-probar-todas data-rotulo="Probar todas" disabled>Probar todas</button>
+      <p class="detalle" id="ventana-sesiones-probar-todas-motivo" hidden></p>
+    </div>
     <p class="nota" id="ventana-sesiones-accion" hidden></p>
     <p class="nota" id="ventana-sesiones-falla" hidden></p>
     <p class="nota" id="ventana-sesiones-corriendo" role="status" hidden
