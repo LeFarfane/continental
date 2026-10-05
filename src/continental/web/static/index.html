@@ -394,6 +394,27 @@
   </form>
 </dialog>
 
+<!-- LA VENTANA DE LAS SESIONES (ADR 0024). Lo primero que se ve al abrir o
+     recargar, y otra vez tras una hora sin clics ni teclas. Imagen espejo de la
+     pestaña Sesiones: las tarjetas las pinta `pintarSesiones`, la MISMA función
+     que pinta las de la pestaña, así que sus botones salen aquí sin más trabajo.
+     Modal con showModal(): el foco entra (en «Continuar», que no hace nada
+     que no se pueda deshacer) y vuelve al cerrar, y Esc la cierra. Los textos
+     fijos van aquí; los que llevan datos llegan hechos del servidor. -->
+<dialog id="ventana-sesiones" class="ventana-sesiones" aria-labelledby="ventana-sesiones-titulo">
+  <div class="cuerpo-ventana">
+    <h3 id="ventana-sesiones-titulo">Sesiones de los portales</h3>
+    <p class="sub-ventana">Sin sesión, un portal no da precios. La contraseña se teclea en el
+      portal, dentro del visor, nunca en esta página.</p>
+    <p class="nota" id="ventana-sesiones-accion" hidden></p>
+    <p class="nota" id="ventana-sesiones-falla" hidden></p>
+    <div class="portales sesiones" id="ventana-sesiones-tarjetas"></div>
+    <div class="botones">
+      <button type="button" id="ventana-sesiones-continuar" autofocus>Continuar</button>
+    </div>
+  </div>
+</dialog>
+
 <!-- EL AVISO PASAJERO: lo que salió bien de un clic, abajo al centro, y se va
      solo. SOLO lo que salió bien (decisión del dueño, 2026-10-05): una falla
      no se borra sola —regla 4, falla ruidoso—, se queda escrita en su nota

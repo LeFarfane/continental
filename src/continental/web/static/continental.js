@@ -2204,7 +2204,8 @@ const iniciarLaVistaDelDia = () => {
   document.getElementById('inspector-cerrar').onclick = cerrarElDetalle;
   document.addEventListener('keydown', (evento) => {
     if (evento.key === 'Escape' && DETALLE_ABIERTO
-        && !document.getElementById('confirmar-cierre').open) cerrarElDetalle();
+        && !document.getElementById('confirmar-cierre').open
+        && !document.getElementById('ventana-sesiones').open) cerrarElDetalle();
   });
 };
 
@@ -5130,7 +5131,21 @@ async function cancelarSesion(sesion, boton, idNota, alTerminar) {
   if (alTerminar) alTerminar();
 }
 
-const tarjetaDeSesion = (s) => {
+// UN «SITIO» ES DONDE SE PINTAN LAS SESIONES: sus tarjetas y las dos notas que
+// las acompañan (lo que dijo el último paso, y la falla de leerlas). Hay dos
+// y son espejo, a propósito (ADR 0024): la pestaña Sesiones y la ventana que
+// sale al abrir. Cada una con SUS notas, porque la de la pestaña queda
+// escondida detrás de la ventana y un paso dado desde ahí tiene que decir su
+// resultado donde se ve. Van los ids; `cargarSesiones` los resuelve.
+const SITIOS_DE_SESIONES = [
+  { caja: 'sesiones-tarjetas', accion: 'sesiones-accion', falla: 'sesiones-falla' },
+  { caja: 'ventana-sesiones-tarjetas', accion: 'ventana-sesiones-accion', falla: 'ventana-sesiones-falla' },
+];
+
+// La tarjeta de UN portal. `alTerminar` es a quien se le avisa cuando un paso
+// salió bien (abrir, «Ya entré», cancelar): quien pinta decide qué se vuelve a
+// leer, y esta función no sabe cuál de los dos sitios la llamó.
+const tarjetaDeSesion = (s, sitio, alTerminar) => {
   const tarjeta = document.createElement('article');
   // Tres aspectos y no tres tonos: la que espera a que alguien entre lleva un
   // anillo; la que hay que abrir, ámbar; la que sirve, verde. La palabra de la
@@ -5149,11 +5164,11 @@ const tarjetaDeSesion = (s) => {
   botones.className = 'fila';
   if (s.se_puede_confirmar) {
     botones.append(
-      botonDeAccion('Ya entré', (b) => confirmarSesion(s, b, 'sesiones-accion', cargarSesiones), 'llena'),
-      botonDeAccion('Cancelar', (b) => cancelarSesion(s, b, 'sesiones-accion', cargarSesiones)));
+      botonDeAccion('Ya entré', (b) => confirmarSesion(s, b, sitio.accion, alTerminar), 'llena'),
+      botonDeAccion('Cancelar', (b) => cancelarSesion(s, b, sitio.accion, alTerminar)));
   } else {
     const abrir = botonDeAccion(s.rotulo_de_abrir,
-      (b) => abrirSesion(s, b, 'sesiones-accion', cargarSesiones), s.hay_que_abrirla ? 'tenida' : '');
+      (b) => abrirSesion(s, b, sitio.accion, alTerminar), s.hay_que_abrirla ? 'tenida' : '');
     abrir.disabled = !s.se_puede_abrir;
     botones.append(abrir);
   }
@@ -5167,18 +5182,102 @@ const tarjetaDeSesion = (s) => {
   return tarjeta;
 };
 
-const cargarSesiones = async () => {
-  const caja = document.getElementById('sesiones-tarjetas');
-  const datos = await respuestaDe(fetch('/api/sesiones'));
+// LA ÚNICA FUNCIÓN QUE PINTA LAS TARJETAS (ticket 05). La pestaña y la ventana
+// pasan por aquí: dos copias se separan solas, y el dueño pidió una imagen
+// espejo. Si Doyle no contesta se pinta el hueco con su motivo y el contenedor
+// queda vacío —nunca tarjetas vacías—, también en la ventana.
+const pintarSesiones = (sitio, datos, alTerminar) => {
   if (!datos.ok) {
-    notaDeFalla('sesiones-falla', datos);
-    caja.replaceChildren();
+    notaDeFalla(sitio.falla, datos);
+    sitio.caja.replaceChildren();
     return;
   }
-  if (datos.evidencia_sin_leer) notaDeFalla('sesiones-falla', datos.evidencia_sin_leer);
-  else nota('sesiones-falla', '');
-  caja.replaceChildren(...datos.sesiones.map(tarjetaDeSesion));
-  pintarCuenta('sesiones', datos.sesiones.filter(x => x.hay_que_abrirla).length, 'rojo');
+  if (datos.evidencia_sin_leer) notaDeFalla(sitio.falla, datos.evidencia_sin_leer);
+  else nota(sitio.falla, '');
+  sitio.caja.replaceChildren(...datos.sesiones.map((s) => tarjetaDeSesion(s, sitio, alTerminar)));
+};
+
+// Lee las sesiones una vez y repinta los dos sitios: lo que se hizo en la
+// ventana se ve al abrir la pestaña, y al revés, sin una segunda pregunta a Doyle.
+const cargarSesiones = async () => {
+  const datos = await respuestaDe(fetch('/api/sesiones'));
+  SITIOS_DE_SESIONES.forEach((ids) => pintarSesiones(
+    { ...ids, caja: document.getElementById(ids.caja) }, datos, cargarSesiones));
+  if (datos.ok) {
+    pintarCuenta('sesiones', datos.sesiones.filter(x => x.hay_que_abrirla).length, 'rojo');
+  }
+};
+
+// ------------------------------------------- la ventana de las sesiones
+
+// LA VENTANA FLOTANTE (ADR 0024, decisiones 1 y 2): lo primero que se ve al
+// abrir Continental, y otra vez tras una hora sin un clic ni una tecla. Es un
+// <dialog> modal —foco atrapado, Esc, anunciado como diálogo— pero se cierra
+// con un clic: mirar la lista de ayer no necesita portales.
+const UNA_HORA_SIN_USO_MS = 60 * 60 * 1000;
+
+// La hora se cuenta AQUÍ, en memoria: cada computadora y cada pestaña cuentan
+// por separado (ADR 0024). Un almacenamiento del navegador las mezclaría, y
+// quien trabaja en la torre le quitaría la ventana a quien vuelve a la PC de
+// la farmacia.
+let TEMPORIZADOR_DE_REPOSO = null;
+let FOCO_ANTES_DE_LA_VENTANA = null;
+
+const reiniciarElReposo = () => {
+  clearTimeout(TEMPORIZADOR_DE_REPOSO);
+  TEMPORIZADOR_DE_REPOSO = setTimeout(alVencerElReposo, UNA_HORA_SIN_USO_MS);
+};
+
+const abrirLaVentanaDeSesiones = () => {
+  const ventana = document.getElementById('ventana-sesiones');
+  // Ya abierta, o encima de la confirmación de cerrar la lista: no se apilan
+  // dos ventanas, y quien está confirmando algo no se interrumpe.
+  if (ventana.open || document.getElementById('confirmar-cierre').open) return false;
+  FOCO_ANTES_DE_LA_VENTANA = document.activeElement;
+  ventana.showModal();
+  // Se abre ya y se llena al llegar la respuesta: si Doyle no contesta, el
+  // hueco con su motivo sale en la misma ventana.
+  cargarSesiones();
+  return true;
+};
+
+const cerrarLaVentanaDeSesiones = () => {
+  const ventana = document.getElementById('ventana-sesiones');
+  if (ventana.open) ventana.close();
+};
+
+// Vence la hora sin uso. Si no pudo abrirse —hay otra ventana—, vuelve a
+// contar en vez de esperar al siguiente clic para intentarlo.
+const alVencerElReposo = () => {
+  if (!abrirLaVentanaDeSesiones()) reiniciarElReposo();
+};
+
+const iniciarLaVentanaDeSesiones = () => {
+  const ventana = document.getElementById('ventana-sesiones');
+  document.getElementById('ventana-sesiones-continuar').onclick = cerrarLaVentanaDeSesiones;
+  // Esc la cierra a ELLA: el <dialog> ya lo hace por su cuenta, pero el Esc
+  // del detalle del renglón escucha en `document` y se enteraría también.
+  ventana.addEventListener('keydown', (evento) => {
+    if (evento.key !== 'Escape') return;
+    evento.preventDefault();
+    // Sin esto, la ventana ya cerrada dejaría pasar el Esc hasta `document`,
+    // que lo vería como «no hay ventana» y cerraría también el detalle.
+    evento.stopPropagation();
+    cerrarLaVentanaDeSesiones();
+  });
+  // Se cierre como se cierre (botón, Esc), el foco vuelve a donde estaba.
+  ventana.addEventListener('close', () => {
+    const antes = FOCO_ANTES_DE_LA_VENTANA;
+    FOCO_ANTES_DE_LA_VENTANA = null;
+    if (antes && antes.isConnected && typeof antes.focus === 'function') antes.focus();
+  });
+  // Cuentan los clics y las teclas, en captura para que ningún
+  // `stopPropagation` de la pantalla los esconda.
+  ['click', 'keydown'].forEach((evento) => {
+    document.addEventListener(evento, reiniciarElReposo, true);
+  });
+  reiniciarElReposo();
+  abrirLaVentanaDeSesiones();
 };
 
 // ------------------------------------------------------------- el esqueleto
@@ -5236,6 +5335,7 @@ iniciarPestanas();
 iniciarLaVistaDelDia();
 iniciarBuscar();
 iniciarVigilancia();
+iniciarLaVentanaDeSesiones();
 cargarPedido();
 revisarDoyle();
 cargar();

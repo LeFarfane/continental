@@ -246,7 +246,9 @@ def test_las_tarjetas_pintan_lo_que_decide_el_servidor():
 
 @pytest.mark.parametrize("paso", ["abrirSesion", "confirmarSesion", "cancelarSesion"])
 def test_cada_paso_vuelve_a_pintar_las_tarjetas(paso):
-    assert f"{paso}(s, b, 'sesiones-accion', cargarSesiones)" in _script()
+    # Desde el ticket 05 la tarjeta es de la función compartida: escribe en la
+    # nota de su sitio y avisa a quien se le pasó (la pestaña y la ventana).
+    assert f"{paso}(s, b, sitio.accion, alTerminar)" in _script()
 
 
 def test_la_pantalla_dice_donde_se_teclea_la_contrasena():

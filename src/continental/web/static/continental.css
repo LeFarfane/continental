@@ -1114,13 +1114,13 @@ li.transito.atrasado { opacity: 1; box-shadow: inset 4px 0 0 var(--aviso-vivo); 
 /* --------------------------------------------- la confirmación antes de cerrar
 
    El panel del diseño: vidrio grueso, esquinas grandes, el fondo velado. */
-.confirmar-cierre {
+.confirmar-cierre, .ventana-sesiones {
   width: min(30rem, calc(100vw - 2rem)); padding: 20px 20px 24px; color: var(--tinta);
   border: 0; border-radius: var(--radio-xl);
   background: var(--material-grueso); box-shadow: var(--sombra-flotante), var(--material-brillo);
   backdrop-filter: saturate(200%) blur(30px); -webkit-backdrop-filter: saturate(200%) blur(30px);
 }
-.confirmar-cierre::backdrop { background: var(--velo); }
+.confirmar-cierre::backdrop, .ventana-sesiones::backdrop { background: var(--velo); }
 .confirmar-cierre form { display: flex; flex-direction: column; gap: 14px; }
 .confirmar-cierre h3 { font: 600 var(--texto-titulo-dos) var(--letra); letter-spacing: -0.022em; }
 .confirmar-cierre p { font: var(--texto-subtitulo) var(--letra); color: var(--tenue); }
@@ -1145,6 +1145,23 @@ li.transito.atrasado { opacity: 1; box-shadow: inset 4px 0 0 var(--aviso-vivo); 
   font: 600 var(--texto-cuerpo) var(--letra); background: var(--relleno-suave); color: var(--tinta);
 }
 .confirmar-cierre .botones button[value="cerrar"] { background: var(--acento); color: var(--acento-contraste); }
+
+/* LA VENTANA DE LAS SESIONES al abrir (ADR 0024): el mismo vidrio, más ancha
+   porque lleva las cuatro tarjetas en dos columnas. En el teléfono mide el
+   ancho de la pantalla menos el margen, y si las tarjetas no caben a lo alto se
+   desplaza POR DENTRO: la página de atrás no se mueve. */
+.ventana-sesiones {
+  width: min(46rem, calc(100vw - 2rem)); max-height: calc(100vh - 2rem);
+  max-height: calc(100dvh - 2rem); overflow-y: auto; overscroll-behavior: contain;
+}
+.ventana-sesiones .cuerpo-ventana { display: flex; flex-direction: column; gap: 14px; }
+.ventana-sesiones h3 { font: 600 var(--texto-titulo-dos) var(--letra); letter-spacing: -0.022em; }
+.ventana-sesiones .sub-ventana { font: var(--texto-subtitulo) var(--letra); color: var(--tenue); }
+.ventana-sesiones .botones { display: flex; justify-content: flex-end; }
+.ventana-sesiones .botones button {
+  min-height: 2.25rem; padding: 0 20px; border: 0; border-radius: var(--pildora); cursor: pointer;
+  font: 600 var(--texto-cuerpo) var(--letra); background: var(--acento); color: var(--acento-contraste);
+}
 
 /* ------------------------------------------------------- el aviso pasajero
 
