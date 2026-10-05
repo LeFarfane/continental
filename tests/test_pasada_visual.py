@@ -129,15 +129,43 @@ _COLOR = re.compile(
 )
 
 
+#: El tema oscuro elegido a mano en la barra lateral (2026-10-05). Vive fuera de
+#: la media query porque CSS no deja decir "si el sistema es oscuro O si
+#: alguien eligió oscuro" en un solo bloque; es una COPIA de la lista oscura.
+_OSCURO_A_MANO = ':root[data-tema="oscuro"]'
+
+
 def test_los_colores_se_escriben_solo_en_las_dos_listas_de_root():
     css = _css()
     claro = _bloque(css, ":root")
     oscuro = _bloque(_bloque(css, "@media (prefers-color-scheme: dark)"), ":root")
-    resto = css.replace(claro, "").replace(oscuro, "")
+    a_mano = _bloque(css, _OSCURO_A_MANO)
+    resto = css.replace(claro, "").replace(oscuro, "").replace(a_mano, "")
 
     assert _COLOR.search(claro), "la lista clara no tiene colores: ¿se movió?"
     fuera = _COLOR.findall(resto)
     assert not fuera, f"colores escritos a mano fuera de :root: {fuera}"
+
+
+def test_el_oscuro_elegido_a_mano_es_la_misma_lista_que_el_del_sistema():
+    """Dos copias de la lista oscura son dos lugares donde un color puede
+    cambiar en uno y no en el otro: "Oscuro" y "Auto" con el sistema en oscuro
+    se verían distintos sin que nadie lo decidiera. Se exige que sean la misma
+    lista, valor por valor."""
+    css = _css()
+    oscuro = _bloque(_bloque(css, "@media (prefers-color-scheme: dark)"), ":root")
+    a_mano = _bloque(css, _OSCURO_A_MANO)
+
+    assert _variables(a_mano) == _variables(oscuro)
+    assert "color-scheme: dark" in a_mano
+
+
+def test_auto_no_le_gana_al_claro_elegido_a_mano():
+    """Con el sistema en oscuro y Claro elegido, la lista oscura no se aplica:
+    la media query se detiene ante `data-tema="claro"`."""
+    media = _bloque(_css(), "@media (prefers-color-scheme: dark)")
+
+    assert ':root:not([data-tema="claro"])' in media
 
 
 def test_el_javascript_no_pinta_colores():

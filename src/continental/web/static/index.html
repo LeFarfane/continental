@@ -16,8 +16,11 @@
 
   <aside class="lateral">
     <div class="marca-app">
-      <span class="nombre-app">Continental</span>
-      <span class="lema-app">Farmacia · mostrador</span>
+      <span class="logo-app" aria-hidden="true">C</span>
+      <span class="nombre-y-lema">
+        <span class="nombre-app">Continental</span>
+        <span class="lema-app">Farmacia · mostrador</span>
+      </span>
     </div>
     <!-- LAS SECCIONES. Siguen siendo pestañas de verdad —`role="tab"`, las
          flechas pasan de una a otra, la que se ve va en la URL (#buscar)—,
@@ -26,16 +29,42 @@
          de pantalla ya sabe en qué pestaña está. "Pedido" sigue siendo el
          nombre del dueño (2026-09-28): es el grupo de la lista del día y de lo
          que viene en camino. -->
+    <!-- Los íconos van DESPUÉS del rótulo en el HTML y la hoja los pone delante
+         (`order`): el rótulo es lo primero que se lee de cada pestaña, para el
+         lector de pantalla y para `test_las_pestanas_se_llaman_como_el_glosario`.
+         Son dibujos en línea —ningún archivo pedido afuera— y no se le leen a
+         nadie: la palabra de al lado ya lo dice. -->
     <nav class="pestanas" role="tablist" aria-label="Qué se muestra" aria-orientation="vertical">
-      <button type="button" role="tab" id="pestana-pedido" aria-controls="panel-pedido" aria-selected="true" data-grupo="Pedido">Lista del día<span class="cuenta-pestana" id="cuenta-pedido" hidden></span></button>
-      <button type="button" role="tab" id="pestana-camino" aria-controls="panel-camino" aria-selected="false" tabindex="-1">En camino<span class="cuenta-pestana" id="cuenta-camino" hidden></span></button>
-      <button type="button" role="tab" id="pestana-buscar" aria-controls="panel-buscar" aria-selected="false" tabindex="-1" data-grupo="Proveedores">Buscar</button>
-      <button type="button" role="tab" id="pestana-vigilancia" aria-controls="panel-vigilancia" aria-selected="false" tabindex="-1">Vigilancia<span class="cuenta-pestana" id="cuenta-vigilancia" hidden></span></button>
-      <button type="button" role="tab" id="pestana-sesiones" aria-controls="panel-sesiones" aria-selected="false" tabindex="-1">Sesiones<span class="cuenta-pestana" id="cuenta-sesiones" hidden></span></button>
+      <button type="button" role="tab" id="pestana-pedido" aria-controls="panel-pedido" aria-selected="true" data-grupo="Pedido">Lista del día<svg class="icono" viewBox="0 0 24 24" aria-hidden="true"><rect width="8" height="4" x="8" y="2" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2M12 11h4M12 16h4M8 11h.01M8 16h.01"/></svg><span class="cuenta-pestana" id="cuenta-pedido" hidden></span></button>
+      <button type="button" role="tab" id="pestana-camino" aria-controls="panel-camino" aria-selected="false" tabindex="-1">En camino<svg class="icono" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2M15 18H9M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/></svg><span class="cuenta-pestana" id="cuenta-camino" hidden></span></button>
+      <button type="button" role="tab" id="pestana-buscar" aria-controls="panel-buscar" aria-selected="false" tabindex="-1" data-grupo="Proveedores">Buscar<svg class="icono" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg></button>
+      <button type="button" role="tab" id="pestana-vigilancia" aria-controls="panel-vigilancia" aria-selected="false" tabindex="-1">Vigilancia<svg class="icono" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/></svg><span class="cuenta-pestana" id="cuenta-vigilancia" hidden></span></button>
+      <button type="button" role="tab" id="pestana-sesiones" aria-controls="panel-sesiones" aria-selected="false" tabindex="-1">Sesiones<svg class="icono" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5"/></svg><span class="cuenta-pestana" id="cuenta-sesiones" hidden></span></button>
       <!-- EL ESTADO, abajo y como tarjeta: se ve sin abrirlo si algo no
            contesta, y al apretarlo se ve el detalle. -->
       <button type="button" role="tab" id="pestana-estado" class="estado-lateral" aria-controls="panel-estado" aria-selected="false" tabindex="-1"><span class="oculto">Estado: </span><span class="estado-lateral-titulo"><span class="punto" id="estado-lateral-punto"></span><span id="estado-lateral-texto">Consultando…</span></span><span class="estado-lateral-detalle" id="estado-lateral-detalle"></span></button>
     </nav>
+    <!-- CON QUÉ CORREO SE FIRMA lo que se hace aquí: el de Cloudflare Access,
+         tal como lo lee `/api/salud`. Es una firma, no un permiso (regla 3):
+         se enseña para que nadie firme con el correo de otro sin darse
+         cuenta. Nace vacío y escondido hasta que el servidor conteste. -->
+    <p class="firma-lateral" id="firma-lateral" hidden>
+      <span class="firma-rotulo">Firmas como</span>
+      <span class="firma-correo" id="firma-correo"></span>
+    </p>
+    <!-- LA APARIENCIA, como en Marlowe: automática (la del sistema), clara u
+         oscura. Son radios de verdad, como el interruptor de las vistas: se
+         recorren con las flechas y el lector de pantalla dice "1 de 3". La
+         elección es del navegador y no de la cuenta (`localStorage`), igual
+         que la vista de la lista. -->
+    <div class="apariencia" id="apariencia" role="radiogroup" aria-labelledby="apariencia-rotulo">
+      <span class="apariencia-rotulo" id="apariencia-rotulo">Apariencia</span>
+      <div class="vistas apariencia-opciones">
+        <label><input type="radio" name="tema" value="auto"><span>Auto</span></label>
+        <label><input type="radio" name="tema" value="claro"><span>Claro</span></label>
+        <label><input type="radio" name="tema" value="oscuro"><span>Oscuro</span></label>
+      </div>
+    </div>
   </aside>
 
   <main class="contenido">
@@ -46,27 +75,34 @@
     <p class="nota aviso avisos-vigilancia" id="avisos-vigilancia" hidden></p>
 
     <section id="panel-pedido" class="panel panel-pedido" role="tabpanel" aria-labelledby="pestana-pedido">
-      <h2>Pedido sugerido</h2>
-
-      <!-- LA BARRA DEL DÍA: la fecha con sus flechas, el estado de la lista,
-           los tres pasos y lo que se hace con la lista entera. -->
-      <header class="barra-dia">
-        <div class="dia">
-          <!-- EL CONTENEDOR DE NAVEGACIÓN (decisión del dueño, 2026-09-27): la
-               fecha al centro, una flecha a cada lado, y cada lista es un día.
-               Nace escondido: sin una fecha que mostrar -un almacén sin una
-               sola venta todavía- no hay nada que navegar. Las flechas nacen
-               sin `hidden` propio y `pintarNavegacion` decide en cada carga si
-               cada una se enseña. -->
-          <div class="navegacion" id="pedido-navegacion" hidden>
-            <button type="button" class="accion" id="pedido-navegacion-anterior" aria-label="Día anterior">‹</button>
-            <span id="pedido-navegacion-fecha"></span>
-            <button type="button" class="accion" id="pedido-navegacion-siguiente" aria-label="Día siguiente">›</button>
-          </div>
-          <!-- De qué días son las ventas de la lista. Debajo de la fecha y en
-               chico: la fecha dice qué lista es, esto dice qué ventas trae. -->
+      <!-- LA CABECERA DEL DÍA (diseño Cupertino, segunda versión): el título y,
+           debajo, de qué días son las ventas; a la derecha, el día en una
+           píldora con sus flechas. -->
+      <header class="cabeza-pedido">
+        <div class="cabeza-panel">
+          <h2 class="titulo-panel">Pedido sugerido</h2>
+          <!-- De qué días son las ventas de la lista. La fecha de la píldora
+               dice qué lista es; esto dice qué ventas trae. -->
           <p class="corte" id="corte">Armando la lista…</p>
         </div>
+        <!-- EL CONTENEDOR DE NAVEGACIÓN (decisión del dueño, 2026-09-27): la
+             fecha al centro, una flecha a cada lado, y cada lista es un día.
+             Nace escondido: sin una fecha que mostrar -un almacén sin una
+             sola venta todavía- no hay nada que navegar. Las flechas nacen
+             sin `hidden` propio y `pintarNavegacion` decide en cada carga si
+             cada una se enseña. -->
+        <div class="navegacion" id="pedido-navegacion" hidden>
+          <button type="button" class="accion" id="pedido-navegacion-anterior" aria-label="Día anterior">‹</button>
+          <span id="pedido-navegacion-fecha"></span>
+          <button type="button" class="accion" id="pedido-navegacion-siguiente" aria-label="Día siguiente">›</button>
+        </div>
+      </header>
+
+      <!-- LA TARJETA DEL ESTADO: en qué estado está la lista, los tres pasos,
+           cuándo se armó o quién la cerró, y lo que se hace con la lista
+           entera. Es lo que deja auditar la lista, no lo que decide qué se
+           compra. -->
+      <div class="barra-dia">
         <span class="insignia" id="pedido-estado" hidden></span>
         <!-- LOS TRES PASOS de una lista abierta: revisar renglón por renglón,
              repartir en pedidos y capturar cada pedido en su portal. Son
@@ -77,6 +113,10 @@
           <li><button type="button" data-paso="repartir"><span class="paso-numero">2</span><span class="paso-nombre">Repartir</span></button></li>
           <li><button type="button" data-paso="capturar"><span class="paso-numero">3</span><span class="paso-nombre">Capturar y enviar</span></button></li>
         </ol>
+        <div class="barra-estado">
+          <p class="armado" id="armado" hidden></p>
+          <span class="detalle" id="cierre-detalle"></span>
+        </div>
         <div class="cierre" id="cierre" hidden>
           <button type="button" id="cerrar">Cerrar la lista</button>
           <!-- DESHACER EL CIERRE (ADR 0016). Nace escondido y solo se enseña
@@ -84,15 +124,7 @@
                409 es un botón muerto. Su rótulo llega de Python. -->
           <button type="button" id="reabrir" hidden>Reabrir</button>
         </div>
-        <button type="button" class="accion" id="ir-a-hoy" hidden>Ir a hoy</button>
-      </header>
-
-      <!-- CÓMO ESTÁ LA LISTA: cuándo se armó, quién la cerró, y qué implica
-           cerrarla o si se puede reabrir. Todo en una franja: es lo que deja
-           auditar la lista, no lo que decide qué se compra. -->
-      <div class="barra-estado">
-        <p class="armado" id="armado" hidden></p>
-        <span class="detalle" id="cierre-detalle"></span>
+        <button type="button" class="accion llena" id="ir-a-hoy" hidden>Ir a hoy</button>
       </div>
 
       <!-- LO QUE HAY QUE SABER ANTES DE TRABAJAR LA LISTA, juntado en una
@@ -197,7 +229,7 @@
           <dl class="cifras">
             <div><dt>Hay</dt><dd id="inspector-hay"></dd></div>
             <div><dt>Se vendieron</dt><dd id="inspector-vendidas"></dd></div>
-            <div><dt>Pedir</dt><dd id="inspector-pedir"></dd></div>
+            <div class="cifra-pedir"><dt>Pedir</dt><dd id="inspector-pedir"></dd></div>
           </dl>
           <div class="inspector-bloque" id="inspector-marcas-bloque">
             <h4>Qué pasa con este producto</h4>
@@ -206,6 +238,10 @@
           <div class="inspector-bloque">
             <div class="inspector-titulo"><h4>Precio de proveedor</h4><span id="inspector-leido"></span></div>
             <div id="inspector-precios"></div>
+            <!-- Desde la segunda versión del diseño, a quién se le pide se elige
+                 AQUÍ, tocando un proveedor, y no en un desplegable de la fila:
+                 es donde se ven los cuatro precios con sus motivos. -->
+            <p class="inspector-ayuda" id="inspector-ayuda" hidden>Elige a quién se le pide. El cambio queda firmado con tu correo.</p>
           </div>
           <div class="inspector-bloque">
             <h4>Firmas</h4>
@@ -357,6 +393,13 @@
     </div>
   </form>
 </dialog>
+
+<!-- EL AVISO PASAJERO: lo que salió bien de un clic, abajo al centro, y se va
+     solo. SOLO lo que salió bien (decisión del dueño, 2026-10-05): una falla
+     no se borra sola —regla 4, falla ruidoso—, se queda escrita en su nota
+     hasta el siguiente clic. `role="status"` para que el lector de pantalla
+     lo diga sin mover el foco. -->
+<div class="aviso-pasajero" id="aviso-pasajero" role="status" aria-live="polite" hidden></div>
 
 <script src="/static/continental.js"></script>
 </body>

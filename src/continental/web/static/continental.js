@@ -19,6 +19,86 @@ const pintar = (id, filas) => {
   ul.replaceChildren(...filas);
 };
 
+// ------------------------------------------------------------- la apariencia
+
+// AUTO, CLARO U OSCURO (2026-10-05), el mismo interruptor de Marlowe. "Auto"
+// es quitar el atributo y dejar que mande el sistema; los otros dos lo ponen
+// en `<html>`, donde la hoja tiene sus listas de colores. Se aplica AQUÍ, en
+// cuanto el archivo carga y antes de pedir nada, para que la pantalla no se
+// pinte un instante en el tema del sistema y luego brinque al elegido.
+//
+// Se recuerda en el navegador y no en el servidor, por lo mismo que la vista de
+// la lista (`CLAVE_DE_VISTA`): es una comodidad de quien mira, no un dato. Y
+// cada acceso a `localStorage` va con su `try`, porque truena en una ventana
+// privada: una apariencia que no se recuerda es una molestia, una pantalla en
+// blanco es el día detenido.
+const CLAVE_DEL_TEMA = 'continental.tema';
+const TEMAS = ['auto', 'claro', 'oscuro'];
+
+const temaRecordado = () => {
+  try {
+    const tema = localStorage.getItem(CLAVE_DEL_TEMA);
+    return TEMAS.includes(tema) ? tema : 'auto';
+  } catch (e) {
+    return 'auto';
+  }
+};
+
+const aplicarTema = (tema) => {
+  if (tema === 'auto') delete document.documentElement.dataset.tema;
+  else document.documentElement.dataset.tema = tema;
+};
+
+aplicarTema(temaRecordado());
+
+// Los tres radios de la barra lateral, como el interruptor de las vistas: la
+// marca de cuál está activa va con una clase y no con `:has(input:checked)`.
+const iniciarApariencia = () => {
+  const actual = temaRecordado();
+  document.querySelectorAll('#apariencia input[name="tema"]').forEach(boton => {
+    const etiqueta = boton.closest('label');
+    boton.checked = boton.value === actual;
+    etiqueta.classList.toggle('activa', boton.checked);
+    boton.addEventListener('change', () => {
+      aplicarTema(boton.value);
+      try {
+        localStorage.setItem(CLAVE_DEL_TEMA, boton.value);
+      } catch (e) {
+        // Se sigue sin recordar; dentro de esta visita el tema ya cambió.
+      }
+      document.querySelectorAll('#apariencia label').forEach(l => {
+        l.classList.toggle('activa', l.contains(boton));
+      });
+    });
+    boton.addEventListener('focus', () => etiqueta.classList.add('enfocada'));
+    boton.addEventListener('blur', () => etiqueta.classList.remove('enfocada'));
+  });
+};
+
+// ---------------------------------------------------------- el aviso pasajero
+
+// LO QUE SALIÓ BIEN DE UN CLIC (decisión del dueño, 2026-10-05): en una cápsula
+// abajo al centro que se va sola. **Solo lo que salió bien**: una falla se
+// queda escrita en su nota (`notaDeFalla`) hasta el siguiente clic, porque un
+// "no se pudo" que se borra solo a los tres segundos es una falla silenciosa
+// con un paso de más (regla 4 de CLAUDE.md).
+//
+// Se queda más tiempo cuanto más larga es la frase —la del envío dice que
+// Continental no le mandó nada al proveedor, y eso hay que alcanzar a leerlo—,
+// y nunca menos de cuatro segundos. Limpia la nota del último clic: lo que
+// estaba escrito ahí era de un clic anterior.
+let RELOJ_DEL_AVISO = null;
+
+const exito = (texto) => {
+  nota('pedido-accion', '');
+  const caja = document.getElementById('aviso-pasajero');
+  if (!texto) { caja.hidden = true; return; }
+  caja.textContent = texto;
+  caja.hidden = false;
+  clearTimeout(RELOJ_DEL_AVISO);
+  RELOJ_DEL_AVISO = setTimeout(() => { caja.hidden = true; }, Math.max(4000, texto.length * 60));
+};
+
 // ------------------------------------------------------- el pedido sugerido
 
 // La fecha se arma a mano y NO con `new Date('2026-09-16')`.
@@ -263,76 +343,88 @@ const horaEnPalabras = (iso) => new Date(iso).toLocaleTimeString('es-MX', {
   hour: 'numeric', minute: '2-digit'
 });
 
-// La celda de la cantidad, que desde el ticket 11 es dos cosas según el estado
-// de la LISTA:
+/// LA CANTIDAD A PEDIR, en dos lugares desde la segunda versión del diseño
+// (2026-10-05):
 //
-// - lista `abierta` → un campo que se puede corregir. Se edita en su lugar y no
-//   detrás de un botón "editar": la corrección es parte de revisar la lista, no
-//   una excepción, y un clic extra por renglón en una lista tan larga como
-//   productos distintos se vendieron es justo lo que hace que no se use.
-// - lista `cerrada` o `vencida` → la cifra, a secas. El servidor lo vuelve a
-//   comprobar en el `WHERE` de su UPDATE —ahí está la garantía—, pero dejar
-//   teclear algo que va a rebotar enseña a ignorar los avisos.
+// - **En la fila, solo se lee**: la cifra grande y, si alguien la decidió, una
+//   palabra debajo. Antes era un campo en cada fila; el diseño la deja quieta
+//   para que la tabla se lea como tabla, y la corrección vive en el detalle.
+// - **En el detalle, se corrige** (`controlDeCantidad`), con la lista abierta.
+//
+// Con la lista `cerrada` o `vencida` es la cifra a secas en los dos lugares. El
+// servidor lo vuelve a comprobar en el `WHERE` de su UPDATE —ahí está la
+// garantía—, pero dejar teclear algo que va a rebotar enseña a ignorar los
+// avisos.
+const celdaDeCantidad = (r) => {
+  const td = document.createElement('td');
+  td.className = 'cantidad';
+  const numero = document.createElement('b');
+  numero.textContent = r.cantidad_a_pedir;
+  td.append(numero);
+
+  // QUE ALGUIEN LA DECIDIÓ, en la fila: "ajustada" si quedó distinta de la que
+  // propuso el sistema, "confirmada" si alguien dejó la misma —confirmar
+  // también es decidir (ticket 11)—. Las dos cifras, quién y cuándo se dicen
+  // enteras en el detalle del renglón (`firmasDelRenglon`).
+  if (r.fue_ajustada) {
+    const quien = document.createElement('span');
+    quien.className = 'ajustada';
+    quien.textContent = r.difiere_de_la_propuesta ? 'ajustada' : 'confirmada';
+    quien.title = (r.difiere_de_la_propuesta ? 'El sistema propuso ' + r.cantidad_propuesta + '. ' : '')
+      + 'Decidida por ' + (r.ajustada_por || 'sin-identificar');
+    td.append(quien);
+  }
+  return td;
+};
+
+// LA CANTIDAD, EN EL DETALLE: un campo con − y + a los lados. El campo es lo
+// que se manda —los botones solo le suman o le restan una pieza y lo mandan—,
+// así que hay UN camino de escritura y no tres.
 //
 // `type="number"` con `min="1"`: el navegador ya sabe teclado numérico en el
 // teléfono y flechas en la computadora. El `min` NO es la defensa contra el
 // cero —se salta pegando texto, y el `step` no impide escribir a mano—: la
 // defensa está en el CHECK de la tabla, en el validador compartido y en la
-// ruta. Aquí es comodidad, y el aviso de abajo es el que explica.
-const celdaDeCantidad = (r, editable, alAjustar) => {
-  const td = document.createElement('td');
-  // La clase extra es para el teléfono: ahí el `<thead>` se esconde y cada
-  // cifra lleva su etiqueta pegada. El `<b>` la cuelga con un `::after`, pero
-  // un `input` es un elemento reemplazado y no tiene dónde colgar nada, así que
-  // la etiqueta va en la celda. Se marca con una clase y no con `:has(input)`:
-  // `:has` es de 2022 y el navegador del mostrador puede no tenerlo, y entonces
-  // el campo se quedaría sin nombre a la vista.
-  td.className = 'cantidad' + (editable ? ' editable' : '');
+// ruta. Aquí es comodidad, y el aviso de `ajustar` es el que explica.
+const controlDeCantidad = (r, alAjustar) => {
+  const caja = document.createElement('div');
+  caja.className = 'control-cantidad';
+  const campo = document.createElement('input');
+  campo.type = 'number';
+  campo.className = 'cantidad-campo';
+  campo.min = '1';
+  campo.step = '1';
+  campo.inputMode = 'numeric';
+  // Lo que se pide HOY: la corrección si la hubo, y si no la propuesta. Quién
+  // decide eso es el servidor (`cantidad_a_pedir`), no este archivo.
+  campo.value = r.cantidad_a_pedir;
+  campo.setAttribute('aria-label', 'Cantidad a pedir de ' + r.descripcion);
+  // `change` y no `input`: se manda al salir del campo o al dar Enter, no en
+  // cada tecla. Con `input`, teclear "12" mandaría primero un 1 y después un
+  // 12 — dos filas de bitácora y dos escrituras por una sola decisión.
+  campo.onchange = () => alAjustar(r, campo);
+  // Enter guarda. El navegador dispara `change` al salir del campo, y Enter
+  // fuera de un formulario no siempre cuenta como salir: se vio el
+  // 2026-09-19 en el recorrido, con el 12 tecleado quedándose en la pantalla
+  // sin llegar al servidor -- lo peor que puede pasar aquí, porque la cifra
+  // se ve guardada y no lo está. `blur()` lo vuelve explícito y de paso
+  // funciona igual en los dos navegadores.
+  campo.onkeydown = (evento) => { if (evento.key === 'Enter') campo.blur(); };
 
-  if (editable) {
-    const campo = document.createElement('input');
-    campo.type = 'number';
-    campo.className = 'cantidad-campo';
-    campo.min = '1';
-    campo.step = '1';
-    campo.inputMode = 'numeric';
-    // Lo que se pide HOY: la corrección si la hubo, y si no la propuesta. Quién
-    // decide eso es el servidor (`cantidad_a_pedir`), no este archivo.
-    campo.value = r.cantidad_a_pedir;
-    // Con veinte campos iguales, "3" a secas no dice de qué producto es.
-    campo.setAttribute('aria-label', 'Cantidad a pedir de ' + r.descripcion);
-    // `change` y no `input`: se manda al salir del campo o al dar Enter, no en
-    // cada tecla. Con `input`, teclear "12" mandaría primero un 1 y después un
-    // 12 — dos filas de bitácora y dos escrituras por una sola decisión.
-    campo.onchange = () => alAjustar(r, campo);
-    // Enter guarda. El navegador dispara `change` al salir del campo, y Enter
-    // fuera de un formulario no siempre cuenta como salir: se vio el
-    // 2026-09-19 en el recorrido, con el 12 tecleado quedándose en la pantalla
-    // sin llegar al servidor -- lo peor que puede pasar aquí, porque la cifra
-    // se ve guardada y no lo está. `blur()` lo vuelve explícito y de paso
-    // funciona igual en los dos navegadores.
-    campo.onkeydown = (evento) => { if (evento.key === 'Enter') campo.blur(); };
-    td.append(campo);
-  } else {
-    const numero = document.createElement('b');
-    numero.textContent = r.cantidad_a_pedir;
-    td.append(numero);
-  }
-
-  // QUE ALGUIEN LA DECIDIÓ, en la fila: un punto de acento junto a la cifra
-  // (diseño del 2026-09-30). Las dos cifras —la propuesta y la final—, quién
-  // la cambió y cuándo se dicen enteras en el detalle del renglón
-  // (`firmasDelRenglon`): la fila no tiene sitio para tres renglones más en
-  // cada celda, y el punto es lo que avisa que hay algo que leer ahí.
-  if (r.fue_ajustada) {
-    const punto = document.createElement('span');
-    punto.className = 'ajuste-punto';
-    punto.title = (r.difiere_de_la_propuesta ? 'El sistema propuso ' + r.cantidad_propuesta + '. ' : '')
-      + 'Ajustada por ' + (r.ajustada_por || 'sin-identificar');
-    td.prepend(punto);
-  }
-
-  return td;
+  // − y +: mientras la petición viaja el campo está apagado (`moverRenglon`),
+  // y entonces los botones no hacen nada: dos clics seguidos no mandan dos
+  // cifras que se crucen en el aire.
+  const paso = (cuanto, rotulo, signo) => {
+    const boton = botonDeAccion(signo, () => {
+      if (campo.disabled) return;
+      campo.value = Number(campo.value) + cuanto;
+      alAjustar(r, campo);
+    });
+    boton.setAttribute('aria-label', rotulo + ' de ' + r.descripcion);
+    return boton;
+  };
+  caja.append(paso(-1, 'Una pieza menos', '−'), campo, paso(1, 'Una pieza más', '+'));
+  return caja;
 };
 
 // --------------------------------------------- el precio de los proveedores
@@ -464,6 +556,17 @@ const columnasDeProveedor = (casillas) => PROVEEDORES.length
   ? PROVEEDORES
   : casillas.map(c => ({ proveedor: c.proveedor, nombre: c.nombre }));
 
+// El punto de color de cada proveedor, por su LUGAR en la lista del servidor
+// (`--prov-1` a `--prov-4` en la hoja). Va siempre junto a su nombre: es para
+// el ojo que ya aprendió los cuatro, no un dato.
+const puntoDeProveedor = (clave) => {
+  const punto = document.createElement('span');
+  const i = PROVEEDORES.findIndex(p => p.proveedor === clave);
+  punto.className = 'punto' + (i >= 0 ? ' prov-' + ((i % 4) + 1) : '');
+  punto.setAttribute('aria-hidden', 'true');
+  return punto;
+};
+
 // Lo que dice la existencia que reportó el portal, en corto. Se pinta tal como
 // llegó —"+100" dice más que "100"—, y "pzs" solo se agrega a una cifra.
 const existenciaEnCorto = (c) => {
@@ -526,6 +629,9 @@ const celdasDeRejilla = (r) => {
   }
 
   const porProveedor = new Map(casillas.map(c => [c.proveedor, c]));
+  // A quién se le pide hoy: la elección que ya llegó resuelta del servidor
+  // (`r.eleccion`). Su caja lleva el borde de acento.
+  const elegido = r.eleccion && r.eleccion.hay ? r.eleccion.proveedor : null;
   return columnas.map(p => {
     const td = document.createElement('td');
     td.className = 'precio-celda';
@@ -539,7 +645,8 @@ const celdasDeRejilla = (r) => {
       + (c && c.es_ganador ? ' gana' : '')
       + (c && c.es_ganador && !comparacion.ganador.con_existencia ? ' sinconfirmar' : '')
       + (c && c.es_ganador && comparacion.ganador.es_unico ? ' unico' : '')
-      + (c && c.estado === 'sin existencia' ? ' notiene' : '');
+      + (c && c.estado === 'sin existencia' ? ' notiene' : '')
+      + (p.proveedor === elegido && !r.esta_en_transito ? ' elegido' : '');
 
     // La cifra es un `<b>`; el hueco es un `<span>` en cursiva. Son dos
     // elementos distintos a propósito: la diferencia tiene que verse aunque
@@ -549,7 +656,16 @@ const celdasDeRejilla = (r) => {
     hay.className = 'hay';
     if (c && c.precio) {
       cifraOhueco.textContent = '$' + c.precio;
-      hay.textContent = existenciaEnCorto(c);
+      // DEBAJO DE LA CIFRA, lo que el diseño pone ahí: el más barato con su
+      // "✓", cuánto más caro es cada uno de los otros, o que no lo tiene. La
+      // diferencia viene restada de Python (`diferencia_magnitud`). Lo que no
+      // cabe —la certeza del ganador, la existencia de los demás— va en el
+      // `title` y entero en el detalle.
+      hay.textContent = c.es_ganador
+        ? '✓ ' + existenciaEnCorto(c)
+        : c.diferencia && !c.mas_barato_que_el_ganador && c.estado !== 'sin existencia'
+          ? '+$' + c.diferencia_magnitud
+          : existenciaEnCorto(c);
       if (c.estado === 'sin existencia') hay.className = 'hay notiene';
       if (c.estado === 'no dijo existencia') hay.className = 'hay nodijo';
     } else {
@@ -562,6 +678,7 @@ const celdasDeRejilla = (r) => {
     // diferencia contra el ganador— y entero en el detalle del renglón, que es
     // donde se lee en una pantalla táctil.
     const dicho = [p.nombre];
+    if (c && c.precio) dicho.push(existenciaEnCorto(c));
     if (c && c.es_ganador) dicho.push(comparacion.ganador.certeza);
     if (c && c.diferencia) {
       dicho.push(c.mas_barato_que_el_ganador
@@ -747,21 +864,44 @@ const preciosDelDetalle = (r, acciones) => {
 
   if (porque && !casillas.length) cuerpo.append(motivoSinLectura(porque, true));
 
-  if (casillas.length) {
+  // A QUIÉN SE LE PIDE SE ELIGE AQUÍ desde la segunda versión del diseño
+  // (2026-10-05): cada proveedor es un botón, y tocarlo es pedirle a ése. Con
+  // la lista abierta y el renglón editable; si no, las mismas cajas se leen.
+  // Se pueden elegir los cuatro, también el que no dio precio: hay razones
+  // que el sistema no ve —mínimo de pedido, días de entrega, crédito— y el
+  // renglón entra al pedido con la marca de precio desconocido (ticket 20).
+  const eligiendo = !!(acciones.elegirProveedor && r.se_puede_editar);
+  const elegido = r.eleccion && r.eleccion.hay ? r.eleccion.proveedor : null;
+
+  if (casillas.length || eligiendo) {
     const lista = document.createElement('div');
     lista.className = 'precios-detalle';
     const porProveedor = new Map(casillas.map(c => [c.proveedor, c]));
     columnasDeProveedor(casillas).forEach(p => {
       const c = porProveedor.get(p.proveedor) || { nombre: p.nombre, estado: 'sin consultar' };
-      const linea = document.createElement('div');
+      const linea = document.createElement(eligiendo ? 'button' : 'div');
       linea.className = 'precio precio-detalle'
         + (c.es_ganador ? ' gana' : '')
         + (c.es_ganador && !comparacion.ganador.con_existencia ? ' sinconfirmar' : '')
-        + (c.es_ganador && comparacion.ganador.es_unico ? ' unico' : '');
+        + (c.es_ganador && comparacion.ganador.es_unico ? ' unico' : '')
+        + (p.proveedor === elegido ? ' elegido' : '');
+      if (eligiendo) {
+        linea.type = 'button';
+        linea.setAttribute('aria-pressed', p.proveedor === elegido ? 'true' : 'false');
+        linea.setAttribute('aria-label', 'Pedirle ' + r.descripcion + ' a ' + (c.nombre || p.nombre));
+        linea.onclick = () => acciones.elegirProveedor(r, p.proveedor, linea);
+      }
+
+      // El círculo de la izquierda: lleno en el elegido. Es para el ojo; el
+      // lector de pantalla tiene `aria-pressed`, y la fila "Se le pide a" y
+      // las firmas lo dicen con el nombre.
+      const radio = document.createElement('span');
+      radio.className = 'radio';
+      radio.setAttribute('aria-hidden', 'true');
 
       const quien = document.createElement('span');
       quien.className = 'quien';
-      quien.textContent = c.nombre || p.nombre;
+      quien.append(puntoDeProveedor(p.proveedor), c.nombre || p.nombre);
 
       const cifraOhueco = document.createElement(c.precio ? 'b' : 'span');
       if (c.precio) {
@@ -829,7 +969,7 @@ const preciosDelDetalle = (r, acciones) => {
         nota.append(motivo);
       }
 
-      linea.append(quien, cifraOhueco);
+      linea.append(radio, quien, cifraOhueco);
       if (nota.childNodes.length) linea.append(nota);
       lista.append(linea);
     });
@@ -1025,7 +1165,10 @@ const renglon = (r, acciones) => {
   // nada: repiten banderas que ya llegaron hechas del servidor.
   if (r.esta_agotado) tr.classList.add('agotado');
   if (r.frase_del_atraso) tr.classList.add('atrasado');
-  if (r.renglon_id === RENGLON_ELEGIDO) tr.classList.add('elegido');
+  // El renglón que el detalle está enseñando, marcado solo mientras el
+  // detalle está abierto: marcar uno con el detalle cerrado se leería como
+  // una selección que nadie hizo.
+  if (r.renglon_id === RENGLON_ELEGIDO && DETALLE_ABIERTO) tr.classList.add('elegido');
 
   // EL NOMBRE ES UN BOTÓN: abre el detalle del renglón. Con el ratón basta
   // tocar cualquier parte de la fila que no sea un control; con el teclado,
@@ -1038,8 +1181,17 @@ const renglon = (r, acciones) => {
   nombre.textContent = r.descripcion;
   nombre.title = r.descripcion;
   nombre.onclick = () => acciones.elegir(r, true);
+  // Debajo del nombre, como el diseño: la clave, el anaquel —"GENERICO 3",
+  // tal como llega del servidor— y las marcas. La clave y el anaquel son
+  // texto chico y no insignias: identifican, no avisan.
   const insignias = document.createElement('span');
   insignias.className = 'insignias';
+  [r.clave, r.anaquel].filter(Boolean).forEach(texto => {
+    const dato = document.createElement('span');
+    dato.className = 'identidad';
+    dato.textContent = texto;
+    insignias.append(dato);
+  });
   insignias.append(...marcasDe(r).map(insigniaDeMarca));
   producto.append(nombre, insignias);
 
@@ -1065,7 +1217,7 @@ const renglon = (r, acciones) => {
   // archivo solo la lee.
   const editable = r.se_puede_editar;
 
-  const cantidad = celdaDeCantidad(r, editable, acciones.ajustar);
+  const cantidad = celdaDeCantidad(r);
 
   // Descartar: UN CLIC y sin diálogo de confirmación. Lo que hace segura la
   // operación es que se puede deshacer —el renglón baja al bloque de
@@ -1098,11 +1250,11 @@ const renglon = (r, acciones) => {
 
   tr.append(producto, existencia, cobertura, cantidad,
             ...celdasDePrecio(r),
-            celdaDeProveedor(r, editable, acciones.elegirProveedor),
+            celdaDeProveedor(r),
             celdaAcciones);
 
-  // Un clic en la fila que no sea en un control la elige: es lo que pide el
-  // diseño, y no estorba al campo de la cantidad ni al desplegable.
+  // Un clic en la fila que no sea en un control la elige y abre su detalle:
+  // es lo que pide el diseño, y no estorba a la cruz de descartar.
   tr.addEventListener('click', (evento) => {
     if (evento.target.closest('button, input, select, a, label')) return;
     acciones.elegir(r, true);
@@ -1133,21 +1285,23 @@ const eleccionEnPalabras = (e) => {
   return 'Lo sugiere el sistema' + (e.certeza ? ': ' + e.certeza + '.' : '.');
 };
 
-// A QUIÉN SE LE PIDE ESTE RENGLÓN (ticket 20).
+// A QUIÉN SE LE PIDE ESTE RENGLÓN (ticket 20), en la fila.
 //
-// Un desplegable con los cuatro y **ninguna opción vacía**: siempre hay algo
-// seleccionado, o no hay a quién pedirle y entonces se antepone "Elige…". La
-// opción que viene marcada es la elección —la de la persona si la hubo, y si
-// no la sugerencia del sistema— y **cuál de las dos es se dice debajo**: en la
-// fila con una palabra ("sugerido", "elegido") y con todas sus letras en el
-// `title` y en el detalle (`eleccionEnPalabras`).
+// Desde la segunda versión del diseño (decisión del dueño, 2026-10-05) la fila
+// solo lo DICE: una píldora con el punto y el nombre del proveedor. Se elige en
+// el detalle del renglón, donde se ven los cuatro precios con sus motivos
+// (`preciosDelDetalle`). Hasta entonces era un desplegable en cada fila.
 //
-// Ninguna regla vive en este archivo. Qué proveedor va marcado, si eso es una
-// decisión, si difiere de lo sugerido y qué frase le toca llegan resueltos en
+// **Cuál de las dos es —sugerencia o decisión— se dice debajo**: con una
+// palabra ("sugerido", "elegido") y con todas sus letras en el `title` y en el
+// detalle (`eleccionEnPalabras`).
+//
+// Ninguna regla vive en este archivo. Qué proveedor va, si eso es una decisión,
+// si difiere de lo sugerido y qué frase le toca llegan resueltos en
 // `r.eleccion`, de `particion.elegir` — que es una función pura con su tabla de
 // casos. Elegir aquí el "más barato" habría metido la regla que decide a quién
 // se le compra en el único archivo que ninguna prueba de Python mira.
-const celdaDeProveedor = (r, editable, alElegir) => {
+const celdaDeProveedor = (r) => {
   const td = document.createElement('td');
   td.className = 'proveedor';
   td.dataset.etiqueta = 'Se le pide a';
@@ -1155,31 +1309,17 @@ const celdaDeProveedor = (r, editable, alElegir) => {
   const e = r.eleccion || null;
   if (!e) return td;
 
-  const campo = document.createElement('select');
-  campo.className = 'eleccion-campo';
-  campo.disabled = !editable;
-  campo.setAttribute('aria-label', 'A quién se le pide ' + r.descripcion);
-  PROVEEDORES.forEach(p => {
-    const opcion = document.createElement('option');
-    opcion.value = p.proveedor;
-    opcion.textContent = p.nombre;
-    if (p.proveedor === e.proveedor) opcion.selected = true;
-    campo.append(opcion);
-  });
-  if (!e.hay) {
-    // Con "sin proveedor" no se puede dejar el desplegable enseñando el
-    // primero de la lista como si estuviera elegido: eso sería exactamente
-    // inventar una decisión. Se antepone una opción que dice lo que pasa. Y
-    // aun así se puede elegir: la elección no se revisa contra el precio, y es
-    // lo que permite pedirle a quien no contestó hoy.
-    const ninguno = document.createElement('option');
-    ninguno.value = '';
-    ninguno.textContent = 'Elige…';
-    ninguno.selected = true;
-    campo.prepend(ninguno);
+  // Sin a quién pedirle NO se enseña el primero de la lista como si estuviera
+  // elegido: eso sería exactamente inventar una decisión. Va la insignia de
+  // "sin precio" y debajo por qué.
+  if (e.hay) {
+    const pildora = document.createElement('span');
+    pildora.className = 'pildora-proveedor';
+    pildora.append(puntoDeProveedor(e.proveedor), e.nombre);
+    td.append(pildora);
+  } else {
+    td.append(insignia('Sin proveedor', 'gris'));
   }
-  campo.addEventListener('change', () => alElegir(r, campo));
-  td.append(campo);
 
   // LA PALABRA DE DEBAJO. Sin a quién pedirle NO es un error: o hay empate —y
   // el sistema no desempata, porque elegir por orden alfabético sería una
@@ -1198,7 +1338,7 @@ const celdaDeProveedor = (r, editable, alElegir) => {
     // marca: es el par que vuelve auditable la elección, igual que "el sistema
     // propuso 3" al lado de un 10.
     quien.className = 'eleccion-de' + (e.difiere_de_la_sugerencia ? ' distinta' : '');
-    quien.textContent = e.difiere_de_la_sugerencia ? 'distinto de lo sugerido' : 'elegido';
+    quien.textContent = e.difiere_de_la_sugerencia ? 'elegido a mano' : 'elegido';
   } else {
     quien.className = 'eleccion-de sugerida';
     quien.textContent = 'sugerido';
@@ -1673,22 +1813,24 @@ const recargarLoQueSeVe = () =>
 // - `PASO`: revisar, repartir o capturar.
 // - `PEDIDO_EN_CAPTURA`: cuál pedido se está capturando en el paso tres.
 // - `RENGLON_ELEGIDO`: el que enseña el detalle de la derecha.
-// - `DETALLE_ABIERTO`: en pantalla angosta el detalle flota encima de la
-//   tabla y solo se ve cuando alguien tocó un renglón.
+// - `DETALLE_ABIERTO`: el detalle flota encima de la tabla (segunda versión
+//   del diseño, 2026-10-05) y solo se ve cuando alguien tocó un renglón.
 let PASO = 'revisar';
 let PEDIDO_EN_CAPTURA = null;
 let RENGLON_ELEGIDO = null;
 let DETALLE_ABIERTO = false;
 let HAY_DETALLE = false;
-// Si la franja de avisos está abierta. `null` es "que decida la pantalla": se
-// abre sola cuando hay una falla, y se queda como la persona la deje.
+// Si la franja de avisos está abierta. `null` es "que decida la pantalla":
+// plegada, salvo que haya una falla (decisión del dueño, 2026-10-05). Se queda
+// como la persona la deje... hasta que aparezca una falla que no estaba cuando
+// la plegó: entonces vuelve a decidir la pantalla, y se abre. Plegarla no es
+// decir "no me avises de las que vengan".
 let AVISOS_ABIERTOS = null;
+let FALLAS_EN_LOS_AVISOS = 0;
+let FALLAS_AL_DECIDIR = 0;
 // Lo que hacen los botones de los pasos. Lo pone `cargarPedido`, que es quien
 // tiene la lista; antes de la primera carga no hace nada.
 let IR_A_PASO = () => {};
-// Por debajo de ~1280 px el detalle no cabe al lado de la tabla y flota
-// encima. Es el mismo corte de la hoja de estilos.
-const ENCIMA = window.matchMedia('(max-width: 80rem)');
 
 const reiniciarLaVistaDelDia = () => {
   PASO = 'revisar';
@@ -1715,16 +1857,14 @@ const pintarEncabezado = () => {
     const th = document.createElement('th');
     th.className = 'precio-celda';
     th.scope = 'col';
-    th.textContent = p.nombre;
+    th.append(puntoDeProveedor(p.proveedor), p.nombre);
     fila.insertBefore(th, antes);
   });
 };
 
-// El detalle se ve si hay un renglón que enseñar, y en pantalla angosta solo
-// si alguien lo abrió.
+// El detalle se ve si hay un renglón que enseñar y alguien lo abrió.
 const ajustarElDetalle = () => {
-  document.getElementById('inspector').hidden =
-    !HAY_DETALLE || (ENCIMA.matches && !DETALLE_ABIERTO);
+  document.getElementById('inspector').hidden = !HAY_DETALLE || !DETALLE_ABIERTO;
 };
 
 // LAS FIRMAS DE UN RENGLÓN: quién decidió la cantidad y el proveedor, o que
@@ -1792,8 +1932,12 @@ const pintarDetalle = (r, acciones) => {
   hay.className = r.esta_agotado ? 'urgente' : '';
   hay.textContent = r.existencia === null || r.existencia === undefined ? 'sin dato' : cifra(r.existencia);
   parte('vendidas').textContent = cifra(r.piezas_vendidas);
+  // PEDIR, que desde la segunda versión del diseño se corrige AQUÍ y no en la
+  // fila: con − y + y el campo en medio, si el renglón se puede tocar.
   const pedir = parte('pedir');
-  pedir.replaceChildren(String(r.cantidad_a_pedir));
+  pedir.replaceChildren(r.se_puede_editar && acciones.ajustar
+    ? controlDeCantidad(r, acciones.ajustar)
+    : String(r.cantidad_a_pedir));
   if (r.difiere_de_la_propuesta) {
     const propuesta = document.createElement('span');
     propuesta.className = 'propuesta';
@@ -1818,15 +1962,21 @@ const pintarDetalle = (r, acciones) => {
   const precios = preciosDelDetalle(r, acciones);
   parte('precios').replaceChildren(precios.cuerpo);
   parte('leido').textContent = precios.leido;
+  parte('ayuda').hidden = !(acciones.elegirProveedor && r.se_puede_editar);
 
   parte('firmas').replaceChildren(...firmasDelRenglon(r));
 
+  // Las dos del diseño: descartar —en rojo, es la que saca el renglón— y
+  // volver a consultar el precio, teñida.
   const botones = [];
-  if (precios.boton) botones.push(precios.boton);
   if (r.se_puede_editar) {
-    const quitar = botonDeAccion('Descartar', (b) => acciones.descartar(r, b), 'plana');
+    const quitar = botonDeAccion('Descartar', (b) => acciones.descartar(r, b), 'peligro');
     quitar.setAttribute('aria-label', 'Descartar ' + r.descripcion);
     botones.push(quitar);
+  }
+  if (precios.boton) {
+    precios.boton.classList.add('tenida');
+    botones.push(precios.boton);
   }
   parte('acciones').replaceChildren(...botones);
   ajustarElDetalle();
@@ -1895,7 +2045,12 @@ const pintarResumenDeAvisos = () => {
   });
   caja.hidden = !visibles;
   if (!visibles) return;
+  // La tarjeta se tiñe según lo que trae: rojo con una falla, ámbar con algo
+  // por atender. Acompaña al punto y a la palabra del resumen.
+  caja.className = 'avisos' + (fallas ? ' con-falla' : porAtender.length ? ' por-atender' : '');
 
+  FALLAS_EN_LOS_AVISOS = fallas;
+  if (fallas > FALLAS_AL_DECIDIR) AVISOS_ABIERTOS = null;
   const abierta = AVISOS_ABIERTOS === null ? fallas > 0 : AVISOS_ABIERTOS;
   lista.hidden = !abierta;
   const boton = document.getElementById('avisos-resumen');
@@ -2031,19 +2186,26 @@ const iniciarLaVistaDelDia = () => {
   });
   document.getElementById('avisos-resumen').onclick = () => {
     AVISOS_ABIERTOS = document.getElementById('avisos-lista').hidden;
+    FALLAS_AL_DECIDIR = FALLAS_EN_LOS_AVISOS;
     pintarResumenDeAvisos();
   };
   document.getElementById('pedido-filtro').addEventListener('input', aplicarElFiltro);
+  // Al cerrar el detalle, el foco vuelve al renglón que lo abrió: quien va con
+  // el teclado no se queda parado en un panel que ya no está.
   const cerrarElDetalle = () => {
     DETALLE_ABIERTO = false;
     ajustarElDetalle();
+    document.querySelectorAll('#pedido-renglones tr.elegido').forEach(tr => {
+      tr.classList.remove('elegido');
+      const nombre = tr.querySelector('.ver-renglon');
+      if (nombre) nombre.focus();
+    });
   };
   document.getElementById('inspector-cerrar').onclick = cerrarElDetalle;
   document.addEventListener('keydown', (evento) => {
-    if (evento.key === 'Escape' && ENCIMA.matches && DETALLE_ABIERTO
+    if (evento.key === 'Escape' && DETALLE_ABIERTO
         && !document.getElementById('confirmar-cierre').open) cerrarElDetalle();
   });
-  ENCIMA.addEventListener('change', ajustarElDetalle);
 };
 
 // `fecha` (`AAAA-MM-DD`) es la que traen los `vecinos` de otro día: nunca la
@@ -2378,15 +2540,18 @@ async function cargarPedido(fecha) {
     RENGLON_ELEGIDO = r.renglon_id;
     if (abrir) DETALLE_ABIERTO = true;
     document.querySelectorAll('#pedido-renglones tr').forEach(tr => {
-      tr.classList.toggle('elegido', Number(tr.dataset.renglon) === r.renglon_id);
+      tr.classList.toggle('elegido',
+        DETALLE_ABIERTO && Number(tr.dataset.renglon) === r.renglon_id);
     });
     pintarDetalle(datos.renglones.find(x => x.renglon_id === r.renglon_id), {
       editable: datos.estado === 'abierto',
       descartar: descartar,
+      ajustar: ajustar,
+      elegirProveedor: elegirProveedor,
       consultarPrecio: consultarPrecio,
       elegir: elegirRenglon,
     });
-    if (abrir && ENCIMA.matches) document.getElementById('inspector-cerrar').focus();
+    if (abrir) document.getElementById('inspector-cerrar').focus();
   }
 
   // Los tres pasos y "Capturar en NADRO" llevan aquí: cambia lo que se ve, no
@@ -2450,14 +2615,15 @@ async function cargarPedido(fecha) {
   // contestó hoy. Hay razones que el sistema no ve — mínimo de pedido, días de
   // entrega, crédito—, y el renglón entra al pedido con la marca de precio
   // desconocido.
-  function elegirProveedor(r, campo) {
-    const proveedor = campo.value;
+  //
+  // Desde la segunda versión del diseño se elige tocando un proveedor en el
+  // detalle. Tocar el que ya es una DECISIÓN no se manda: movería la hora y la
+  // firma de algo que ya estaba decidido —es la misma regla de `ajustar` con
+  // la misma cifra—. Tocar el que solo era SUGERENCIA sí: es confirmarla.
+  function elegirProveedor(r, proveedor, control) {
     if (!proveedor) return;
-    moverRenglon(r.renglon_id, '/proveedor', campo, aplicar, { proveedor },
-      () => {
-        const antes = (r.eleccion && r.eleccion.proveedor) || '';
-        campo.value = antes;
-      });
+    if (r.eleccion && r.eleccion.es_decision && r.eleccion.proveedor === proveedor) return;
+    moverRenglon(r.renglon_id, '/proveedor', control, aplicar, { proveedor });
   }
 
   function devolver(r, boton) {
@@ -2526,9 +2692,8 @@ async function cargarPedido(fecha) {
     if (Array.isArray(datos.puente)) PROVEEDORES = datos.puente;
     conteoEnvejecido = false;
     repintar();
-    nota('pedido-accion',
-      'Lista partida en ' + plural((datos.pedidos || []).length, 'pedido', 'pedidos')
-      + '. Siguen en borrador: se pueden cambiar y volver a partir.', 'todo');
+    exito('Lista partida en ' + plural((datos.pedidos || []).length, 'pedido', 'pedidos')
+      + '. Siguen en borrador: se pueden cambiar y volver a partir.');
   }
 
   // MARCAR UN PEDIDO COMO ENVIADO (ticket 21).
@@ -2565,11 +2730,10 @@ async function cargarPedido(fecha) {
     if (Array.isArray(datos.puente)) PROVEEDORES = datos.puente;
     conteoEnvejecido = false;
     repintar();
-    nota('pedido-accion',
-      'Pedido a ' + nombre + ' marcado como enviado. Sus renglones pasaron a '
+    exito('Pedido a ' + nombre + ' marcado como enviado. Sus renglones pasaron a '
       + '«en tránsito», así que la lista de mañana ya no los va a volver a '
       + 'proponer. Recuerda: esto no se lo mandó a ' + nombre + ' — lo capturas '
-      + 'tú en su portal.', 'todo');
+      + 'tú en su portal.');
   }
 
   // TACHAR UN RENGLÓN EN LA PANTALLA DE CAPTURA (ticket 22).
@@ -3200,7 +3364,7 @@ const recibirORechazar = async (accion, renglonId, compras, boton) => {
     return;
   }
   await recargarLoQueSeVe();
-  nota('pedido-accion', respuesta.frase, 'todo');
+  exito(respuesta.frase);
 };
 
 // RECIBIR PARCIAL CON LA EVIDENCIA (ticket 27, ADR 0015): la misma ida y vuelta
@@ -3256,7 +3420,7 @@ const recibirAMano = async (renglonId, escrito, boton) => {
     return;
   }
   await recargarLoQueSeVe();
-  nota('pedido-accion', respuesta.frase, 'todo');
+  exito(respuesta.frase);
 };
 
 // CANCELAR UN PEDIDO Y DEVOLVER UN ATRASADO (ticket 25, ADR 0013).
@@ -3279,7 +3443,7 @@ const cancelarPedido = async (pedidoId, boton) => {
     return;
   }
   await recargarLoQueSeVe();
-  nota('pedido-accion', respuesta.frase, 'todo');
+  exito(respuesta.frase);
 };
 
 const devolverAtrasado = async (renglonId, boton) => {
@@ -3293,7 +3457,7 @@ const devolverAtrasado = async (renglonId, boton) => {
     return;
   }
   await recargarLoQueSeVe();
-  nota('pedido-accion', respuesta.frase, 'todo');
+  exito(respuesta.frase);
 };
 
 // ============================== LA CONCILIACIÓN DIARIA (ADR 0021) ==============================
@@ -3451,7 +3615,7 @@ const confirmarLoteDeConciliacion = async (pedidoSugeridoId, marcadas, boton) =>
   // igual que confirmar una recepción normal. Eso vuelve a pedir la
   // conciliación también: no hace falta repintar este bloque a mano.
   await recargarLoQueSeVe();
-  nota('pedido-accion', respuesta.frase, 'todo');
+  exito(respuesta.frase);
 };
 
 const pintarRenglones = (visibles, total, otra, descartados, acciones) => {
@@ -5028,6 +5192,9 @@ async function cargar() {
       fila('Continental ' + salud.version, true, 'negocio: ' + salud.negocio),
       fila('Entrando como', null, salud.quien),
     ]);
+    // Con qué correo se firma, abajo de la barra lateral.
+    document.getElementById('firma-correo').textContent = salud.quien || 'sin-identificar';
+    document.getElementById('firma-lateral').hidden = false;
   } else {
     // Hasta el ticket 29 un 500 pintaba "Continental undefined" en verde.
     pintar('estado', [fila('Continental no contesta', false, salud.detalle)]);
@@ -5064,6 +5231,7 @@ async function revisarDoyle() {
   document.getElementById('pedido-doyle').hidden = true;
 }
 
+iniciarApariencia();
 iniciarPestanas();
 iniciarLaVistaDelDia();
 iniciarBuscar();

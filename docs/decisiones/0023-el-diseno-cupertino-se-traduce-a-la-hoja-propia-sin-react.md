@@ -109,3 +109,62 @@ La 3.
 - "Recibido — hoy y ayer" del diseño no tiene una lectura que lo alimente:
   "En camino" enseña lo que llegó de menos, con su corrección, y lo recibido
   de cada lista sigue marcado en su renglón.
+
+## Enmienda del 2026-10-05 — la segunda versión del diseño, y la apariencia
+
+Llegó una segunda versión del mismo diseño (`Continental Cupertino.dc.html`, en
+el mismo proyecto de Claude Design). Se tradujo igual que la primera —a la hoja
+y al JavaScript de siempre, sin React ni la hoja de Cupertino—, así que la
+decisión de arriba sigue en pie. Lo que cambia es el acomodo, y cuatro cosas
+que el dueño decidió ese día:
+
+1. **A quién se le pide se elige en el detalle del renglón**, tocando uno de
+   los cuatro proveedores, y no en un desplegable de cada fila. La fila solo lo
+   dice, en una píldora con el punto del proveedor. Cuesta un clic más por
+   renglón; a cambio la elección se hace donde se ven los cuatro precios con
+   sus motivos. Tocar el que ya era una decisión no se manda (movería la firma
+   de algo ya decidido); tocar la sugerencia sí, porque es confirmarla.
+2. **Los avisos van plegados siempre, y se abren solos si hay una falla.** Si
+   alguien los pliega con una falla a la vista, se quedan plegados hasta que
+   aparezca una falla que no estaba: plegar no es "no me avises de las que
+   vengan".
+3. **Lo que salió bien de un clic va en un aviso pasajero** que se va solo,
+   abajo al centro. **Lo que salió mal no**: se queda escrito en su nota hasta
+   el siguiente clic. Un "no se pudo" que se borra a los tres segundos sería
+   una falla silenciosa con un paso de más (regla 4). El aviso dura más cuanto
+   más larga es la frase, nunca menos de cuatro segundos: la del envío dice
+   que Continental no le mandó nada al proveedor, y eso hay que alcanzarlo a
+   leer.
+4. **Apariencia Auto, Claro y Oscuro**, abajo de la barra lateral, como en
+   Marlowe. Se recuerda por navegador (`localStorage`), igual que la vista de
+   la lista.
+
+Y lo que se decidió al traducir:
+
+- **La cantidad también se corrige en el detalle**, con − y + y el campo en
+  medio, porque así la dibuja el diseño. En la fila es una cifra que solo se
+  lee, con "ajustada" o "confirmada" debajo si alguien la decidió. Los botones
+  solo le suman o le restan al campo y lo mandan: hay un solo camino de
+  escritura.
+- **El detalle flota siempre encima**, a la derecha, y se abre al tocar un
+  renglón. Ya no hay corte de 1280 px que lo ponga al lado de la tabla.
+- **Se desplaza la página entera**, con la barra lateral pegada, en vez de
+  cada sección por dentro. El encabezado de la tabla sigue pegado arriba, ahora
+  de la ventana; por eso la tarjeta de la tabla no lleva `overflow`.
+- **La lista oscura vive dos veces en la hoja**: dentro de la media query
+  (para "Auto", detenida por `data-tema="claro"`) y en `:root[data-tema="oscuro"]`
+  (para "Oscuro"). CSS no deja decir "si el sistema es oscuro o si alguien
+  eligió oscuro" en un solo bloque. Se descartó `light-dark()`, que lo diría en
+  una línea por color, porque es de 2024 y sin ella la pantalla entera se queda
+  sin color en un navegador viejo. `test_pasada_visual` exige que las dos
+  copias sean idénticas, valor por valor.
+- **Los íconos de la barra lateral son SVG en línea**, después del rótulo en el
+  HTML y puestos delante por la hoja: el rótulo sigue siendo lo primero que se
+  lee de cada pestaña. Ningún archivo nuevo, nada pedido afuera.
+- **Los cuatro proveedores llevan un punto de color** (índigo, verde azulado,
+  gris y morado, por su lugar en la lista del servidor), siempre junto a su
+  nombre.
+- **La letra sigue siendo la del sistema** y los naranjas y verdes de texto los
+  de alto contraste, como decidió este ADR. El diseño insiste en Inter.
+- **La clase ABC que el diseño dibuja junto a la clave no se enseña**: no viaja
+  en el renglón. Ponerla es un cambio del servidor, no de la pantalla.

@@ -41,7 +41,7 @@ def test_el_contenedor_nace_escondido_dentro_de_la_vista_del_dia():
     assert re.search(r'<div class="en-camino conciliacion" id="conciliacion" hidden></div>', pantalla)
     # Vive DESPUÉS de "descartados", dentro de la misma <section> que el resto
     # del pedido del día (ADR 0020): la conciliación es de un día concreto.
-    inicio_seccion = pantalla.index('<h2>Pedido sugerido</h2>')
+    inicio_seccion = pantalla.index('<section id="panel-pedido"')
     fin_seccion = pantalla.index("</section>", inicio_seccion)
     seccion = pantalla[inicio_seccion:fin_seccion]
     assert 'id="conciliacion"' in seccion
