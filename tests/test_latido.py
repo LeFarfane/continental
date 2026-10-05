@@ -423,10 +423,14 @@ def test_url_del_latido_pregunta_por_la_variable_que_se_le_diga(monkeypatch):
     assert url_del_latido() is None
 
 
-def test_mandar_el_latido_pregunta_por_la_variable_propia_y_lo_avisa(caplog):
+def test_mandar_el_latido_pregunta_por_la_variable_propia_y_lo_avisa(caplog, monkeypatch):
     """`variable` decide tanto de dónde se lee la URL como qué nombre lleva el
     WARNING cuando no está — las dos cosas, o el aviso mentiría sobre cuál
     variable falta."""
+    # En atlas la variable SÍ existe (el timer de verificar la usa), así que sin
+    # borrarla la prueba encontraba una URL, intentaba la petición y fallaba
+    # solo allá: desplegar.sh se detuvo en el paso 3 el 2026-10-05.
+    monkeypatch.delenv(VARIABLE_DEL_LATIDO_VERIFICAR, raising=False)
     with caplog.at_level("WARNING", logger="continental"):
         resultado = mandar_el_latido(
             estado=ARRIBA,
