@@ -117,3 +117,35 @@ escritas, salida distinta de cero, y el rastro completo en el journal, en
 - **Condición de revisión:** si las sesiones llegan a durar de forma confiable
   más que el hueco entre abrirlas y el lote, la sonda pasa de red de seguridad
   a peaje. Si eso ocurre, se revisa si vale sus ~36 s y su búsqueda.
+
+## Enmienda 2026-10-05 — la sonda busca el término de prueba, no un EAN
+
+**Lo que cambia es con qué se sondea, no que se sonde.** La decisión, el
+discriminante (`la sesión caducó` y nada más) y que la sonda no escribe
+precios siguen como arriba. El ADR 0024 (decisión 4) puso una sola manera de
+comprobar una sesión —buscar «paracetamol 500», que también usa el botón
+«Probar»— y la sonda del lote pasó a usarla. Esto sustituye lo que decía la
+última consecuencia de «La clave de la sonda es configuración»:
+
+- **«La clave de la sonda es configuración, no código» pasa a ser «el término
+  de la sonda es configuración»**: `pedido.termino_de_prueba` en
+  `config/continental.yml`, con valor «paracetamol 500». `pedido.clave_de_sonda`
+  desaparece. Sigue siendo una decisión de operación y por eso sigue en el
+  YAML, junto a `tope_lote_minutos`.
+- **El respaldo de «la clave del primer renglón con EAN de la lista del día»
+  se quita.** Cambiaba de identidad cada noche, repetía la búsqueda de ese
+  renglón y dependía de que la lista trajera algún EAN. El término no sale de
+  la lista, así que la sonda corre siempre, también cuando ningún renglón trae
+  EAN (antes se saltaba en ese caso).
+- **Sin término, el lote se niega a correr** (`lote.SinTerminoDePrueba`), antes
+  de armar la lista y de tocar un portal, y lo dice en el journal y en
+  `pedidos.corrida_del_lote` (`se interrumpió`, con el motivo en `detalle`). No
+  se elige otro término en silencio: la misma razón de fondo de este ADR, que
+  un marcador que se calla es lo que ya falló dos veces.
+- **Por nombre y no por EAN** porque un EAN que un proveedor no maneja da `sin
+  resultados`, que prueba que la sesión pasó del login pero no enseña un
+  precio; «paracetamol 500» da resultados en los cuatro. El EAN anterior era el
+  de SIGDAN MOMETASONA (`7502256040203`).
+- **Sigue siendo una sola búsqueda para los cuatro proveedores**, y la sonda
+  sigue sin guardar nada de la prueba (ADR 0024, decisión 6): decide si el lote
+  corre y se olvida.

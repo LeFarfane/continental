@@ -535,6 +535,11 @@ def _mundo(cuantos: int = 2):
         ],
     )
     doyle = DoyleFalso()
+    # La sonda del lote busca el término de prueba y contesta de una vez.
+    doyle.resultados_por_termino["paracetamol 500"] = {
+        p: respuesta_lista(p, [("7501234567890", "1.00", "1")])
+        for p in ("nadro", "levic", "vicma", "quepharma")
+    }
     for clave in claves:
         doyle.resultados_por_termino[clave] = {
             p: respuesta_lista(p, [(clave, "86.05", "40")])
@@ -547,6 +552,7 @@ def _correr(almacen, almacenamiento, doyle, **extra):
     """`correr_el_lote` con el reloj inyectado y un latido que no sale a la red."""
     transcurrido = [0.0]
     extra.setdefault("latir", lambda **_: ResultadoDelLatido(se_mando=True))
+    extra.setdefault("termino_de_prueba", "paracetamol 500")
     return correr_el_lote(
         almacen=almacen,
         almacenamiento=almacenamiento,

@@ -466,19 +466,19 @@ class SesionesNoSirven(RuntimeError):
     **No hereda de nada que el `except BaseException` genérico del lote trate
     como "una excepción nuestra con datos sensibles adentro"** (regla 5 de
     `CLAUDE.md`): este mensaje lo redacta este mismo módulo, con nombres de
-    proveedor —`config/proveedores.yml` de Doyle— y el EAN con el que se
+    proveedor —`config/proveedores.yml` de Doyle— y el término con el que se
     sondeó. Nunca lleva la cadena de conexión de Postgres ni la URL del
     monitor de Kuma, así que `correr_el_lote` lo trata aparte y sí deja su
     texto en la bitácora — al revés que cualquier otra excepción.
     """
 
-    def __init__(self, proveedores: Sequence[str], clave_de_sonda: str):
+    def __init__(self, proveedores: Sequence[str], termino_de_prueba: str):
         self.proveedores: tuple[str, ...] = tuple(proveedores)
-        self.clave_de_sonda = clave_de_sonda
+        self.termino_de_prueba = termino_de_prueba
         cuales = ", ".join(self.proveedores)
         super().__init__(
             f"la sesión de {cuales} no sirve: contestó «{SESION_CADUCADA}» a "
-            f"una búsqueda de prueba de verdad (clave {clave_de_sonda!r}). El "
+            f"una búsqueda de prueba de verdad (término {termino_de_prueba!r}). El "
             "lote se niega a correr: un lote parcial escribiría precios sin "
             "ese proveedor en pedidos.precio_de_proveedor, que solo crece y "
             "no se corrige (ADR 0004) -- abre esa sesión en el visor y "
@@ -486,66 +486,34 @@ class SesionesNoSirven(RuntimeError):
         )
 
 
-def _clave_de_sonda(orden: Orden, configurada: str | None) -> str | None:
-    """Con qué se va a sondear hoy: la de `config/continental.yml`, o su respaldo.
+class SinTerminoDePrueba(RuntimeError):
+    """El lote se niega a correr: no hay `pedido.termino_de_prueba` configurado.
 
-    **Con qué buscar la sonda, las dos opciones y por qué quedan las dos:**
+    Igual que `SesionesNoSirven`, el mensaje lo redacta este módulo y no lleva
+    nada sensible, así que `correr_el_lote` lo trata aparte y deja su texto en
+    el journal y en `pedidos.corrida_del_lote`.
 
-    1. **Un EAN fijo en `config/continental.yml`** (`pedido.clave_de_sonda`).
-       Le da a la sonda una **identidad estable**: la misma noche tras noche,
-       fácil de repetir a mano en el visor cuando algo se ve raro, y **no
-       repite la búsqueda de un producto que el lote ya va a consultar de
-       verdad** un renglón después —evita gastarle a los cuatro portales una
-       segunda visita al mismo EAN, una por la sonda y otra por el renglón—.
-       Es la preferida, y por eso manda cuando está.
-    2. **La clave del primer renglón con EAN de la lista de hoy.** Es el
-       respaldo, no la primera opción, y la razón es la de arriba al revés:
-       cuesta una consulta doble sobre ese renglón, y su identidad cambia cada
-       noche según qué se vendió, que es peor para reproducir un problema a
-       mano. Pero **no depende de que alguien haya llenado el YAML**, y
-       mientras `pedido.clave_de_sonda` siga sin configurarse (ver el
-       comentario ahí) es lo único que hay: la alternativa sería no sondear
-       nada, que es exactamente la falla silenciosa que este ticket existe
-       para cerrar.
-
-    **Un EAN fijo escrito en el código y no en YAML** se descartó aparte: el
-    número es una decisión de operación —qué producto usar de sonda—, no una
-    constante de programa, y el mismo criterio que ya separa
-    `tope_lote_minutos` del código aplica aquí.
-
-    Devuelve `None` solo cuando NINGUNA de las dos existe: la lista no trae
-    EAN en ningún renglón y tampoco hay configurada. Ahí no hay con qué
-    sondear, y tampoco hay nada que consultar de verdad —todo va a salir
-    `sin clave`, sin tocar un portal—, así que no sondear no deja nada a
-    medias.
+    **Se niega y no elige otro término en silencio** (ADR 0024, decisión 4):
+    la sonda existe para no escribir precios sin saber si las sesiones sirven,
+    y sin término no hay cómo saberlo. El respaldo anterior —la clave del
+    primer renglón con EAN de la lista del día— se quitó: cambiaba de identidad
+    cada noche y repetía la búsqueda de ese renglón; la prueba de siempre es
+    «paracetamol 500».
     """
-    configurada = (configurada or "").strip()
-    if configurada:
-        return configurada
 
-    de_la_lista = next(
-        (r.propuesto.clave for r in orden.renglones if r.propuesto.clave), None
-    )
-    if de_la_lista:
-        log.warning(
-            "Lote nocturno: no hay `pedido.clave_de_sonda` en "
-            "config/continental.yml. Se sondea con la clave del primer "
-            "renglón con EAN de la lista de hoy (%s) -sirve igual, solo que "
-            "con una identidad que cambia cada noche y que repite la "
-            "búsqueda de ese renglón dos veces-. Configura esa llave para una "
-            "sonda estable.",
-            de_la_lista,
+    def __init__(self) -> None:
+        super().__init__(
+            "falta `pedido.termino_de_prueba` en config/continental.yml: sin "
+            "ese término no hay con qué sondear las sesiones, y el lote se "
+            "niega a correr antes de escribir nada. Agrégalo (ADR 0024) y "
+            "vuelve a correr el lote."
         )
-        return de_la_lista
-
-    return None
 
 
 def _sondear_las_sesiones(
-    orden: Orden,
     *,
     doyle: ClienteDeDoyle,
-    clave_de_sonda: str | None,
+    termino_de_prueba: str,
     tope_por_consulta_seg: float,
     cada_seg: float,
     dormir: Callable[[float], object],
@@ -557,9 +525,12 @@ def _sondear_las_sesiones(
     `al_terminar` guarda lo que contestaron los portales (`lecturas_de_portal.py`): la
     sonda es una búsqueda real y también es una oportunidad.
 
-    `clave_de_sonda` es la de `config/continental.yml`, o `None` si no está
-    configurada: `_clave_de_sonda` decide con qué se sondea de verdad, con su
-    respaldo si hace falta.
+    `termino_de_prueba` es el de `config/continental.yml` (`pedido
+    .termino_de_prueba`, «paracetamol 500»): el mismo que usa el botón
+    «Probar» (ADR 0024). Se busca **por nombre** y no por EAN porque un EAN que
+    un proveedor no maneja da `sin resultados`, que prueba que la sesión pasó
+    del login pero no enseña un precio; el término da resultados en los cuatro.
+    Aquí ya viene resuelto y no vacío: `correr_el_lote` se niega antes si falta.
 
     **Una sola sonda para los cuatro, no una por proveedor**: `pedir_busqueda`
     reparte un único término entre los cuatro proveedores en el mismo trabajo
@@ -577,27 +548,16 @@ def _sondear_las_sesiones(
     sonda no persista nada es lo que permite negarse a correr **sin** dejar
     ningún rastro parcial.
     """
-    clave = _clave_de_sonda(orden, clave_de_sonda)
-    if clave is None:
-        log.info(
-            "Lote nocturno: ningún renglón de la lista trae EAN y no hay "
-            "`pedido.clave_de_sonda` configurada, así que no hay con qué "
-            "sondear las sesiones. Tampoco hay nada que consultar -todo va a "
-            "salir `sin clave`-, así que saltarse la sonda no deja nada a "
-            "medias."
-        )
-        return
-
     log.info(
-        "Lote nocturno: sondeando las sesiones con una búsqueda real (clave "
-        "%s) antes de tocar el primer renglón. `GET /api/sesiones` no sirve "
+        "Lote nocturno: sondeando las sesiones con una búsqueda real (término "
+        "%r) antes de tocar el primer renglón. `GET /api/sesiones` no sirve "
         "para esto: dijo `guardada` con las cuatro caídas el 2026-09-19 y "
         "otra vez el 2026-09-26.",
-        clave,
+        termino_de_prueba,
     )
     resultado = consultar_a_doyle(
         doyle,
-        clave,
+        termino_de_prueba,
         tope_seg=tope_por_consulta_seg,
         cada_seg=cada_seg,
         dormir=dormir,
@@ -606,7 +566,7 @@ def _sondear_las_sesiones(
     )
     caidas = proveedores_con_sesion_caida(resultado.lecturas)
     if caidas:
-        raise SesionesNoSirven(caidas, clave)
+        raise SesionesNoSirven(caidas, termino_de_prueba)
 
     log.info(
         "Lote nocturno: la sonda no encontró ninguna sesión caída (%d "
@@ -700,20 +660,18 @@ def tope_del_lote_segundos() -> float:
     return minutos * 60.0
 
 
-def clave_de_sonda_configurada() -> str | None:
-    """El EAN fijo para sondear las sesiones, de `config/continental.yml`.
+def termino_de_prueba_configurado() -> str | None:
+    """El término para probar las sesiones, de `config/continental.yml`.
 
     La misma capa delgada que `tope_del_lote_segundos`, con una diferencia a
-    propósito: aquí **no hay un valor de omisión que inventar** —no existe un
-    EAN "razonable por default"—, así que sin la llave esto devuelve `None` y
-    `_clave_de_sonda` decide el respaldo (la clave del primer renglón con EAN
-    de la lista de hoy). Tronar aquí, o inventar un EAN cualquiera, dejaría a
-    la farmacia sin lote nocturno -o sondeando algo sin sentido- por una línea
-    que falta en el YAML, y eso es peor que caer al respaldo con un aviso.
+    propósito: aquí **no hay un valor de omisión que inventar** —elegir un
+    término por la farmacia sería adivinar—, así que sin la llave esto devuelve
+    `None` y `correr_el_lote` se niega a correr, ruidosamente, en vez de buscar
+    otra cosa en silencio (ADR 0024, decisión 4).
     """
     from continental.config import cargar
 
-    crudo = cargar().pedido.get("clave_de_sonda")
+    crudo = cargar().pedido.get("termino_de_prueba")
     return str(crudo).strip() if crudo else None
 
 
@@ -1245,7 +1203,7 @@ def correr_el_lote(
     tope_seg: float,
     tope_por_consulta_seg: float,
     cada_seg: float,
-    clave_de_sonda: str | None = None,
+    termino_de_prueba: str | None = None,
     registro: RegistroDeConsultas | None = None,
     reglas=None,
     dormir: Callable[[float], object] = time.sleep,
@@ -1331,6 +1289,13 @@ def correr_el_lote(
     anotados: list[RenglonDelLote] = []
 
     try:
+        # SIN TÉRMINO DE PRUEBA NO SE CORRE, y se dice antes de armar nada: ni
+        # lista del día ni una sola fila. Va dentro del `try` para que el
+        # `finally` deje igual el journal, `corrida_del_lote` y el latido.
+        termino = (termino_de_prueba or "").strip()
+        if not termino:
+            raise SinTerminoDePrueba()
+
         ultima = almacen.ultima_fecha_con_ventas()
         if ultima is None:
             return sellar(
@@ -1455,9 +1420,8 @@ def correr_el_lote(
         # los cuatro portales antes de rendirse.
         if not cronometro.se_acabo:
             _sondear_las_sesiones(
-                orden,
                 doyle=doyle,
-                clave_de_sonda=clave_de_sonda,
+                termino_de_prueba=termino,
                 tope_por_consulta_seg=tope_por_consulta_seg,
                 cada_seg=cada_seg,
                 dormir=dormir,
@@ -1466,7 +1430,7 @@ def correr_el_lote(
                     almacenamiento,
                     negocio,
                     origen=SONDA_DEL_LOTE,
-                    termino=_clave_de_sonda(orden, clave_de_sonda) or "",
+                    termino=termino,
                 ),
             )
 
@@ -1533,10 +1497,10 @@ def correr_el_lote(
 
         return sellar(renglones=tuple(anotados))
 
-    except SesionesNoSirven as exc:
+    except (SesionesNoSirven, SinTerminoDePrueba) as exc:
         # Aparte del genérico de abajo, y a propósito: el detalle SÍ lleva el
-        # texto de ÉSTA excepción, porque lo redactó `_sondear_las_sesiones` —
-        # nombres de proveedor y un EAN, nunca una cadena de conexión ni la
+        # texto de ÉSTAS excepciones, porque las redactó este módulo —
+        # nombres de proveedor y un término de búsqueda, nunca una cadena de conexión ni la
         # URL de un monitor—. La regla 5 de `CLAUDE.md` prohíbe el texto de una
         # excepción AJENA (httpx, SQLAlchemy); ésta es nuestra y no dice nada
         # que no debiera verse en el journal de atlas.
@@ -1718,7 +1682,7 @@ def main(argv: list[str] | None = None) -> int:
         tope_seg=tope_seg,
         tope_por_consulta_seg=tope_por_consulta_seg,
         cada_seg=cada_seg,
-        clave_de_sonda=clave_de_sonda_configurada(),
+        termino_de_prueba=termino_de_prueba_configurado(),
         reglas=reglas_configuradas(),
     )
     # El resumen ya fue a la bitácora desde dentro; esto es para quien corra el

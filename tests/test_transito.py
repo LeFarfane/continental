@@ -1107,6 +1107,7 @@ def test_casilla_1_el_lote_de_la_noche_tampoco_lo_propone(almacen, almacenamient
         tope_seg=0.0,
         tope_por_consulta_seg=1.0,
         cada_seg=1.0,
+        termino_de_prueba="paracetamol 500",
         dormir=lambda segundos: None,
         ahora=lambda: 0.0,
     )

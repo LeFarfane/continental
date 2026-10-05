@@ -158,42 +158,27 @@ pedido:
   # `tolerancia_dias_habiles_configurada`.
   tolerancia_dias_habiles: 3
 
-  # LA SONDA DE SESIONES (ticket 30, ADR pendiente de aprobar). Antes de tocar
-  # el primer renglón, el lote nocturno hace UNA búsqueda real con este EAN
-  # para comprobar que las cuatro sesiones de proveedor sirven de verdad -y se
-  # niega a correr el lote entero si alguna contesta "la sesión caducó"-.
+  # EL TÉRMINO DE PRUEBA DE LAS SESIONES (ADR 0024, que amplía el 0019). Es lo
+  # que se busca para comprobar que una sesión de proveedor sirve de verdad:
+  # la SONDA del lote nocturno lo busca UNA vez en los cuatro portales antes
+  # del primer renglón -y el lote se niega a correr si alguno contesta "la
+  # sesión caducó"-, y el botón «Probar» de la pantalla de Sesiones busca
+  # exactamente lo mismo. Una sola manera de comprobar una sesión.
   # `GET /api/sesiones` no sirve para esto: es un marcador de disco que ya dijo
   # "guardada" con las cuatro caídas dos veces (2026-09-19 y 2026-09-26).
   #
-  # UN EAN FIJO AQUÍ Y NO EL PRIMER RENGLÓN DE LA LISTA DE HOY, a propósito:
-  # le da a la sonda una identidad estable -la misma noche tras noche, fácil de
-  # repetir a mano en el visor si algo se ve raro- y evita buscarle dos veces
-  # el mismo producto a los cuatro portales -la sonda, y el renglón real un
-  # paso después-. Ponle el EAN de un producto de rotación alta que la
-  # farmacia venda de verdad: no hace falta que el portal lo tenga en su
-  # catálogo -el discriminante no es "lo encontró", es "no contestó `la sesión
-  # caducó`" (ver `continental.lote.proveedores_con_sesion_caida`)-, solo que
-  # sea estable para no tener que perseguirlo si el producto se deja de vender.
+  # POR NOMBRE Y NO POR EAN, a propósito. Antes la sonda buscaba el EAN de
+  # SIGDAN MOMETASONA (`pedido.clave_de_sonda`), estable pero que solo da
+  # precio en los portales que ese producto maneja: en el resto sale `sin
+  # resultados`, que demuestra que la sesión pasó del login pero no enseña un
+  # precio. «paracetamol 500» da resultados en los cuatro.
   #
-  # ES SIGDAN MOMETASONA, FRASCO DE 18 ML, y lo eligió el dueño el 2026-09-26
-  # por ser el producto estrella de la farmacia. Medido sobre `marts` antes de
-  # escribirlo aquí, para no elegir de memoria:
+  # El discriminante no cambia: no es "lo encontró", es "no contestó `la sesión
+  # caducó`" (ver `continental.lote.proveedores_con_sesion_caida`).
   #
-  #   7502256040203  SIGDAN MOMETASONA 18 ML     100 líneas · 106 piezas
-  #                                              $11,943 de utilidad
-  #                                              última venta 2026-09-25
-  #   7502256040197  SIGDAN pediátrica            22 líneas ·  24 piezas
-  #                                              $1,612 · última 2026-06-05
-  #
-  # Se descartó la pediátrica a propósito: lleva casi cuatro meses sin venderse
-  # y una sonda que se apoya en un producto muerto es la que un día deja de
-  # existir en el catálogo del proveedor sin que nadie lo note.
-  #
-  # Si algún día deja de venderse, esto se cambia aquí y en ningún otro lado.
-  # Mientras falte, el lote cae de respaldo a la clave del primer renglón con
-  # EAN de la lista de hoy y lo avisa en el journal: la sonda nunca se salta en
-  # silencio. Ver `continental.lote._clave_de_sonda`.
-  clave_de_sonda: "7502256040203"
+  # SIN ESTA LÍNEA EL LOTE SE NIEGA A CORRER y lo dice en el journal y en la
+  # corrida: no hay respaldo ni se elige otro término en silencio.
+  termino_de_prueba: "paracetamol 500"
 
   # El botón "completar lo que falta" (ticket 19). Vuelve a consultar SOLO los
   # renglones a los que volver a preguntar puede cambiarles algo -sin lectura,

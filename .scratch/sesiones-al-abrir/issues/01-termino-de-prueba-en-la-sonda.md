@@ -4,12 +4,12 @@
 
 **Bloqueado por:** ninguno (se puede empezar ya).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] La configuración del pedido tiene el término de prueba, con valor «paracetamol 500», y `clave_de_sonda` desaparece. Su comentario dice por qué se busca por nombre y no por EAN, y remite al ADR 0024.
-- [ ] La sonda del lote busca ese término en los cuatro proveedores, en una sola búsqueda, como ya lo hace hoy.
-- [ ] Sin el término configurado, el lote se niega a correr y lo dice en el journal y en la corrida. El respaldo del "primer renglón con EAN de la lista" se quita.
-- [ ] El discriminante sigue siendo `la sesión caducó`, y nada más: `sin resultados` y `no empareja` no detienen el lote.
-- [ ] La sonda sigue sin escribir nada: ni precios ni el resultado de la prueba.
-- [ ] `test_lote.py` cubre: el término configurado es el que se busca; sin término, el lote se niega ruidosamente; la sonda no escribe.
-- [ ] La enmienda correspondiente queda anotada en el ADR 0019. Allí "la clave de la sonda es configuración" pasa a ser el término.
+- [x] La configuración del pedido tiene el término de prueba, con valor «paracetamol 500», y `clave_de_sonda` desaparece. Su comentario dice por qué se busca por nombre y no por EAN, y remite al ADR 0024.
+- [x] La sonda del lote busca ese término en los cuatro proveedores, en una sola búsqueda, como ya lo hace hoy.
+- [x] Sin el término configurado, el lote se niega a correr y lo dice en el journal y en la corrida. El respaldo del "primer renglón con EAN de la lista" se quita.
+- [x] El discriminante sigue siendo `la sesión caducó`, y nada más: `sin resultados` y `no empareja` no detienen el lote.
+- [x] La sonda sigue sin escribir nada: ni precios ni el resultado de la prueba.
+- [x] `test_lote.py` cubre: el término configurado es el que se busca; sin término, el lote se niega ruidosamente; la sonda no escribe.
+- [x] La enmienda correspondiente queda anotada en el ADR 0019. Allí "la clave de la sonda es configuración" pasa a ser el término.

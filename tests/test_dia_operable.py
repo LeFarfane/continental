@@ -207,6 +207,7 @@ def test_el_lote_no_arma_lista_en_domingo_ni_festivo():
         tope_seg=3600.0,
         tope_por_consulta_seg=120.0,
         cada_seg=1.0,
+        termino_de_prueba="paracetamol 500",
         dormir=lambda _s: None,
         ahora=lambda: 0.0,
     )
