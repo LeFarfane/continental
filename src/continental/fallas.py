@@ -48,6 +48,10 @@ AL_GUARDAR = "al_guardar"
 #: Doyle no contesta. La lista no depende de él —los precios guardados se leen
 #: de `pedidos`—, así que se trabaja igual; lo que no funciona es consultar.
 DOYLE = "doyle"
+#: Doyle contestó, pero ningún portal terminó de probarse (el botón «Probar»,
+#: ADR 0024): no contestaron, o se acabó el tiempo. No se sabe nada de la
+#: sesión, y la tarjeta conserva su etiqueta.
+PORTAL = "portal"
 #: Una corrida programada del lote ya debía haber pasado sobre esta lista y
 #: no dejó fila (ADR 0007, enmienda 2026-09-21): atlas pudo estar apagado a
 #: las 22:00, el timer sin habilitar, o la unidad en `failed`.
@@ -61,7 +65,7 @@ SERVIDOR = "servidor"
 #: la práctica es una pantalla vieja contra un servidor nuevo.
 PETICION = "peticion"
 
-CASOS = (AL_LEER, AL_GUARDAR, DOYLE, CONFIGURACION, SERVIDOR, PETICION, LOTE)
+CASOS = (AL_LEER, AL_GUARDAR, DOYLE, PORTAL, CONFIGURACION, SERVIDOR, PETICION, LOTE)
 
 _QUE_HACER = {
     AL_LEER: (
@@ -76,6 +80,10 @@ _QUE_HACER = {
         "Consultar o completar precios no va a funcionar hasta que Doyle "
         "vuelva. Levanta Doyle en la máquina donde corre, y si no sabes cómo, "
         "avísale {a_quien}."
+    ),
+    PORTAL: (
+        "Vuelve a probar en un minuto. Si el portal sigue sin contestar, abre "
+        "el visor para ver si el sitio está caído, o avísale {a_quien}."
     ),
     CONFIGURACION: (
         "Desde aquí no hay nada que hacer: avísale {a_quien} que hay que "

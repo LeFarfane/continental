@@ -1195,3 +1195,36 @@ def test_la_firma_nunca_se_usa_como_permiso():
         f"quien(request) se está usando como condición: {prohibidos}. El "
         "correo de Access es una FIRMA, no un permiso (regla 3 de CLAUDE.md)."
     )
+
+
+
+# ---------------------------------------------------------------------------
+# La migración de las pruebas de sesión detiene el despliegue (ADR 0017, 0024)
+# ---------------------------------------------------------------------------
+
+
+def test_el_despliegue_con_el_boton_probar_se_detiene_si_falta_la_0018():
+    """«Probar» y la tarjeta de Sesiones leen `pedidos.prueba_de_sesion`. El
+    paso 4 de `desplegar.sh` sale con 1 cuando `--forma` no cuadra; aquí se
+    comprueba lo que lo vuelve distinto de cero: una base sin esa tabla, y la
+    migración que nombra el mensaje existe en el repo para que el comando
+    copiado funcione."""
+    from continental import forma as f
+
+    raiz = Path(__file__).resolve().parent.parent
+    esperadas = f.columnas_de_crear_tablas((raiz / "sql" / "crear_tablas.sql").read_bytes().decode("utf-8"))
+    migraciones = {
+        m.name: m.read_bytes().decode("utf-8") for m in sorted((raiz / "sql" / "migraciones").glob("*.sql"))
+    }
+    lecturas = [
+        f.LecturaDeForma(t, None, "ProgrammingError", f.NO_EXISTE)
+        if t == "prueba_de_sesion" else f.LecturaDeForma(t, cols)
+        for t, cols in esperadas.items()
+    ]
+
+    informe = f.revisar_forma(esperadas, lecturas, f.migracion_de_cada_columna(migraciones))
+
+    assert informe.codigo_de_salida != 0
+    assert "0018-las-pruebas-de-sesion.sql" in migraciones
+    assert "0018-las-pruebas-de-sesion.sql" in informe.fallas[0].reparacion
+    assert '"$PYTHON" -m continental.verificar --forma' in (raiz / "scripts" / "desplegar.sh").read_text(encoding="utf-8")

@@ -133,6 +133,7 @@ from continental.consultas import (
     consultar_a_doyle,
     consultar_y_congelar,
     guardar_lo_que_contestaron,
+    termino_de_prueba_configurado,
 )
 from continental.doyle import ClienteDeDoyle
 from continental.latido import ABAJO, ARRIBA, ResultadoDelLatido, mandar_el_latido
@@ -658,21 +659,6 @@ def tope_del_lote_segundos() -> float:
         minutos = TOPE_POR_OMISION_MIN
 
     return minutos * 60.0
-
-
-def termino_de_prueba_configurado() -> str | None:
-    """El término para probar las sesiones, de `config/continental.yml`.
-
-    La misma capa delgada que `tope_del_lote_segundos`, con una diferencia a
-    propósito: aquí **no hay un valor de omisión que inventar** —elegir un
-    término por la farmacia sería adivinar—, así que sin la llave esto devuelve
-    `None` y `correr_el_lote` se niega a correr, ruidosamente, en vez de buscar
-    otra cosa en silencio (ADR 0024, decisión 4).
-    """
-    from continental.config import cargar
-
-    crudo = cargar().pedido.get("termino_de_prueba")
-    return str(crudo).strip() if crudo else None
 
 
 # =========================================================================

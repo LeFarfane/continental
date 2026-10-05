@@ -38,6 +38,7 @@ from continental.almacenamiento import (
     CorridaDelLote,
     PedidoGuardado,
     PedidoSugeridoGuardado,
+    PruebaDeLaSesion,
     RenglonGuardado,
     RenglonPorConciliar,
     LLAVE_DEL_ATRASO,
@@ -92,7 +93,9 @@ from continental.consultas import (
     consultar_en_fila,
     consultar_y_congelar,
     lecturas_como_json,
+    consultar_a_doyle,
     proveedores_que_consultan_al_abrir,
+    termino_de_prueba_configurado,
     tope_del_completado_segundos,
 )
 from continental.doyle import BusquedaDesconocida, ClienteDeDoyle, VigiladoDesconocido
@@ -109,6 +112,7 @@ from continental.fallas import (
     DOYLE,
     LOTE,
     PETICION,
+    PORTAL,
     SERVIDOR,
     estado_de_las_ventas,
     frase_de_doyle_caido,
@@ -158,7 +162,7 @@ from continental.recepcion import (
     recepcion_como_json,
     recepcion_con_hueco,
 )
-from continental.sesiones import sesiones_como_json
+from continental.sesiones import prueba_como_json, resultados_de_la_prueba, sesiones_como_json
 from continental.sugerido import armar_la_lista
 from continental.transiciones import (
     motivo_para_no_cancelar,
@@ -3894,23 +3898,135 @@ def las_sesiones(
         log.exception("Doyle no contestó las sesiones")
         return _doyle_no_responde(type(exc))
 
+    # Las consultas y las pruebas se leen juntas y caen juntas: una etiqueta
+    # decidida con la mitad de lo que se sabe sería afirmar de más (gana la más
+    # reciente de las dos fuentes, y no se sabe cuál lo es sin leer las dos).
     evidencia_sin_leer = None
+    pruebas = None
     try:
-        evidencia = almacenamiento.evidencia_de_las_sesiones(cargar().negocio)
+        negocio = cargar().negocio
+        evidencia = almacenamiento.evidencia_de_las_sesiones(negocio)
+        pruebas = almacenamiento.ultimas_pruebas_de_las_sesiones(negocio)
     except Exception as exc:  # noqa: BLE001 — sin la evidencia, las tarjetas se ven igual
-        log.exception("No se pudieron leer las consultas guardadas para las sesiones")
+        log.exception("No se pudieron leer las consultas y pruebas guardadas para las sesiones")
         evidencia = None
         evidencia_sin_leer = {
-            "detalle": f"no se pudieron leer las consultas guardadas ({type(exc).__name__})",
+            "detalle": (
+                "no se pudieron leer las consultas y pruebas guardadas "
+                f"({type(exc).__name__})"
+            ),
             "que_hacer": _que_hacer(AL_LEER),
         }
 
     return {
         "ok": True,
-        "sesiones": sesiones_como_json(sesiones, evidencia),
+        "sesiones": sesiones_como_json(sesiones, evidencia, pruebas),
         "evidencia_sin_leer": evidencia_sin_leer,
         "visor": cargar().visor_de_doyle,
     }
+
+
+class PruebaPedida(BaseModel):
+    #: Los proveedores a probar; vacío o ausente quiere decir los cuatro. La
+    #: lista existe para «Probar todas» (ticket 04), que la manda vacía.
+    proveedores: list[str] = []
+
+
+@app.post("/api/sesiones/probar")
+def probar_las_sesiones(
+    request: Request,
+    cuerpo: PruebaPedida = PruebaPedida(),
+    doyle: ClienteDeDoyle = Depends(obtener_doyle),
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+):
+    """«Probar»: busca el término de prueba en el portal y dice si la sesión
+    **pasó del login** (`sirvió`) o la mandaron al login (`caducada`). ADR 0024.
+
+    **Espera a que termine**, con el mismo patrón que la sonda del lote
+    (`consultas.consultar_a_doyle`): pide la búsqueda, sondea hasta que Doyle
+    acaba o se cumple el tope. Es una ruta `def`: tarda lo que tarde un portal
+    (~9 s cada uno) en un hilo de FastAPI, sin bloquear al resto.
+
+    **Solo se guarda lo que terminó**: una fila de `pedidos.prueba_de_sesion`
+    por portal que contestó `sirvió` o `caducada`. Si Doyle no responde, o un
+    portal no contestó, **no se escribe nada de ese portal** y su tarjeta
+    conserva la etiqueta que tenía: no saber no es lo mismo que `caducada`.
+    La falla viaja con su `que_hacer` y **el tipo** de la excepción, nunca su
+    texto (regla 5). Sin firma: probar no cambia nada del pedido.
+
+    No lanza nada solo: la llama un botón. El candado de una prueba a la vez y
+    el portal que espera en el visor son del ticket 03.
+    """
+    pedidos: list[str] = []
+    for proveedor in cuerpo.proveedores:
+        limpio = proveedor.strip().lower()
+        if limpio not in NOMBRES_DE_PROVEEDOR:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "ok": False,
+                    "detalle": f"«{proveedor.strip()[:40]}» no es uno de los proveedores.",
+                    "que_hacer": _que_hacer(PETICION),
+                },
+            )
+        if limpio not in pedidos:
+            pedidos.append(limpio)
+
+    termino = termino_de_prueba_configurado()
+    if not termino:
+        log.error("Falta pedido.termino_de_prueba en config/continental.yml: no se puede probar.")
+        return {
+            "ok": False,
+            "detalle": (
+                "Falta `pedido.termino_de_prueba` en config/continental.yml: sin "
+                "ese término no hay qué buscar, y no se elige otro en silencio."
+            ),
+            "que_hacer": _que_hacer(CONFIGURACION),
+        }
+
+    tope_seg, cada_seg = ajustes_de_la_consulta()
+    try:
+        consulta = consultar_a_doyle(
+            doyle, termino, tope_seg=tope_seg, cada_seg=cada_seg, proveedores=tuple(pedidos)
+        )
+    except Exception as exc:  # noqa: BLE001 — Doyle caído es un hueco, no un 500
+        log.exception("Doyle no pudo probar las sesiones (término %r)", termino)
+        return {
+            "ok": False,
+            "detalle": f"Doyle no responde ({type(exc).__name__}): no se pudo probar nada.",
+            "que_hacer": _que_hacer(DOYLE),
+        }
+
+    resultados = resultados_de_la_prueba(consulta.lecturas, pedidos)
+    respuesta = prueba_como_json(resultados)
+    if not respuesta["ok"]:
+        # Ningún portal terminó: nada que guardar, y se dice por qué cada uno.
+        log.warning("%s probó las sesiones y ningún portal terminó.", quien(request))
+        respuesta["que_hacer"] = _que_hacer(PORTAL)
+        return respuesta
+
+    try:
+        almacenamiento.guardar_pruebas_de_las_sesiones(
+            cargar().negocio,
+            [PruebaDeLaSesion(r.proveedor, r.resultado) for r in resultados if r.resultado],
+        )
+    except Exception as exc:  # noqa: BLE001 — sin guardar, no hay etiqueta nueva
+        log.exception("No se pudo guardar el resultado de la prueba de sesiones")
+        return {
+            "ok": False,
+            "detalle": (
+                f"Se probó, pero no se pudo guardar el resultado ({type(exc).__name__}): "
+                "las tarjetas siguen diciendo lo de antes."
+            ),
+            "que_hacer": _que_hacer(AL_GUARDAR),
+        }
+
+    log.info(
+        "%s probó las sesiones: %s.",
+        quien(request),
+        ", ".join(f"{r.proveedor} {r.resultado or 'sin terminar'}" for r in resultados),
+    )
+    return respuesta
 
 
 # ------------------------------------------------------------------ Buscar

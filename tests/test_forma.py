@@ -47,6 +47,7 @@ TABLAS = {
     "precio_de_proveedor",
     "corrida_del_lote",
     "lectura_de_portal",
+    "prueba_de_sesion",
 }
 
 
@@ -90,8 +91,8 @@ def _revisar(lecturas) -> v.Informe:
 # ==========================================================================
 
 
-def test_las_esperadas_son_las_cinco_tablas_del_ddl():
-    """Las mismas cinco que `test_estan_las_cinco_tablas_y_ninguna_mas`."""
+def test_las_esperadas_son_las_tablas_del_ddl():
+    """Las mismas que `test_estan_las_cinco_tablas_y_ninguna_mas`."""
     assert set(_esperadas()) == TABLAS
 
 
@@ -109,6 +110,15 @@ def test_las_esperadas_traen_columnas_de_cada_migracion_y_ninguna_restriccion():
             f"{tabla}: se colaron {sorted(coladas)} como columnas. Una "
             f"restricción no es una columna, y la base nunca la tendría."
         )
+
+
+def test_la_tabla_de_pruebas_de_sesion_esta_en_el_ddl_con_sus_cinco_columnas():
+    """La séptima tabla (migración 0018, ADR 0024): una fila por portal probado,
+    sin firma y sin precio. Si el código nombra una columna que el DDL no
+    declara, `forma.py` compararía contra un DDL incompleto."""
+    assert _esperadas()["prueba_de_sesion"] == {
+        "prueba_de_sesion_id", "negocio", "proveedor", "probada_en", "resultado",
+    }
 
 
 def test_el_conteo_de_columnas_es_el_del_ddl():
@@ -171,6 +181,9 @@ def test_las_tablas_que_crea_una_migracion_tambien_apuntan_a_ella():
 
     assert de_que[("precio_de_proveedor", "precio_como_llego")].startswith("0003-")
     assert de_que[("corrida_del_lote", "termino_en")].startswith("0004-")
+    # La séptima, del 2026-10-05: la tabla entera es la columna testigo.
+    assert de_que[("prueba_de_sesion", "resultado")] == "0018-las-pruebas-de-sesion.sql"
+    assert de_que[("prueba_de_sesion", "probada_en")].startswith("0018-")
 
 
 def test_la_columna_la_trae_la_primera_migracion_que_la_nombra():
@@ -270,6 +283,25 @@ def test_una_tabla_que_no_existe_nombra_la_migracion_que_la_crea_y_crear_rol():
     assert falla.reparacion.index("0004-") < falla.reparacion.index("crear_rol.sql"), (
         "El GRANT va DESPUÉS de crear la tabla: no se otorga sobre lo que no existe."
     )
+
+
+def test_sin_la_tabla_de_pruebas_la_forma_falla_y_manda_a_la_0018_y_luego_a_crear_rol():
+    """Un despliegue con el código de «Probar» contra una base sin migrar: la
+    lectura de las tarjetas rebotaría. La forma lo ve ANTES del reinicio (paso 4
+    de `desplegar.sh`, ADR 0017) y nombra el archivo exacto; el GRANT de la
+    tabla nueva va después, porque una tabla nueva nace sin permisos."""
+    lecturas = [
+        l if l.tabla != "prueba_de_sesion"
+        else f.LecturaDeForma("prueba_de_sesion", None, "ProgrammingError", f.NO_EXISTE)
+        for l in _todo_en_orden()
+    ]
+    informe = _revisar(lecturas)
+    (falla,) = informe.fallas
+
+    assert informe.codigo_de_salida != 0
+    assert "0018-las-pruebas-de-sesion.sql" in falla.reparacion
+    assert "sql/crear_rol.sql" in falla.reparacion
+    assert falla.reparacion.index("0018-") < falla.reparacion.index("crear_rol.sql")
 
 
 def test_un_permiso_negado_no_se_confunde_con_una_migracion_que_falta():

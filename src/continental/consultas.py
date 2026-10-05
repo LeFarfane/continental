@@ -627,6 +627,22 @@ def ajustes_de_la_consulta() -> tuple[float, float]:
     )
 
 
+def termino_de_prueba_configurado() -> str | None:
+    """El término para probar las sesiones, de `config/continental.yml`.
+
+    Lo usan la sonda del lote y el botón «Probar» (ADR 0024, decisión 4): una
+    sola manera de comprobar una sesión. La misma capa delgada que
+    `ajustes_de_la_consulta`, con una diferencia a propósito: aquí **no hay un
+    valor de omisión que inventar** —elegir un término por la farmacia sería
+    adivinar—, así que sin la llave esto devuelve `None` y quien llama se
+    niega, ruidosamente, en vez de buscar otra cosa en silencio.
+    """
+    from continental.config import cargar
+
+    crudo = cargar().pedido.get("termino_de_prueba")
+    return str(crudo).strip() if crudo else None
+
+
 #: Cuánto puede durar **una vuelta entera** del botón de completar si el YAML
 #: no lo dice. Veinte minutos, que es un tercio del tope del lote nocturno, y
 #: ese número tiene una razón: esto lo aprieta una persona que está mirando la

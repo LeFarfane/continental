@@ -5131,6 +5131,43 @@ async function cancelarSesion(sesion, boton, idNota, alTerminar) {
   if (alTerminar) alTerminar();
 }
 
+// PROBAR UNA SESIÓN (ADR 0024, decisión 3): el botón busca el término de prueba
+// en ese portal y espera a que termine —unos segundos—. El servidor dice si la
+// sesión `sirvió` (pasó del login) o está `caducada`, lo guarda, y aquí solo se
+// pinta lo que contestó. Al terminar se avisa a quien pintó (`alTerminar`), que
+// vuelve a leer las tarjetas: la etiqueta nueva sale sin recargar la página.
+//
+// **Si la prueba no terminó** —Doyle no responde, el portal no contestó— no se
+// guardó nada y las tarjetas no cambian; el error se queda escrito en su nota,
+// fijo, y no en el aviso pasajero (enmienda del 2026-10-05 al ADR 0023). Va con
+// `al_guardar` porque, si la respuesta se pierde, la prueba pudo haberse
+// guardado: se manda a mirar las tarjetas.
+//
+// `proveedores` lleva un solo portal; vacía querría decir los cuatro, que es lo
+// que usará «Probar todas».
+async function probarSesion(sesion, boton, idNota, alTerminar) {
+  const rotulo = boton.textContent;
+  boton.disabled = true;
+  boton.textContent = 'Probando…';
+  nota(idNota, '');
+
+  const respuesta = await respuestaDe(fetch('/api/sesiones/probar', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ proveedores: [sesion.proveedor] }),
+  }), 'al_guardar');
+
+  boton.disabled = false;
+  boton.textContent = rotulo;
+  if (!respuesta.ok) {
+    notaDeFalla(idNota, respuesta);
+    return;
+  }
+  // Si algún portal no terminó, la frase del servidor lo dice y va en ámbar.
+  nota(idNota, respuesta.detalle, respuesta.algunos_sin_probar ? 'aviso' : '');
+  if (alTerminar) alTerminar();
+}
+
 // UN «SITIO» ES DONDE SE PINTAN LAS SESIONES: sus tarjetas y las dos notas que
 // las acompañan (lo que dijo el último paso, y la falla de leerlas). Hay dos
 // y son espejo, a propósito (ADR 0024): la pestaña Sesiones y la ventana que
@@ -5170,7 +5207,12 @@ const tarjetaDeSesion = (s, sitio, alTerminar) => {
     const abrir = botonDeAccion(s.rotulo_de_abrir,
       (b) => abrirSesion(s, b, sitio.accion, alTerminar), s.hay_que_abrirla ? 'tenida' : '');
     abrir.disabled = !s.se_puede_abrir;
-    botones.append(abrir);
+    // «Probar» sale en cada tarjeta menos en la que espera en el visor (esa
+    // ofrece «Ya entré» y «Cancelar», arriba). El servidor dice si se puede.
+    const probar = botonDeAccion('Probar',
+      (b) => probarSesion(s, b, sitio.accion, alTerminar));
+    probar.disabled = !s.se_puede_probar;
+    botones.append(abrir, probar);
   }
   tarjeta.append(titulo, frase, botones);
   if (s.por_que_no_se_abre) {

@@ -771,6 +771,8 @@ def test_el_puente_no_costo_una_tabla(cliente):
         "corrida_del_lote",
         # La sexta, del 2026-09-28: lo que contestó cada portal (`lecturas_de_portal.py`).
         "lectura_de_portal",
+        # La séptima, del 2026-10-05: lo que dijo un portal al probarlo (ADR 0024).
+        "prueba_de_sesion",
     )
 
 

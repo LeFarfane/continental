@@ -47,6 +47,7 @@ from continental.almacenamiento import (
     PedidoSugeridoDuplicado,
     PedidoSugeridoGuardado,
     PrecioDeProveedor,
+    PruebaDeLaSesion,
     RenglonConciliado,
     RenglonGuardado,
     RenglonRecibido,
@@ -71,6 +72,7 @@ from continental.almacenamiento import (
     revisar_el_renglon,
     revisar_la_corrida,
     revisar_la_lista,
+    revisar_la_prueba,
     ultimo_por_proveedor,
 )
 from continental.doyle import (
@@ -85,7 +87,7 @@ from continental.doyle import (
     SesionDeProveedor,
     VigiladoDesconocido,
 )
-from continental.precios import SESION_CADUCADA, LecturaDePrecio
+from continental.precios import MOTIVOS_QUE_PASARON_DEL_LOGIN, SESION_CADUCADA, LecturaDePrecio
 from continental.transiciones import (
     motivo_para_no_cancelar,
     motivo_para_no_corregir,
@@ -519,6 +521,12 @@ class AlmacenamientoFalso:
     corridas: list[dict] = field(default_factory=list)
     #: Lo que contestó cada portal (`pedidos.lectura_de_portal`, 2026-09-28).
     lecturas_de_portal: list[dict] = field(default_factory=list)
+    #: Las pruebas de sesión (`pedidos.prueba_de_sesion`, ADR 0024): una lista y
+    #: no un diccionario por portal, porque la tabla solo crece y la última se
+    #: elige al leer, no al escribir. Cada fila lleva `probada_en`, que el doble
+    #: pone con la hora de ahora —lo que hace el `DEFAULT now()`—; una prueba
+    #: puede sembrar la suya con la hora que necesite.
+    pruebas_de_sesion: list[dict] = field(default_factory=list)
     #: Las filas de `pedidos.pedido` (ticket 20). Un diccionario por fila, con
     #: los nombres de las columnas de verdad, igual que las listas y los
     #: renglones: una prueba tiene que poder afirmar sobre lo que **quedó
@@ -2194,12 +2202,50 @@ class AlmacenamientoFalso:
         for f in self.precios:
             if f["negocio"] != negocio:
                 continue
-            e = por_proveedor.setdefault(f["proveedor"], {"dio_precio_en": None, "caduco_en": None})
-            if f.get("precio") is not None:
-                e["dio_precio_en"] = max(filter(None, (e["dio_precio_en"], f["consultado_en"])))
+            e = por_proveedor.setdefault(f["proveedor"], {"paso_el_login_en": None, "caduco_en": None})
+            # La misma condición del `filter`: precio, o un motivo en que el
+            # portal sí contestó algo suyo.
+            if f.get("precio") is not None or f.get("motivo") in MOTIVOS_QUE_PASARON_DEL_LOGIN:
+                e["paso_el_login_en"] = max(filter(None, (e["paso_el_login_en"], f["consultado_en"])))
             if f.get("motivo") == SESION_CADUCADA:
                 e["caduco_en"] = max(filter(None, (e["caduco_en"], f["consultado_en"])))
         return {p: EvidenciaDeLaSesion(proveedor=p, **e) for p, e in por_proveedor.items()}
+
+    def guardar_pruebas_de_las_sesiones(self, negocio: str, pruebas) -> int:
+        """Los `INSERT` de `_GUARDAR_PRUEBA_DE_SESION`, con su `CHECK`.
+
+        Todo o nada, como la transacción de verdad: se revisan todas antes de
+        escribir ninguna. `probada_en` lo pone aquí el doble con la hora de
+        ahora, que es lo que la tabla hace con su `DEFAULT now()`.
+        """
+        self._revisar()
+        filas = [
+            {"negocio": negocio, "proveedor": p.proveedor, "resultado": p.resultado}
+            for p in pruebas
+        ]
+        for fila in filas:
+            revisar_la_prueba(fila)
+        for fila in filas:
+            fila["probada_en"] = dt.datetime.now(dt.UTC)
+            self.pruebas_de_sesion.append(fila)
+        return len(filas)
+
+    def ultimas_pruebas_de_las_sesiones(self, negocio: str) -> dict[str, PruebaDeLaSesion]:
+        """El `distinct on (proveedor) ... order by probada_en desc` de
+        `_ULTIMAS_PRUEBAS_DE_SESION`: la última por portal. El orden de las
+        filas desempata, que es lo que el id hace allá."""
+        self._revisar()
+        ultimas: dict[str, dict] = {}
+        for f in self.pruebas_de_sesion:
+            if f["negocio"] != negocio:
+                continue
+            anterior = ultimas.get(f["proveedor"])
+            if anterior is None or f["probada_en"] >= anterior["probada_en"]:
+                ultimas[f["proveedor"]] = f
+        return {
+            p: PruebaDeLaSesion(proveedor=p, resultado=f["resultado"], probada_en=f["probada_en"])
+            for p, f in ultimas.items()
+        }
 
     # ------------------------------------------ la corrida del lote (19)
 

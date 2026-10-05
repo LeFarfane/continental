@@ -689,6 +689,7 @@ CUERPOS = {
     "LoteDeConciliacion": {"renglones": [{"renglon_id": 1, "compras": [1]}]},
     "BusquedaNueva": {"termino": "7501000000001"},
     "ArticuloNuevo": {"termino": "7501000000001", "proveedores": ["nadro"]},
+    "PruebaPedida": {"proveedores": ["nadro"]},
 }
 
 #: Con qué se prueba cada parámetro de ruta. Se prueban todos y la ruta se
@@ -798,6 +799,13 @@ def semilla(cliente_sin_relanzar):
             for proveedor in ("nadro", "levic", "vicma", "quepharma")
         }
         for p in (1, 2, 3, 4)
+    }
+    # El término con el que «Probar» comprueba las sesiones (`pedido
+    # .termino_de_prueba`): sin respuesta preparada quedaría `pendiente` y la
+    # espera dormiría de verdad hasta su tope.
+    doyle.resultados_por_termino[config.cargar().pedido["termino_de_prueba"]] = {
+        proveedor: respuesta_lista(proveedor, [("PARACETAMOL 500 MG", "12.50", "40")])
+        for proveedor in ("nadro", "levic", "vicma", "quepharma")
     }
     registro = RegistroDeConsultas(lanzar=lambda tarea: tarea())
     app.dependency_overrides.update({

@@ -57,6 +57,7 @@ TABLAS = (
     "pedidos.precio_de_proveedor",
     "pedidos.corrida_del_lote",
     "pedidos.lectura_de_portal",
+    "pedidos.prueba_de_sesion",
 )
 
 #: Lo único que Continental lee del almacén. Cinco y ninguna más: `fct_merma`,
@@ -405,3 +406,63 @@ def test_el_verificador_arma_sus_listas_en_orden_ascendente():
         f"{culpables}. El `esperado` con el que se comparan está escrito en "
         "orden ascendente, así que el caso saldría [MAL] con la base bien."
     )
+
+
+# --------------------------------------- las pruebas de sesión (ADR 0024, 0018)
+#
+# La séptima tabla es la única a la que el rol NO puede hacer UPDATE: una prueba
+# es un hecho del pasado y el permiso, no la buena intención del código, es lo
+# que garantiza que solo crece (regla 6 de CLAUDE.md).
+
+MIGRACION_0018 = SQL / "migraciones" / "0018-las-pruebas-de-sesion.sql"
+
+
+def _sin_comentarios(texto: str) -> str:
+    return re.sub(r"--[^\n]*", "", texto)
+
+
+def test_el_rol_inserta_y_lee_las_pruebas_pero_no_las_actualiza_ni_las_borra():
+    concedidos = [
+        l for l in _sin_comentarios(_texto(CREAR_ROL)).splitlines()
+        if "pedidos.prueba_de_sesion" in l
+    ]
+
+    assert [" ".join(l.split()) for l in concedidos] == [
+        "GRANT SELECT, INSERT ON pedidos.prueba_de_sesion TO continental;"
+    ]
+
+
+def test_la_migracion_0018_trae_su_propio_grant_sin_update():
+    """Como la 0015: un permiso no se da sobre una tabla que no existía."""
+    sentencias = _sin_comentarios(_texto(MIGRACION_0018))
+
+    assert "GRANT SELECT, INSERT ON pedidos.prueba_de_sesion TO continental;" in sentencias
+    assert not re.search(r"\bUPDATE\b|\bDELETE\b", sentencias)
+
+
+def test_la_tabla_de_pruebas_dice_negocio_y_limita_el_resultado_con_su_acento():
+    """Una sola definición, en tres lugares que dicen lo mismo: el DDL, la
+    migración y el vocabulario del código."""
+    from continental.almacenamiento import RESULTADOS_DE_LA_PRUEBA
+
+    ddl = _cuerpo_de_tabla(_texto(CREAR_TABLAS), "pedidos.prueba_de_sesion")
+    migracion = _texto(MIGRACION_0018)
+
+    assert RESULTADOS_DE_LA_PRUEBA == ("sirvió", "caducada")
+    for texto in (ddl, migracion):
+        assert "CHECK (resultado IN ('sirvió', 'caducada'))" in texto
+        assert "probada_en          timestamptz   NOT NULL DEFAULT now()" in texto
+        # Sin firma y sin precio (ADR 0024, decisión 6).
+        assert not re.search(r"_por\b|precio", _sin_comentarios(texto))
+
+
+def test_el_verificador_espera_siete_tablas_y_exceptua_el_update_de_las_pruebas():
+    verificador = _texto(VERIFICAR_ROL)
+
+    assert "'Las siete tablas existen y NO las posee continental'" in verificador
+    assert "SELECT count(*) = 7" in verificador
+    # La comprobación 6 no le exige UPDATE a la tabla de pruebas...
+    assert "NOT (c.relname = 'prueba_de_sesion' AND p = 'UPDATE')" in verificador
+    # ... y la 41 comprueba que de verdad no lo tenga; la 42, el acento.
+    assert "'Las pruebas de sesión solo se agregan: el rol no puede actualizarlas'" in verificador
+    assert "'Los dos resultados de una prueba sobrevivieron al CHECK, con su acento'" in verificador

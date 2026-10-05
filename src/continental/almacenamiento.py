@@ -65,6 +65,7 @@ from sqlalchemy import text
 from continental.clasificacion import ABARROTE, MEDICAMENTO, SIN_CLASIFICAR
 from continental.precios import (
     MOTIVOS,
+    MOTIVOS_QUE_PASARON_DEL_LOGIN,
     SESION_CADUCADA,
     LecturaDePrecio,
     nombre_del_proveedor,
@@ -2050,18 +2051,62 @@ class EvidenciaDeLaSesion:
     2026-09-19 los cuatro decían `guardada` con las cuatro caducadas—. Lo que
     sí prueba algo está en `pedidos.precio_de_proveedor`:
 
-    - `dio_precio_en`: la última lectura **con precio**. Un precio solo llega
-      con la sesión viva, así que es la prueba de que sirvió entonces.
+    - `paso_el_login_en`: la última lectura en que el portal **pasó del
+      login**: con precio, `sin resultados`, `no empareja` o `varios
+      resultados`. Hasta el ADR 0024 era "dio precio", y un portal como
+      QuePharma, que casi nunca empareja, no sumaba nunca; lo que prueba que la
+      sesión vivía es que el portal contestó algo suyo y no el login.
     - `caduco_en`: la última lectura con motivo `la sesión caducó`: el portal
       mandó al login.
 
-    Las demás lecturas —sin resultados, no empareja, el portal no contestó—
-    no prueban ni lo uno ni lo otro y no cuentan.
+    Las demás lecturas —el portal no contestó, una ventana abierta, no se sabe
+    leer, no alcanzó el tiempo— no prueban ni lo uno ni lo otro y no cuentan.
+    Las pruebas del botón «Probar» no viven aquí sino en `PruebaDeLaSesion`.
     """
 
     proveedor: str
-    dio_precio_en: dt.datetime | None = None
+    paso_el_login_en: dt.datetime | None = None
     caduco_en: dt.datetime | None = None
+
+
+#: Lo que una prueba puede dejar escrito (`pedidos.prueba_de_sesion`, ADR 0024):
+#: el portal contestó sin mandarnos al login, o nos mandó. Solo esos dos: una
+#: prueba que no terminó no se guarda, porque no saber no es lo mismo que
+#: `caducada`. Los repite `ck_prueba_resultado` del DDL.
+RESULTADO_SIRVIO = "sirvió"
+RESULTADO_CADUCADA = "caducada"
+RESULTADOS_DE_LA_PRUEBA: tuple[str, ...] = (RESULTADO_SIRVIO, RESULTADO_CADUCADA)
+
+
+@dataclass(frozen=True, slots=True)
+class PruebaDeLaSesion:
+    """Una fila de `pedidos.prueba_de_sesion`: qué dijo un portal cuando alguien
+    apretó «Probar».
+
+    `probada_en` lo pone la base con `now()`: quien guarda lo manda en `None`, y
+    lo que se lee siempre lo trae. **Sin firma** (ADR 0024, decisión 6): probar
+    no cambia nada del pedido, así que no hay nada que auditar.
+    """
+
+    proveedor: str
+    resultado: str
+    probada_en: dt.datetime | None = None
+
+
+def revisar_la_prueba(columnas: dict) -> None:
+    """El `CHECK` de `pedidos.prueba_de_sesion`, escrito en Python.
+
+    Lo llaman las dos implementaciones antes de escribir, igual que
+    `revisar_la_corrida`: el `resultado` decide qué etiqueta lleva la tarjeta, y
+    uno fuera del vocabulario se leería como "no se probó".
+    """
+    if not columnas["negocio"]:
+        raise ValueError("ck_prueba_negocio: una prueba tiene que decir de qué negocio es.")
+    if columnas["resultado"] not in RESULTADOS_DE_LA_PRUEBA:
+        raise ValueError(
+            f"{columnas['resultado']!r} no es un resultado: ck_prueba_resultado "
+            f"solo conoce {RESULTADOS_DE_LA_PRUEBA}."
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -2936,6 +2981,27 @@ class AlmacenamientoDelPedido(Protocol):
         Un proveedor que nunca se consultó **no aparece**, igual que en
         `precios_de_la_lista`. Es una lectura: no escribe nada.
         """
+        ...
+
+    def guardar_pruebas_de_las_sesiones(
+        self, negocio: str, pruebas: Sequence[PruebaDeLaSesion]
+    ) -> int:
+        """Escribe una fila en `pedidos.prueba_de_sesion` por cada portal que
+        terminó de probarse (ADR 0024, decisión 6). Devuelve cuántas quedaron.
+
+        **Solo inserta**, y todas en una transacción: una prueba de cuatro
+        portales no se queda a medias. La hora la pone la base. Quien la llama
+        guarda **solo** las que terminaron en `sirvió` o `caducada`; una prueba
+        que no terminó no escribe nada, y la tarjeta conserva su etiqueta.
+        """
+        ...
+
+    def ultimas_pruebas_de_las_sesiones(
+        self, negocio: str
+    ) -> dict[str, PruebaDeLaSesion]:
+        """Por proveedor, la prueba guardada más reciente. Un proveedor que
+        nunca se probó **no aparece**, igual que en `evidencia_de_las_sesiones`.
+        Es una lectura: no escribe nada."""
         ...
 
     def guardar_lecturas_de_portal(
@@ -3947,14 +4013,42 @@ _GUARDAR_LECTURA_DE_PORTAL = text(
     """
 )
 
+# "Pasó del login" es precio **o** uno de los motivos en que el portal sí
+# contestó algo suyo (`precios.MOTIVOS_QUE_PASARON_DEL_LOGIN`); los motivos
+# viajan como parámetro para que el acento de `la sesión caducó` viva en
+# `precios.py` y no copiado aquí.
 _EVIDENCIA_DE_LAS_SESIONES = text(
     """
     select proveedor,
-           max(consultado_en) filter (where precio is not null) as dio_precio_en,
+           max(consultado_en) filter (
+               where precio is not null or motivo = any(:pasaron)
+           ) as paso_el_login_en,
            max(consultado_en) filter (where motivo = :caducada) as caduco_en
       from pedidos.precio_de_proveedor
      where negocio = :negocio
      group by proveedor
+    """
+)
+
+# Una fila por portal probado. `probada_en` y su `DEFAULT now()` los pone la
+# base. Sin `on conflict`: la tabla solo crece, y dos pruebas del mismo portal
+# son dos hechos.
+_GUARDAR_PRUEBA_DE_SESION = text(
+    """
+    insert into pedidos.prueba_de_sesion (negocio, proveedor, resultado)
+    values (:negocio, :proveedor, :resultado)
+    """
+)
+
+# La más reciente por portal. El desempate por id va igual que en
+# `_ULTIMA_CORRIDA`: dos pruebas en el mismo microsegundo dejarían que el plan
+# de Postgres decidiera cuál es la última.
+_ULTIMAS_PRUEBAS_DE_SESION = text(
+    """
+    select distinct on (proveedor) proveedor, resultado, probada_en
+      from pedidos.prueba_de_sesion
+     where negocio = :negocio
+     order by proveedor, probada_en desc, prueba_de_sesion_id desc
     """
 )
 
@@ -5242,7 +5336,11 @@ class AlmacenamientoPostgres:
             filas = (
                 conexion.execute(
                     _EVIDENCIA_DE_LAS_SESIONES,
-                    {"negocio": negocio, "caducada": SESION_CADUCADA},
+                    {
+                        "negocio": negocio,
+                        "caducada": SESION_CADUCADA,
+                        "pasaron": list(MOTIVOS_QUE_PASARON_DEL_LOGIN),
+                    },
                 )
                 .mappings()
                 .all()
@@ -5250,8 +5348,44 @@ class AlmacenamientoPostgres:
         return {
             f["proveedor"]: EvidenciaDeLaSesion(
                 proveedor=f["proveedor"],
-                dio_precio_en=f["dio_precio_en"],
+                paso_el_login_en=f["paso_el_login_en"],
                 caduco_en=f["caduco_en"],
+            )
+            for f in filas
+        }
+
+    def guardar_pruebas_de_las_sesiones(
+        self, negocio: str, pruebas: Sequence[PruebaDeLaSesion]
+    ) -> int:
+        filas = [
+            {"negocio": negocio, "proveedor": p.proveedor, "resultado": p.resultado}
+            for p in pruebas
+        ]
+        # Se revisan todas antes de abrir la transacción: una fuera del
+        # vocabulario no deja escritas las que sí servían.
+        for fila in filas:
+            revisar_la_prueba(fila)
+        if not filas:
+            return 0
+        with self._motor().begin() as conexion:
+            return sum(
+                conexion.execute(_GUARDAR_PRUEBA_DE_SESION, fila).rowcount for fila in filas
+            )
+
+    def ultimas_pruebas_de_las_sesiones(
+        self, negocio: str
+    ) -> dict[str, PruebaDeLaSesion]:
+        with self._motor().connect() as conexion:
+            filas = (
+                conexion.execute(_ULTIMAS_PRUEBAS_DE_SESION, {"negocio": negocio})
+                .mappings()
+                .all()
+            )
+        return {
+            f["proveedor"]: PruebaDeLaSesion(
+                proveedor=f["proveedor"],
+                resultado=f["resultado"],
+                probada_en=f["probada_en"],
             )
             for f in filas
         }

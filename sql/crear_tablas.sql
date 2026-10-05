@@ -132,6 +132,11 @@
 --      que el detalle del renglón lo enseñe sin releer el catálogo. NO crea
 --      tabla, y NO rompe el código de antes: la columna admite nulos y no
 --      tiene DEFAULT.
+--  18. `sql/migraciones/0018-las-pruebas-de-sesion.sql` (2026-10-05, ADR
+--      0024), que crea la SÉPTIMA tabla, `pedidos.prueba_de_sesion`: una fila
+--      por portal cada vez que alguien aprieta «Probar». Es la primera que el
+--      rol NO puede actualizar: solo INSERT y SELECT. Como la 0003, la 0004 y
+--      la 0015, exige volver a correr `crear_rol.sql` (o trae su propio GRANT).
 --
 -- Las trece son idempotentes, así que correrlas sobre una base que ya las
 -- tiene -o sobre una recién creada con este archivo- no rompe nada.
@@ -1695,6 +1700,53 @@ CREATE TABLE IF NOT EXISTS pedidos.lectura_de_portal (
 -- "¿Cómo se movió el precio de esta clave?", por día: la pregunta de Metabase.
 CREATE INDEX IF NOT EXISTS ix_lectura_clave_fecha
     ON pedidos.lectura_de_portal (negocio, clave, fecha);
+
+-- --------------------------------------------------------------------------
+-- 7) Las pruebas de sesión (2026-10-05, ADR 0024, migración 0018).
+-- --------------------------------------------------------------------------
+--
+-- «PROBAR» BUSCA «paracetamol 500» EN UN PORTAL y dice si la sesión pasó del
+-- login (`sirvió`) o la mandaron al login (`caducada`). **Esta tabla guarda
+-- ese resultado**, una fila por portal probado, para que la tarjeta de
+-- Sesiones muestre lo más reciente que se sepa (venga de una prueba o de una
+-- consulta) y para poder medir algún día cuánto dura de verdad una sesión de
+-- cada portal -el ADR 0019 solo lo conoce por dos incidentes-.
+--
+-- SOLO CRECE, y es la PRIMERA tabla del esquema a la que el rol no le puede
+-- hacer UPDATE (`crear_rol.sql`): una prueba es un hecho del pasado.
+--
+-- **Sin firma y sin precio**, a propósito. Probar no cambia nada del pedido,
+-- así que no hay nada que auditar (ADR 0024, decisión 6); y lo que cada portal
+-- contestó de precio ya lo guardan las consultas. Solo se guarda lo que
+-- terminó: una prueba que no terminó (Doyle caído, el portal no contestó) no
+-- escribe nada, porque no saber no es lo mismo que `caducada`.
+--
+-- `probada_en` lo pone la base del mismo `now()` de siempre, con zona.
+CREATE TABLE IF NOT EXISTS pedidos.prueba_de_sesion (
+    prueba_de_sesion_id bigint        GENERATED ALWAYS AS IDENTITY,
+    negocio             text          NOT NULL,
+    proveedor           text          NOT NULL,
+    probada_en          timestamptz   NOT NULL DEFAULT now(),
+    resultado           text          NOT NULL,
+
+    CONSTRAINT pk_prueba_de_sesion
+        PRIMARY KEY (prueba_de_sesion_id),
+
+    CONSTRAINT ck_prueba_negocio
+        CHECK (negocio <> ''),
+
+    -- Con su acento, igual que 'en tránsito': la comprobación 41 de
+    -- `verificar_rol.sql` lo lee de vuelta, porque si psql mandó este archivo
+    -- como latin1 el CHECK guarda el acento deformado y la primera prueba
+    -- rebota con una violación que nadie sabría explicar.
+    CONSTRAINT ck_prueba_resultado
+        CHECK (resultado IN ('sirvió', 'caducada'))
+);
+
+-- "¿Cuál fue la última prueba de este portal?": la pregunta de cada carga de
+-- la pestaña Sesiones.
+CREATE INDEX IF NOT EXISTS ix_prueba_proveedor_cuando
+    ON pedidos.prueba_de_sesion (negocio, proveedor, probada_en);
 
 -- --------------------------------------------------------------------------
 -- Qué quedó

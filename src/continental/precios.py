@@ -189,6 +189,22 @@ MOTIVOS: tuple[str, ...] = (
     PRECIO_ILEGIBLE,
 )
 
+#: Los motivos con los que un portal demuestra que **la sesión pasó del login**
+#: (ADR 0024, decisión 5): contestó algo suyo —no hay ese producto, no es el
+#: que se buscaba, hay varios, o la fila llegó sin precio legible— en vez de
+#: mandar al login. Con un precio también pasó, y ése no lleva motivo.
+#:
+#: Quedan fuera los que **no dicen nada** de la sesión: el portal no contestó,
+#: quedó una ventana abierta, no se sabe leer la página, no alcanzó el tiempo.
+#: `SESION_CADUCADA` es el contrario. Los usan la etiqueta de la tarjeta de
+#: Sesiones (`sesiones.py`) y el botón «Probar»: una sola definición de "sirvió".
+MOTIVOS_QUE_PASARON_DEL_LOGIN: tuple[str, ...] = (
+    SIN_RESULTADOS,
+    VARIOS_RESULTADOS,
+    NO_EMPAREJA,
+    PRECIO_ILEGIBLE,
+)
+
 # Cómo se le dice cada motivo al encargado.
 #
 # El ticket 15 pide que **cada precio faltante diga su motivo**, y lo pide con

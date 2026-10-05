@@ -189,14 +189,24 @@ GRANT SELECT, INSERT, UPDATE ON pedidos.corrida_del_lote   TO continental;
 -- misma razón que el precio lleva UPDATE (arriba): un solo GRANT para todas.
 GRANT SELECT, INSERT, UPDATE ON pedidos.lectura_de_portal  TO continental;
 
--- Sin GRANT sobre secuencias, y no es un olvido: las seis llaves son
+-- La séptima, desde el 2026-10-05 (ADR 0024): lo que dijo un portal cuando
+-- alguien apretó «Probar». **SOLO SELECT E INSERT, sin UPDATE**: es la primera
+-- tabla del esquema que no lleva el GRANT de siempre, y no es descuido. Las
+-- demás llevan UPDATE por la razón escrita arriba (una sola comprobación 6
+-- para todas); a ésta se le quita porque una prueba es un hecho del pasado y
+-- nada la corrige, y el permiso es la garantía de que solo crece (regla 6 de
+-- CLAUDE.md). La comprobación 6 de `verificar_rol.sql` la exceptúa de UPDATE y
+-- la 41 comprueba que de verdad no lo tenga. Tampoco DELETE, como ninguna.
+GRANT SELECT, INSERT ON pedidos.prueba_de_sesion TO continental;
+
+-- Sin GRANT sobre secuencias, y no es un olvido: las siete llaves son
 -- `GENERATED ALWAYS AS IDENTITY`, y la secuencia de una columna de identidad
 -- es interna a la tabla -- el INSERT sobre la tabla basta. Con `serial` haría
 -- falta además `USAGE` sobre la secuencia, un permiso extra fácil de olvidar
 -- que se manifiesta como "permission denied for sequence" en el primer INSERT
 -- de producción. La comprobación 16 de `verificar_rol.sql` confirma que todas
 -- siguen siendo de identidad -- y lo hace contra el NÚMERO DE TABLAS del
--- esquema, no contra un número escrito a mano, para que la sexta entre sola.
+-- esquema, no contra un número escrito a mano, para que la séptima entre sola.
 
 
 -- --------------------------------------------------------------------------

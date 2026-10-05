@@ -101,22 +101,23 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
                   WHERE nspname = 'pedidos'
                     AND pg_get_userbyid(nspowner) <> 'continental'))),
 
--- SEIS desde el 2026-09-28, que estrenó `pedidos.lectura_de_portal`; eran cinco
+-- SIETE desde el 2026-10-05, que estrenó `pedidos.prueba_de_sesion` (ADR
+-- 0024); eran seis desde el 2026-09-28 (`pedidos.lectura_de_portal`), cinco
 -- desde el ticket 19 (`pedidos.corrida_del_lote`, ADR 0007), cuatro desde el
 -- ticket 12 y tres al principio. El número está
--- escrito a mano A PROPÓSITO: si alguien crea una sexta tabla en este esquema
+-- escrito a mano A PROPÓSITO: si alguien crea una octava tabla en este esquema
 -- sin pasar por `crear_tablas.sql`, esta comprobación se pone en [MAL] en vez
 -- de darla por buena. El DDL se corre a mano una vez, así que agregar una
 -- tabla es un acto deliberado y debe verse como tal.
 (4,
- 'Las seis tablas existen y NO las posee continental',
- '6 tablas, con otro propietario',
+ 'Las siete tablas existen y NO las posee continental',
+ '7 tablas, con otro propietario',
  (SELECT format('%s tabla(s): %s', count(*),
                 coalesce(string_agg(c.relname || ' -> ' || pg_get_userbyid(c.relowner),
                                     ', ' ORDER BY c.relname), '--'))
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname = 'pedidos' AND c.relkind = 'r'),
- (SELECT count(*) = 6
+ (SELECT count(*) = 7
          AND count(*) FILTER (WHERE pg_get_userbyid(c.relowner) = 'continental') = 0
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname = 'pedidos' AND c.relkind = 'r')),
@@ -139,14 +140,18 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
  NULL),
 
 -- Dinámico a propósito: recorre TODAS las tablas de `pedidos`, así que la
--- quinta -- y la sexta, el día que la haya-- entra sola. Es la comprobación
+-- quinta -- y la octava, el día que la haya-- entra sola. Es la comprobación
 -- que caza el olvido más caro de este esquema: una migración que crea una
 -- tabla y a la que nadie le corrió `crear_rol.sql` después. El GRANT no se
 -- puede dar sobre una tabla que no existía, y el síntoma aparece en atlas como
 -- "permission denied for table ..." en el primer INSERT -- o, con la quinta, a
 -- las 22:00 y sin nadie mirando.
+-- **`prueba_de_sesion` es la excepción y solo de UPDATE** (ADR 0024): solo
+-- crece, así que el rol tiene SELECT e INSERT y nada más. Que no lo tenga lo
+-- afirma la 41; aquí se le exige lo que sí debe poder, o la excepción taparía
+-- también un INSERT que falta.
 (6,
- 'continental puede SELECT, INSERT y UPDATE sus seis tablas',
+ 'continental puede SELECT, INSERT y UPDATE sus siete tablas (la de pruebas, sin UPDATE)',
  'no le falta ninguno',
  (SELECT coalesce(string_agg(x.tabla || ': le falta ' || x.priv, '; '
                              ORDER BY x.tabla, x.priv),
@@ -155,7 +160,8 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
             FROM pg_class c
             JOIN pg_namespace n ON n.oid = c.relnamespace,
                  unnest(ARRAY['SELECT', 'INSERT', 'UPDATE']) AS p
-           WHERE n.nspname = 'pedidos' AND c.relkind = 'r') x
+           WHERE n.nspname = 'pedidos' AND c.relkind = 'r'
+             AND NOT (c.relname = 'prueba_de_sesion' AND p = 'UPDATE')) x
    WHERE NOT has_table_privilege('continental', x.oid, x.priv)),
  NULL),
 
@@ -843,6 +849,45 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
                AND NOT a.attisdropped
                AND a.attname = 'anaquel'),
            'NO EXISTE anaquel')),
+ NULL),
+
+-- LAS PRUEBAS DE SESIÓN SOLO SE AGREGAN (ADR 0024, migración 0018). Es la única
+-- tabla de `pedidos` donde el permiso, y no el código, es lo que lo garantiza:
+-- las demás cambian de estado con UPDATE; ésta registra hechos del pasado. Si
+-- alguien le da el GRANT de siempre (`SELECT, INSERT, UPDATE`) por costumbre,
+-- esto se pone en [MAL] en vez de dejarla pisable (regla 6 de CLAUDE.md).
+(41,
+ 'Las pruebas de sesión solo se agregan: el rol no puede actualizarlas',
+ 'SELECT e INSERT, sin UPDATE',
+ (SELECT CASE
+           WHEN to_regclass('pedidos.prueba_de_sesion') IS NULL
+                THEN 'NO EXISTE pedidos.prueba_de_sesion'
+           ELSE (SELECT string_agg(p, ', ' ORDER BY p)
+                   FROM unnest(ARRAY['INSERT', 'SELECT', 'UPDATE']) AS p
+                  WHERE has_table_privilege('continental',
+                                            to_regclass('pedidos.prueba_de_sesion'), p))
+         END),
+ NULL),
+
+-- LOS DOS RESULTADOS, LEÍDOS DE VUELTA CON SU ACENTO. Es la misma trampa que la
+-- 15 caza para 'en tránsito': si psql mandó el DDL como latin1, el CHECK guardó
+-- 'sirviÃ³' y el primer INSERT de «Probar» rebota con una violación de
+-- restricción que nadie sabría explicar -- y como una prueba que no se guarda
+-- deja la etiqueta como estaba, se vería como un botón que no hace nada.
+(42,
+ 'Los dos resultados de una prueba sobrevivieron al CHECK, con su acento',
+ 'están los dos',
+ coalesce(
+   (SELECT CASE
+             WHEN pg_get_constraintdef(con.oid) LIKE '%sirvió%'
+              AND pg_get_constraintdef(con.oid) LIKE '%caducada%'
+                  THEN 'están los dos'
+             ELSE pg_get_constraintdef(con.oid)
+           END
+      FROM pg_constraint con
+     WHERE con.conrelid = to_regclass('pedidos.prueba_de_sesion')
+       AND con.conname = 'ck_prueba_resultado'),
+   'NO EXISTE ck_prueba_resultado'),
  NULL),
 
 -- AVISO y no MAL: una tabla temporal vive en la sesión, no puede leer nada que

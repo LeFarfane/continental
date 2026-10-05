@@ -420,7 +420,8 @@ def test_la_pantalla_marca_el_renglon_que_no_es_medicamento(cliente):
     #
     # Las dos de Sesiones (2026-09-28): leer las tarjetas y «Cancelar».
     # Abrir y «Ya entré» son las de siempre. Sube de 26 a 28.
-    assert portada.count("fetch('/api/") == 28
+    # La de «Probar» (2026-10-05, ADR 0024): `POST /api/sesiones/probar`. Sube de 28 a 29.
+    assert portada.count("fetch('/api/") == 29
 
 
 # ------------------------------------------------------------------ ayudas

@@ -89,3 +89,33 @@ persona no tenía nada parecido.
   solas.
 - **Condición de revisión:** si la ventana cada hora termina cerrándose sin
   leerla, se revisa el intervalo o la regla de cuándo aparece.
+
+## Enmienda del 2026-10-05 — cómo quedó el botón «Probar» (ticket 02)
+
+- **Ruta:** `POST /api/sesiones/probar`, con `{"proveedores": [...]}`; vacía o
+  sin cuerpo quiere decir los cuatro. Espera a que Doyle termine con el mismo
+  patrón de la sonda (`consultas.consultar_a_doyle`), una sola búsqueda del
+  término de prueba para todos los pedidos.
+- **Tabla:** `pedidos.prueba_de_sesion` (migración `0018`), la séptima: negocio,
+  proveedor, `probada_en` (`timestamptz`, `DEFAULT now()`) y `resultado`, que el
+  `CHECK` limita a `sirvió` o `caducada`. Sin firma y sin precio. **Es la
+  primera tabla a la que el rol `continental` solo hace `SELECT` e `INSERT`**:
+  las demás llevan `UPDATE` por la razón de `crear_rol.sql`; a ésta se le quita
+  porque una prueba es un hecho del pasado y el permiso, no el código, es lo que
+  garantiza que solo crece (regla 6). `verificar_rol.sql` lo exceptúa en la
+  comprobación 6 y lo comprueba en la 41; la 42 lee el acento del `CHECK`.
+- **Qué cuenta como «pasó del login»:** un precio, o los motivos `sin
+  resultados`, `no empareja`, `varios resultados` y `precio ilegible`
+  (`precios.MOTIVOS_QUE_PASARON_DEL_LOGIN`). Los dos últimos no los nombraba la
+  decisión 5, pero en los dos el portal devolvió filas suyas: con otra lectura
+  la prueba de un portal que contestó quedaría en «no se pudo probar». Una sola
+  definición para la prueba, para la etiqueta y para el SQL de la evidencia.
+  Los que no dicen nada de la sesión (el portal no contestó, ventana abierta,
+  no se sabe leer, no alcanzó el tiempo) no se guardan.
+- **Fallas:** si ningún portal terminó, `ok: false` con el motivo de cada uno y
+  el caso `portal` de `fallas.py`; si solo algunos, `ok: true` y
+  `algunos_sin_probar`. Doyle caído, o no poder guardar, no escriben nada y la
+  tarjeta conserva su etiqueta.
+- **Se queda para los tickets 03 y 04:** el candado de una prueba a la vez, el
+  motivo de cada botón apagado, saltarse el portal del visor y «Probar todas».
+  La ruta ya acepta la lista, y guarda una fila por portal que terminó.
