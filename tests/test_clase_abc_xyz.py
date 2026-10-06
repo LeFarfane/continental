@@ -118,3 +118,54 @@ def test_el_html_tiene_donde_pintarla_y_las_dos_llamadas_pasan_el_mapa():
     pantalla = pantalla_completa()
     assert 'id="inspector-abcxyz"' in pantalla
     assert pantalla.count("clases: datos.clases") == 2
+
+
+# =========================================================================
+# LA INSIGNIA EN LA FILA (2026-10-05): «AX», «BY»… con el tono de la letra ABC
+# =========================================================================
+
+
+def _script() -> str:
+    from conftest import pantalla_completa
+
+    return pantalla_completa().split("<script>", 1)[1]
+
+
+def test_la_fila_lleva_la_insignia_de_la_clase_con_su_tono():
+    from conftest import cuerpo_de_funcion
+
+    cuerpo = cuerpo_de_funcion(_script(), "const marcasDe =")
+
+    assert "CLASES_ABC_XYZ[String(r.producto_id)]" in cuerpo
+    assert "(clase.abc || '') + (clase.xyz || '')" in cuerpo
+    # Sin clase se dice en gris, no se calla; y el detalle no la repite.
+    assert "letras || 'Sin clase'" in cuerpo
+    assert "clase.frase, null, true)" in cuerpo
+    # Primero de las marcas, antes de «Agotado».
+    assert cuerpo.index("CLASES_ABC_XYZ") < cuerpo.index("'Agotado'")
+
+
+def test_a_verde_b_amarillo_c_naranja():
+    assert (
+        "const TONO_DE_LA_CLASE_ABC = { A: 'verde', B: 'amarillo', C: 'naranja-fuerte' };"
+        in _script()
+    )
+
+
+def test_los_tonos_nuevos_existen_en_los_dos_temas():
+    from conftest import pantalla_completa
+
+    css = pantalla_completa().split("<script>", 1)[0]
+    assert ".insignia.amarillo {" in css
+    assert ".insignia.naranja-fuerte {" in css
+    # Uno en el tema claro, otro en el oscuro por preferencia y otro en el
+    # oscuro elegido a mano.
+    assert css.count("--amarillo:") == 3
+    assert css.count("--naranja-fuerte:") == 3
+
+
+def test_el_mapa_se_llena_donde_se_llenan_los_proveedores():
+    script = _script()
+    assert script.count("if (datos.clases) CLASES_ABC_XYZ = datos.clases;") == script.count(
+        "if (Array.isArray(datos.puente)) PROVEEDORES = datos.puente;"
+    )

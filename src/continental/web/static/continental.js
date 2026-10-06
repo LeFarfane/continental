@@ -1069,6 +1069,10 @@ const preciosDelDetalle = (r, acciones) => {
   return { cuerpo, leido, boton };
 };
 
+// El tono de la insignia de la clase, por la letra ABC (decisión del
+// 2026-10-05): la A es la que más deja, y por eso la verde.
+const TONO_DE_LA_CLASE_ABC = { A: 'verde', B: 'amarillo', C: 'naranja-fuerte' };
+
 const mayuscula = (texto) => texto.charAt(0).toUpperCase() + texto.slice(1);
 
 // LAS MARCAS DE UN RENGLÓN: qué le pasa a ese producto. Una lista y no una
@@ -1085,6 +1089,18 @@ const marcasDe = (r) => {
   const marcas = [];
   const agrega = (clase, tono, etiqueta, frase, control, soloFila) =>
     marcas.push({ clase, tono, etiqueta, frase, control, soloFila });
+
+  // LA CLASE ABC-XYZ, primero y siempre en el mismo lugar: «AX», «BY»… El
+  // tono sigue a la letra ABC —A verde, B amarillo, C naranja— y la letra
+  // XYZ va escrita, no teñida: dos colores en una insignia ya no se leen. La
+  // frase entera va en el `title`; el detalle la dice en su propio bloque,
+  // por eso `soloFila`. Sin clase se dice en gris, no se calla.
+  const clase = CLASES_ABC_XYZ[String(r.producto_id)];
+  if (clase) {
+    const letras = (clase.abc || '') + (clase.xyz || '');
+    agrega('marca clase-abc-xyz', TONO_DE_LA_CLASE_ABC[clase.abc] || '',
+      letras || 'Sin clase', clase.frase, null, true);
+  }
 
   // AGOTADO: es el renglón más urgente de la lista y tiene que saltar a la
   // vista sin hacer aritmética. Lo que ya se pidió no es urgente aunque su
@@ -2484,6 +2500,7 @@ async function cargarPedido(fecha) {
   // y `precios.NOMBRES_DE_PROVEEDOR` es donde vive. De paso viene cuál tiene
   // `pro_id` de SICAR y cuál no (ticket 20).
   if (Array.isArray(datos.puente)) PROVEEDORES = datos.puente;
+  if (datos.clases) CLASES_ABC_XYZ = datos.clases;
 
   // Un día anterior pudo esconder este párrafo (domingo, 404, una falla): se
   // vuelve a enseñar aquí, con la lista de verdad que sí hay que mostrar.
@@ -2905,6 +2922,7 @@ async function cargarPedido(fecha) {
 
     datos = conservarLoDeLaCarga(respuesta, datos);
     if (Array.isArray(datos.puente)) PROVEEDORES = datos.puente;
+    if (datos.clases) CLASES_ABC_XYZ = datos.clases;
     conteoEnvejecido = false;
     repintar();
     exito('Lista partida en ' + plural((datos.pedidos || []).length, 'pedido', 'pedidos')
@@ -2943,6 +2961,7 @@ async function cargarPedido(fecha) {
 
     datos = conservarLoDeLaCarga(respuesta, datos);
     if (Array.isArray(datos.puente)) PROVEEDORES = datos.puente;
+    if (datos.clases) CLASES_ABC_XYZ = datos.clases;
     conteoEnvejecido = false;
     repintar();
     exito('Pedido a ' + nombre + ' marcado como enviado. Sus renglones pasaron a '
@@ -2991,6 +3010,7 @@ async function cargarPedido(fecha) {
 
     datos = conservarLoDeLaCarga(respuesta, datos);
     if (Array.isArray(datos.puente)) PROVEEDORES = datos.puente;
+    if (datos.clases) CLASES_ABC_XYZ = datos.clases;
     repintar();
 
     const pedido = (datos.pedidos || []).find(p => p.pedido_id === pedidoId);
@@ -4295,6 +4315,12 @@ const pintarCompletar = (faltantes, sesiones, acciones) => {
 // escrito a mano aquí**: la lista de quiénes son, cómo se escribe cada nombre y
 // cuál tiene `pro_id` de SICAR vive en Python, en un solo lugar.
 let PROVEEDORES = [];
+
+// LA CLASE ABC-XYZ DE CADA PRODUCTO, `{producto_id: {abc, xyz, frase}}`. Llega
+// a nivel de la lista (`datos.clases`) y no dentro del renglón —ver
+// `_las_clases_de_la_lista` en app.py—, así que se guarda aquí, igual que
+// PROVEEDORES, para que la insignia de la fila la encuentre.
+let CLASES_ABC_XYZ = {};
 
 // EN QUÉ SE PARTE LA LISTA (ticket 20).
 //

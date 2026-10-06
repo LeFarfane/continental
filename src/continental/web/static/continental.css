@@ -56,6 +56,12 @@
   --ok: #248a3d;
   --ok-vivo: #34c759;
   --ok-fondo: rgba(52, 199, 89, 0.16);
+  /* La clase ABC-XYZ: B amarillo y C un naranja más fuerte que el del aviso,
+     para que las tres se distingan entre sí en los dos temas. */
+  --amarillo: #8a6a00;
+  --amarillo-fondo: rgba(255, 204, 0, 0.22);
+  --naranja-fuerte: #b84a00;
+  --naranja-fuerte-fondo: rgba(255, 112, 30, 0.18);
   --mal: #d70015;
   --mal-vivo: #f5443a;
   --mal-fondo: rgba(245, 68, 58, 0.14);
@@ -120,6 +126,10 @@
     --ok: #30db5b;
     --ok-vivo: #30d158;
     --ok-fondo: rgba(48, 209, 88, 0.2);
+    --amarillo: #ffd60a;
+    --amarillo-fondo: rgba(255, 214, 10, 0.18);
+    --naranja-fuerte: #ff7a1a;
+    --naranja-fuerte-fondo: rgba(255, 122, 26, 0.2);
     --mal: #ff6961;
     --mal-vivo: #f54e44;
     --mal-fondo: rgba(245, 78, 68, 0.2);
@@ -170,6 +180,10 @@
   --ok: #30db5b;
   --ok-vivo: #30d158;
   --ok-fondo: rgba(48, 209, 88, 0.2);
+  --amarillo: #ffd60a;
+  --amarillo-fondo: rgba(255, 214, 10, 0.18);
+  --naranja-fuerte: #ff7a1a;
+  --naranja-fuerte-fondo: rgba(255, 122, 26, 0.2);
   --mal: #ff6961;
   --mal-vivo: #f54e44;
   --mal-fondo: rgba(245, 78, 68, 0.2);
@@ -312,6 +326,11 @@ code { font-family: var(--letra-mono); font-size: .85em; }
 .insignia.rojo { background: var(--mal-fondo); color: var(--mal); }
 .insignia.morado { background: var(--morado-fondo); color: var(--morado); }
 .insignia.acento { background: var(--acento-tinte); color: var(--acento); }
+.insignia.amarillo { background: var(--amarillo-fondo); color: var(--amarillo); }
+.insignia.naranja-fuerte { background: var(--naranja-fuerte-fondo); color: var(--naranja-fuerte); }
+/* La clase ABC-XYZ: dos letras, un poco más gruesas y con aire, para que se
+   lean de un vistazo en la fila. */
+.marca.clase-abc-xyz { font-weight: 700; letter-spacing: .04em; }
 
 /* ------------------------------------------------------------------ la cáscara
 
