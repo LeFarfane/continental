@@ -516,7 +516,7 @@ code { font-family: var(--letra-mono); font-size: .85em; }
 .avisos-ver { color: var(--acento); }
 .avisos-lista { padding: 0 16px 12px; }
 .aviso-fila {
-  display: grid; grid-template-columns: 6rem minmax(0, 1fr); gap: 4px 14px; align-items: start;
+  display: grid; grid-template-columns: 6rem minmax(0, 1fr) auto; gap: 4px 14px; align-items: start;
   padding: 8px 0; border-top: var(--pelo) solid var(--linea);
 }
 .aviso-fila::before {
@@ -530,6 +530,18 @@ code { font-family: var(--letra-mono); font-size: .85em; }
 .aviso-fila > .nota, .aviso-fila > div { margin: 0; }
 .aviso-fila .nota { color: var(--tinta); }
 .aviso-fila .nota.mal { color: var(--mal); }
+/* LA CRUZ QUE DESCARTA UNA FILA (2026-10-05). Discreta: tenue hasta que se
+   le pasa el mouse encima, para que no compita con los botones de la nota. */
+.aviso-cerrar {
+  grid-column: 3; grid-row: 1; width: 24px; height: 24px; padding: 0;
+  border: 0; border-radius: var(--pildora); background: transparent; cursor: pointer;
+  font: 500 1rem/1 var(--letra); color: var(--tenue);
+}
+.aviso-cerrar:hover, .aviso-cerrar:focus-visible { background: var(--relleno-suave); color: var(--tinta); }
+.avisos-descartados {
+  margin-top: 6px; padding: 4px 0; border: 0; background: transparent; cursor: pointer;
+  font: 500 .8125rem var(--letra); color: var(--acento);
+}
 /* EL CONTEO DE LO QUE FALTA POR COMPARAR (ticket 15) y CÓMO LE FUE AL LOTE
    (ticket 19). Ámbar y rojo son distintos a propósito: pintar de rojo un lote
    que hizo lo que se le pidió —o que todavía no le tocaba— enseña a ignorar el
@@ -1369,7 +1381,9 @@ li.transito.atrasado { opacity: 1; box-shadow: inset 4px 0 0 var(--aviso-vivo); 
   .tarjeta-tabla { padding-inline: 0; }
   .avisos-resumen { padding-inline: 12px; }
   .avisos-lista { padding: 0 12px 10px 12px; }
-  .aviso-fila { grid-template-columns: minmax(0, 1fr); }
+  .aviso-fila { grid-template-columns: minmax(0, 1fr) auto; }
+  .aviso-fila > :first-child { grid-column: 1 / -1; }
+  .aviso-cerrar { grid-column: 2; }
   td.proveedor { flex: 0 0 100%; }
   /* El botón de descartar se va a su propio renglón: a 375 px compartir línea
      con la cantidad dejaba el objetivo táctil apretado contra el borde. */

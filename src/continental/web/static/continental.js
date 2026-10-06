@@ -1828,6 +1828,33 @@ let HAY_DETALLE = false;
 let AVISOS_ABIERTOS = null;
 let FALLAS_EN_LOS_AVISOS = 0;
 let FALLAS_AL_DECIDIR = 0;
+// LOS AVISOS QUE ALGUIEN DESCARTÓ CON SU CRUZ (pedido del dueño, 2026-10-05),
+// como `{id de la nota: el texto que tenía}`. Se recuerdan por el texto y no
+// solo por la nota: si la situación cambia, la frase cambia y el aviso vuelve
+// solo. Descartar es "ya vi esto", no "no me avises más" —lo que falla no se
+// calla para siempre por un clic de ayer—. Va en `localStorage` porque es de
+// quien mira, como la vista elegida, y con su `try` por la misma razón.
+const CLAVE_DE_DESCARTADOS = 'continental.avisos.descartados';
+
+const descartadosRecordados = () => {
+  try {
+    const guardado = JSON.parse(localStorage.getItem(CLAVE_DE_DESCARTADOS) || '{}');
+    return guardado && typeof guardado === 'object' ? guardado : {};
+  } catch (e) {
+    return {};
+  }
+};
+
+const recordarDescartados = () => {
+  try {
+    localStorage.setItem(CLAVE_DE_DESCARTADOS, JSON.stringify(DESCARTADOS));
+  } catch (e) {
+    // Se descarta solo dentro de esta visita; al recargar vuelve. Es una
+    // molestia, no un riesgo.
+  }
+};
+
+let DESCARTADOS = descartadosRecordados();
 // Lo que hacen los botones de los pasos. Lo pone `cargarPedido`, que es quien
 // tiene la lista; antes de la primera carga no hace nada.
 let IR_A_PASO = () => {};
@@ -2021,14 +2048,18 @@ const pintarResumenDeAvisos = () => {
   const caja = document.getElementById('avisos');
   const lista = document.getElementById('avisos-lista');
   let visibles = 0;
+  let descartados = 0;
   let fallas = 0;
   const porAtender = [];
   const enOrden = [];
   lista.querySelectorAll('.aviso-fila').forEach(fila => {
     const nota = fila.firstElementChild;
-    const seVe = !nota.hidden && nota.textContent.trim() !== '';
-    fila.hidden = !seVe;
-    if (!seVe) return;
+    const texto = nota.textContent.trim();
+    const seVe = !nota.hidden && texto !== '';
+    const descartado = seVe && DESCARTADOS[nota.id] === texto;
+    if (descartado) descartados += 1;
+    fila.hidden = !seVe || descartado;
+    if (fila.hidden) return;
     visibles += 1;
     // La etiqueta del botón de completar dice qué trae: completar, abrir una
     // sesión, o las dos cosas.
@@ -2039,10 +2070,17 @@ const pintarResumenDeAvisos = () => {
     }
     const nivel = nivelDeLaNota(nota);
     fila.className = 'aviso-fila ' + nivel;
+    const cruz = fila.querySelector('.aviso-cerrar');
+    if (cruz) cruz.setAttribute('aria-label', 'Descartar el aviso de ' + fila.dataset.etiqueta);
     if (nivel === 'mal' || nivel === 'aviso') porAtender.push(fila.dataset.etiqueta);
     else enOrden.push(fila.dataset.etiqueta);
     if (nivel === 'mal') fallas += 1;
   });
+  const volver = document.getElementById('avisos-descartados');
+  volver.hidden = !descartados;
+  volver.textContent = 'Volver a mostrar ' + plural(descartados, 'aviso descartado', 'avisos descartados');
+  // Con todo descartado la franja se va entera: eso es lo que se pidió. Lo
+  // descartado regresa solo en cuanto su frase cambie.
   caja.hidden = !visibles;
   if (!visibles) return;
   // La tarjeta se tiñe según lo que trae: rojo con una falla, ámbar con algo
@@ -2178,6 +2216,26 @@ const pintarEstadoLateral = () => {
   detalle.textContent = (caidos.length ? '' : unirNombres(modulos.lista.map(m => m.nombre)) + '. ') + ventas;
 };
 
+// Una cruz por fila de la franja. Descarta la nota con el texto que tiene en
+// ese momento; el foco vuelve al resumen, porque la cruz deja de existir.
+const ponerCrucesALosAvisos = () => {
+  document.querySelectorAll('#avisos-lista .aviso-fila').forEach(fila => {
+    const cruz = document.createElement('button');
+    cruz.type = 'button';
+    cruz.className = 'aviso-cerrar';
+    cruz.textContent = '×';
+    cruz.setAttribute('aria-label', 'Descartar el aviso de ' + fila.dataset.etiqueta);
+    cruz.onclick = () => {
+      const nota = fila.firstElementChild;
+      DESCARTADOS[nota.id] = nota.textContent.trim();
+      recordarDescartados();
+      pintarResumenDeAvisos();
+      document.getElementById('avisos-resumen').focus();
+    };
+    fila.append(cruz);
+  });
+};
+
 // Los controles de la vista del día que están en el HTML desde el principio:
 // los tres pasos, la franja de avisos, el filtro y la cruz del detalle.
 const iniciarLaVistaDelDia = () => {
@@ -2188,6 +2246,13 @@ const iniciarLaVistaDelDia = () => {
     AVISOS_ABIERTOS = document.getElementById('avisos-lista').hidden;
     FALLAS_AL_DECIDIR = FALLAS_EN_LOS_AVISOS;
     pintarResumenDeAvisos();
+  };
+  ponerCrucesALosAvisos();
+  document.getElementById('avisos-descartados').onclick = () => {
+    DESCARTADOS = {};
+    recordarDescartados();
+    pintarResumenDeAvisos();
+    document.getElementById('avisos-resumen').focus();
   };
   document.getElementById('pedido-filtro').addEventListener('input', aplicarElFiltro);
   // Al cerrar el detalle, el foco vuelve al renglón que lo abrió: quien va con
