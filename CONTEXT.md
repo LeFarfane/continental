@@ -23,6 +23,12 @@ guarda dice a qué negocio pertenece, aunque hoy siempre sea el mismo.
 **Proveedor** — un mayorista al que la farmacia le compra y donde tiene cuenta:
 NADRO, LEVIC, VICMA, QuePharma. Tienen precio de compra.
 
+**Mínimo del proveedor** — lo menos que un proveedor acepta para surtir un
+pedido. Lo pone el proveedor, no el dueño. Se ajusta a mano en **Ajustes**,
+uno por proveedor, **tal como lo dice el proveedor**: con o sin IVA, según
+él. Un pedido debajo del mínimo se avisa, no se bloquea, y es lo típico que se
+manda a esperar.
+
 **Cadena** — una farmacia competidora cuyo precio de mostrador se mira para
 saber si estamos caros: Guadalajara, Similares, del Ahorro, Benavides, San
 Pablo. No tienen relación con nosotros y publican precio al público.
@@ -162,23 +168,34 @@ mientras un pedido venía en camino: su última oportunidad—. Avisa; no prohí
 > —antes de que exista ningún cierre no hay corte del que partir—, pero deja de
 > intervenir en cuanto hay uno.
 
-**Pasar al día siguiente** — mandar un renglón **abierto** a la siguiente lista
-que se arme, a propósito y uno por uno: el producto sí se necesita, pero
-mañana. Lo típico es un tope de dinero que el dueño le pone al pedido del día.
-El renglón queda `pospuesto`, firmado —quién y cuándo—, sale del total y del
-reparto de hoy y baja a su propio bloque, con su botón para devolverlo (un clic,
-sin diálogo, mientras la lista siga abierta). **Lo que pasa son piezas, no
-ventas**: su `cantidad_a_pedir` se **suma** a lo vendido del producto en la
-siguiente lista, que lo trae aunque no se haya vuelto a vender y dice cuántas
-piezas vienen del día anterior —*"se vendieron 2 y pasaron 3, se piden 5"*—.
-"El día siguiente" es **la siguiente lista**, no el siguiente día del
-calendario: un sábado pasa al lunes. Pasa **una vez**: si mañana tampoco se
-pide, se puede volver a pasar —y entonces lleva lo de ayer sumado, sin
-contarlo dos veces—, o se queda sin pedir y corre la regla de **Cerrar**. Lo
-que viene en camino le gana, y un pospuesto **no se señala como algo que se
-perdería** al cerrar. **No es descartar**: descartar dice "no se pide", esto
-dice "se pide mañana", y por eso son estados distintos y se cuentan aparte. Ver
-el ADR 0025.
+**Mandar a espera** — sacar del pedido de hoy un renglón **abierto**, o el
+pedido entero de un proveedor, porque sí se necesita pero **todavía no se
+pide**. Hay dos motivos típicos: el pedido rebasa el tope de dinero que puso el
+dueño, o no llega al **mínimo del proveedor**. El renglón queda **en espera**
+(`pospuesto` por dentro), firmado —quién y cuándo—, **con su proveedor**, y sale
+del total de hoy. Se devuelve con un clic, sin diálogo, mientras la lista siga
+abierta. Sustituye a lo que antes se llamó *pasar al día siguiente*.
+
+**Lista de espera** — todo lo que está en espera. Cuando se arma la lista
+siguiente, lo que espera **entra solo al pedido de su proveedor**, sumado a lo
+que se vendió desde entonces, para que se vea cuánto falta para el mínimo:
+*"NADRO $1,440: hoy $600 + espera $840, mínimo $1,500"*. Si sigue sin
+alcanzar, se vuelve a mandar a espera, a mano. **Mientras espera no caduca**:
+cada renglón dice desde cuándo espera y cuántas listas lleva. Pero en cuanto
+entra a una lista vuelve a ser un renglón como cualquier otro: si esa lista se
+cierra sin que nadie lo pida ni lo vuelva a mandar a espera, **se da por
+atendido** (regla de **Cerrar**), igual que lo demás que quedó sin pedir. Al
+cerrar se **avisa** qué de eso venía de la espera, porque reabrir no siempre
+alcanza para rescatarlo: en cuanto se arma la lista siguiente, ya no se reabre.
+
+> **Lo que espera son piezas, no ventas.** Si el producto se vuelve a vender,
+> las piezas se juntan en un solo renglón —*"se vendieron 2 y esperaban 3, se
+> piden 5"*— y van al proveedor de la espera. Si otro lo da más barato, la
+> tarjeta lo dice y una persona decide. Lo que viene en camino le gana, y lo
+> que espera **no se señala como algo que se perdería** al cerrar.
+>
+> **No es descartar.** Descartar dice "no se pide"; esperar dice "se pide, pero
+> no hoy". Son estados distintos y se cuentan aparte. Ver el ADR 0025.
 
 **Reabrir** — deshacer un cierre: `cerrado` → `abierto`, firmado —quién y
 cuándo—. **Solo la lista más reciente, solo mientras no se haya armado la
@@ -214,8 +231,8 @@ hubiera pisado. `vencido` no se reabre. Ver el ADR 0016.
 - `cancelado` — se dejó de esperar sin haber llegado: su pedido se canceló, o
   una persona lo devolvió a la lista porque se atrasó. Lleva firma. **No vuelve
   a `abierto`**: lo que vuelve es su producto, en la siguiente lista.
-- `pospuesto` — una persona lo pasó al día siguiente (ver **Pasar al día
-  siguiente**). Lleva firma. Sí vuelve a `abierto` mientras la lista siga
+- `pospuesto` — **en espera**: una persona lo mandó a la lista de espera (ver
+  **Mandar a espera**). Lleva firma. Sí vuelve a `abierto` mientras la lista siga
   abierta; después, lo que vuelve es lo que él traía, como piezas, en la
   siguiente lista.
 
