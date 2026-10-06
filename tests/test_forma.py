@@ -48,6 +48,7 @@ TABLAS = {
     "corrida_del_lote",
     "lectura_de_portal",
     "prueba_de_sesion",
+    "minimo_del_proveedor",
 }
 
 

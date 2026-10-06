@@ -63,6 +63,7 @@ import sqlalchemy
 from sqlalchemy import text
 
 from continental.clasificacion import ABARROTE, MEDICAMENTO, SIN_CLASIFICAR
+from continental.minimos import MinimoDelProveedor, revisar_el_minimo
 from continental.precios import (
     MOTIVOS,
     MOTIVOS_QUE_PASARON_DEL_LOGIN,
@@ -3258,6 +3259,33 @@ class AlmacenamientoDelPedido(Protocol):
         Es una lectura: no escribe nada."""
         ...
 
+    def minimos_de_los_proveedores(self, negocio: str) -> dict[str, MinimoDelProveedor]:
+        """El mínimo de cada proveedor **que ya tiene fila** (ticket 08).
+
+        Un proveedor sin fila **no aparece**: es «sin mínimo capturado», que no
+        es lo mismo que un cero («no tiene mínimo»). Quien compare contra el
+        total de un pedido (ticket 09) pregunta con `.get(proveedor)` y trata
+        `None` como «sin dato», nunca como cero. Es una lectura: no escribe nada.
+        """
+        ...
+
+    def guardar_el_minimo(
+        self,
+        negocio: str,
+        proveedor: str,
+        monto: Decimal,
+        incluye_iva: bool,
+        quien: str,
+    ) -> MinimoDelProveedor:
+        """Pone el mínimo de ese proveedor, **sobreescribiendo** el anterior con
+        la firma y la hora de ahora (sin historial). Devuelve lo guardado.
+
+        Una sola sentencia (`insert ... on conflict do update`): dos personas
+        guardando a la vez dejan la última, no una mezcla. Valida con
+        `revisar_el_minimo` antes de escribir.
+        """
+        ...
+
     def guardar_lecturas_de_portal(
         self, negocio: str, lecturas: Sequence["LecturaDePortal"]
     ) -> int:
@@ -4532,6 +4560,32 @@ _ULTIMAS_PRUEBAS_DE_SESION = text(
       from pedidos.prueba_de_sesion
      where negocio = :negocio
      order by proveedor, probada_en desc, prueba_de_sesion_id desc
+    """
+)
+
+# Una fila por negocio y proveedor, sobreescrita con su firma y sin historial.
+# `fijado_en` va con `now()` en las dos ramas: la hora la pone la base, no el
+# reloj de quien guarda. `returning` devuelve lo que quedó, no lo que se mandó.
+_GUARDAR_MINIMO = text(
+    """
+    insert into pedidos.minimo_del_proveedor
+           (negocio, proveedor, monto, incluye_iva, fijado_por)
+    values (:negocio, :proveedor, :monto, :incluye_iva, :fijado_por)
+    on conflict (negocio, proveedor) do update
+       set monto       = excluded.monto,
+           incluye_iva = excluded.incluye_iva,
+           fijado_por  = excluded.fijado_por,
+           fijado_en   = now()
+    returning proveedor, monto, incluye_iva, fijado_por, fijado_en
+    """
+)
+
+_LEER_MINIMOS = text(
+    """
+    select proveedor, monto, incluye_iva, fijado_por, fijado_en
+      from pedidos.minimo_del_proveedor
+     where negocio = :negocio
+     order by proveedor
     """
 )
 
@@ -5872,6 +5926,46 @@ class AlmacenamientoPostgres:
             )
             for f in filas
         }
+
+    def minimos_de_los_proveedores(self, negocio: str) -> dict[str, MinimoDelProveedor]:
+        with self._motor().connect() as conexion:
+            filas = conexion.execute(_LEER_MINIMOS, {"negocio": negocio}).mappings().all()
+        return {
+            f["proveedor"]: MinimoDelProveedor(
+                proveedor=f["proveedor"],
+                monto=f["monto"],
+                incluye_iva=f["incluye_iva"],
+                fijado_por=f["fijado_por"],
+                fijado_en=f["fijado_en"],
+            )
+            for f in filas
+        }
+
+    def guardar_el_minimo(
+        self,
+        negocio: str,
+        proveedor: str,
+        monto: Decimal,
+        incluye_iva: bool,
+        quien: str,
+    ) -> MinimoDelProveedor:
+        fila = {
+            "negocio": negocio,
+            "proveedor": proveedor,
+            "monto": monto,
+            "incluye_iva": incluye_iva,
+            "fijado_por": quien,
+        }
+        revisar_el_minimo(fila)
+        with self._motor().begin() as conexion:
+            f = conexion.execute(_GUARDAR_MINIMO, fila).mappings().one()
+        return MinimoDelProveedor(
+            proveedor=f["proveedor"],
+            monto=f["monto"],
+            incluye_iva=f["incluye_iva"],
+            fijado_por=f["fijado_por"],
+            fijado_en=f["fijado_en"],
+        )
 
     # --------------------------------------------------------- escritura
 

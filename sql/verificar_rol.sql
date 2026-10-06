@@ -101,23 +101,24 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
                   WHERE nspname = 'pedidos'
                     AND pg_get_userbyid(nspowner) <> 'continental'))),
 
--- SIETE desde el 2026-10-05, que estrenó `pedidos.prueba_de_sesion` (ADR
--- 0024); eran seis desde el 2026-09-28 (`pedidos.lectura_de_portal`), cinco
+-- OCHO desde el 2026-10-06, que estrenó `pedidos.minimo_del_proveedor` (ticket
+-- 08 de lista-de-espera, migración 0021); eran siete desde el 2026-10-05
+-- (`pedidos.prueba_de_sesion`, ADR 0024), seis desde el 2026-09-28 (`pedidos.lectura_de_portal`), cinco
 -- desde el ticket 19 (`pedidos.corrida_del_lote`, ADR 0007), cuatro desde el
 -- ticket 12 y tres al principio. El número está
--- escrito a mano A PROPÓSITO: si alguien crea una octava tabla en este esquema
+-- escrito a mano A PROPÓSITO: si alguien crea una novena tabla en este esquema
 -- sin pasar por `crear_tablas.sql`, esta comprobación se pone en [MAL] en vez
 -- de darla por buena. El DDL se corre a mano una vez, así que agregar una
 -- tabla es un acto deliberado y debe verse como tal.
 (4,
- 'Las siete tablas existen y NO las posee continental',
- '7 tablas, con otro propietario',
+ 'Las ocho tablas existen y NO las posee continental',
+ '8 tablas, con otro propietario',
  (SELECT format('%s tabla(s): %s', count(*),
                 coalesce(string_agg(c.relname || ' -> ' || pg_get_userbyid(c.relowner),
                                     ', ' ORDER BY c.relname), '--'))
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname = 'pedidos' AND c.relkind = 'r'),
- (SELECT count(*) = 7
+ (SELECT count(*) = 8
          AND count(*) FILTER (WHERE pg_get_userbyid(c.relowner) = 'continental') = 0
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname = 'pedidos' AND c.relkind = 'r')),
@@ -151,7 +152,7 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
 -- afirma la 41; aquí se le exige lo que sí debe poder, o la excepción taparía
 -- también un INSERT que falta.
 (6,
- 'continental puede SELECT, INSERT y UPDATE sus siete tablas (la de pruebas, sin UPDATE)',
+ 'continental puede SELECT, INSERT y UPDATE sus ocho tablas (la de pruebas, sin UPDATE)',
  'no le falta ninguno',
  (SELECT coalesce(string_agg(x.tabla || ': le falta ' || x.priv, '; '
                              ORDER BY x.tabla, x.priv),
@@ -306,7 +307,10 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
 --
 -- Lo que de verdad se quiere afirmar es "**una** llave de identidad por tabla,
 -- ninguna `serial`", y eso se escribe con `count(*)` contra `count(*)`: la
--- sexta tabla entra sola y esta comprobación no hay que volver a tocarla. El
+-- sexta tabla entra sola y esta comprobación no hay que volver a tocarla.
+-- **La excepción es `minimo_del_proveedor`** (migración 0021): su llave es
+-- natural, `(negocio, proveedor)`, porque es una fila por proveedor que se
+-- sobreescribe y no un hecho que se agrega; no tiene secuencia que olvidar. El
 -- número esperado no es una constante de este archivo, así que se calcula en
 -- `obtenido` y se compara en `ok` -- por eso aquí `ok` no es NULL.
 (16,
@@ -319,13 +323,15 @@ INSERT INTO resultado_verificacion (n, caso, esperado, obtenido, ok) VALUES
     JOIN pg_namespace n ON n.oid = c.relnamespace
     LEFT JOIN pg_attribute a
            ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
-   WHERE n.nspname = 'pedidos' AND c.relkind = 'r'),
+   WHERE n.nspname = 'pedidos' AND c.relkind = 'r'
+     AND c.relname <> 'minimo_del_proveedor'),
  (SELECT count(*) FILTER (WHERE a.attidentity <> '') = count(DISTINCT c.oid)
     FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
     LEFT JOIN pg_attribute a
            ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
-   WHERE n.nspname = 'pedidos' AND c.relkind = 'r')),
+   WHERE n.nspname = 'pedidos' AND c.relkind = 'r'
+     AND c.relname <> 'minimo_del_proveedor')),
 
 -- ------------------------------------------- la forma del precio congelado
 --

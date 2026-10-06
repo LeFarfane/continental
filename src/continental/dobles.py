@@ -77,6 +77,7 @@ from continental.almacenamiento import (
     revisar_la_prueba,
     ultimo_por_proveedor,
 )
+from continental.minimos import MinimoDelProveedor, revisar_el_minimo
 from continental.doyle import (
     ArticuloVigilado,
     BusquedaDesconocida,
@@ -595,6 +596,11 @@ class AlmacenamientoFalso:
     #: pone con la hora de ahora —lo que hace el `DEFAULT now()`—; una prueba
     #: puede sembrar la suya con la hora que necesite.
     pruebas_de_sesion: list[dict] = field(default_factory=list)
+    #: Los mínimos de los proveedores (`pedidos.minimo_del_proveedor`, ticket 08):
+    #: un diccionario por `(negocio, proveedor)`, igual que la llave primaria de
+    #: la tabla. Sobreescribir es reemplazar la entrada; sin entrada es «sin
+    #: mínimo capturado». Cada valor es un `MinimoDelProveedor`.
+    minimos: dict = field(default_factory=dict)
     #: Las filas de `pedidos.pedido` (ticket 20). Un diccionario por fila, con
     #: los nombres de las columnas de verdad, igual que las listas y los
     #: renglones: una prueba tiene que poder afirmar sobre lo que **quedó
@@ -2513,6 +2519,39 @@ class AlmacenamientoFalso:
             p: PruebaDeLaSesion(proveedor=p, resultado=f["resultado"], probada_en=f["probada_en"])
             for p, f in ultimas.items()
         }
+
+    # ------------------------------------------ el mínimo del proveedor (08)
+
+    def minimos_de_los_proveedores(self, negocio: str) -> dict[str, MinimoDelProveedor]:
+        """El `select` de `_LEER_MINIMOS`: solo los que tienen fila."""
+        self._revisar()
+        return {p: m for (n, p), m in self.minimos.items() if n == negocio}
+
+    def guardar_el_minimo(
+        self, negocio: str, proveedor: str, monto, incluye_iva: bool, quien: str
+    ) -> MinimoDelProveedor:
+        """El `insert ... on conflict do update` de `_GUARDAR_MINIMO`, con sus
+        `CHECK`. `fijado_en` lo pone aquí el doble con la hora de ahora, que es
+        lo que la tabla hace con `now()` en las dos ramas."""
+        self._revisar()
+        revisar_el_minimo(
+            {
+                "negocio": negocio,
+                "proveedor": proveedor,
+                "monto": monto,
+                "incluye_iva": incluye_iva,
+                "fijado_por": quien,
+            }
+        )
+        guardado = MinimoDelProveedor(
+            proveedor=proveedor,
+            monto=monto,
+            incluye_iva=incluye_iva,
+            fijado_por=quien,
+            fijado_en=dt.datetime.now(dt.UTC),
+        )
+        self.minimos[(negocio, proveedor)] = guardado
+        return guardado
 
     # ------------------------------------------ la corrida del lote (19)
 

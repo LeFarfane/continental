@@ -1299,6 +1299,29 @@ li.transito.atrasado { opacity: 1; box-shadow: inset 4px 0 0 var(--aviso-vivo); 
 .proveedores-vigilancia label { display: inline-flex; align-items: center; gap: 8px; font: var(--texto-cuerpo) var(--letra); }
 .proveedores-vigilancia input { width: 1.2rem; height: 1.2rem; margin: 0; accent-color: var(--acento); }
 
+/* ---------------------------------------------------------------- Ajustes
+
+   Una fila por proveedor: el monto, la casilla de IVA y guardar; debajo, lo que
+   vale hoy y quién lo puso. «Sin mínimo capturado» va en gris, con la palabra,
+   para no leerse como «no tiene mínimo». */
+.ajustes { border-radius: var(--radio-lg); background: var(--superficie); overflow: hidden; max-width: 61.25rem; }
+.ajustes li {
+  display: grid; grid-template-columns: minmax(7rem, 1fr) auto; gap: 6px 14px; align-items: center;
+  padding: 12px 18px; border-bottom: var(--pelo) solid var(--linea);
+}
+.ajustes li:last-child { border-bottom: 0; }
+.ajustes .proveedor { font: 500 var(--texto-subtitulo) var(--letra); }
+.ajustes .captura-minimo { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.ajustes .captura-minimo input[type="text"] {
+  width: 9rem; height: 2.25rem; padding: 0 12px; border: 0; border-radius: var(--radio-md);
+  background: var(--relleno-suave); font: var(--texto-cuerpo) var(--letra);
+}
+.ajustes .captura-minimo label { display: inline-flex; align-items: center; gap: 8px; font: var(--texto-cuerpo) var(--letra); }
+.ajustes .captura-minimo input[type="checkbox"] { width: 1.2rem; height: 1.2rem; margin: 0; accent-color: var(--acento); }
+.ajustes .vale-hoy, .ajustes .nota { grid-column: 1 / -1; font: var(--texto-leyenda) var(--letra); }
+.ajustes .vale-hoy.sin-capturar { color: var(--tenue); }
+@media (max-width: 40rem) { .ajustes li { grid-template-columns: minmax(0, 1fr); } }
+
 /* ---------------------------------------------------------------- Sesiones
 
    Una tarjeta por portal. "Caducada" y "sin sesión" van en ámbar con la

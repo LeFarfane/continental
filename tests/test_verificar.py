@@ -451,6 +451,8 @@ def test_las_tablas_de_pedidos_salen_del_mismo_archivo():
         "lectura_de_portal",
         # La séptima, del 2026-10-05: lo que dijo un portal al probarlo (ADR 0024).
         "prueba_de_sesion",
+        # La octava, del 2026-10-06: el mínimo de cada proveedor (ticket 08 de lista-de-espera).
+        "minimo_del_proveedor",
     )
 
 

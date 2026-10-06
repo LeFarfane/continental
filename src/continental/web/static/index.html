@@ -40,6 +40,7 @@
       <button type="button" role="tab" id="pestana-buscar" aria-controls="panel-buscar" aria-selected="false" tabindex="-1" data-grupo="Proveedores">Buscar<svg class="icono" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg></button>
       <button type="button" role="tab" id="pestana-vigilancia" aria-controls="panel-vigilancia" aria-selected="false" tabindex="-1">Vigilancia<svg class="icono" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/></svg><span class="cuenta-pestana" id="cuenta-vigilancia" hidden></span></button>
       <button type="button" role="tab" id="pestana-sesiones" aria-controls="panel-sesiones" aria-selected="false" tabindex="-1">Sesiones<svg class="icono" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5"/></svg><span class="cuenta-pestana" id="cuenta-sesiones" hidden></span></button>
+      <button type="button" role="tab" id="pestana-ajustes" aria-controls="panel-ajustes" aria-selected="false" tabindex="-1">Ajustes<svg class="icono" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></svg></button>
       <!-- EL ESTADO, abajo y como tarjeta: se ve sin abrirlo si algo no
            contesta, y al apretarlo se ve el detalle. -->
       <button type="button" role="tab" id="pestana-estado" class="estado-lateral" aria-controls="panel-estado" aria-selected="false" tabindex="-1"><span class="oculto">Estado: </span><span class="estado-lateral-titulo"><span class="punto" id="estado-lateral-punto"></span><span id="estado-lateral-texto">Consultando…</span></span><span class="estado-lateral-detalle" id="estado-lateral-detalle"></span></button>
@@ -364,6 +365,22 @@
       <p class="nota" id="sesiones-corriendo" role="status" hidden
          data-texto-local="Hay una prueba corriendo: tarda hasta medio minuto. Los botones de probar se apagan hasta que termine."></p>
       <div class="portales sesiones" id="sesiones-tarjetas"></div>
+    </section>
+
+    <!-- AJUSTES (ticket 08 de lista-de-espera): por ahora, el mínimo de cada
+         proveedor. Las filas las pinta `filaDeMinimo` con la lista del
+         servidor: cuáles son los proveedores y cómo se dice cada estado
+         («sin mínimo capturado», «no tiene mínimo», «$2,000.00 sin IVA») vive
+         en Python (`minimos.py`). -->
+    <section id="panel-ajustes" class="panel panel-ancho" role="tabpanel" aria-labelledby="pestana-ajustes" hidden>
+      <div class="cabeza-panel">
+        <h2 class="titulo-panel">Ajustes</h2>
+        <p class="sub-panel">El mínimo que cada proveedor pide para surtir un pedido, tal como lo
+          dice él: con o sin IVA. Si un proveedor no tiene mínimo, escribe 0. Un pedido debajo del
+          mínimo se avisa; no se bloquea.</p>
+      </div>
+      <p class="nota" id="ajustes-falla" hidden></p>
+      <ul class="ajustes" id="ajustes-lista"></ul>
     </section>
 
     <section id="panel-estado" class="panel panel-angosto" role="tabpanel" aria-labelledby="pestana-estado" hidden>

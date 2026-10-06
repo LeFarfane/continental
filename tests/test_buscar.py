@@ -576,7 +576,7 @@ def test_las_pestanas_se_llaman_como_el_glosario():
     rotulos = re.findall(r'role="tab"[^>]*>([^<]+)', pestanas)
     grupos = re.findall(r'data-grupo="([^"]+)"', pestanas)
 
-    assert rotulos == ["Lista del día", "En camino", "Buscar", "Vigilancia", "Sesiones"]
+    assert rotulos == ["Lista del día", "En camino", "Buscar", "Vigilancia", "Sesiones", "Ajustes"]
     assert grupos == ["Pedido", "Proveedores"]
     assert "rdenes" not in pestanas
 

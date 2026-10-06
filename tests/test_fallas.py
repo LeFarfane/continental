@@ -691,6 +691,7 @@ CUERPOS = {
     "ArticuloNuevo": {"termino": "7501000000001", "proveedores": ["nadro"]},
     "PruebaPedida": {"proveedores": ["nadro"]},
     "VistaPedida": {"renglon_id": 1},
+    "MinimoNuevo": {"monto": 2000, "incluye_iva": False},
 }
 
 #: Con qué se prueba cada parámetro de ruta. Se prueban todos y la ruta se

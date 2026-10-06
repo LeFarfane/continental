@@ -5243,7 +5243,7 @@ async function confirmarSesion(sesion, boton, idNota = 'pedido-accion', alTermin
 // del día y lo que viene en camino (el grupo "Pedido"), las tres de Doyle, y
 // el estado. `#pedido` sigue siendo la lista del día: un enlace viejo no se
 // rompe.
-const PESTANAS = ['pedido', 'camino', 'buscar', 'vigilancia', 'sesiones', 'estado'];
+const PESTANAS = ['pedido', 'camino', 'buscar', 'vigilancia', 'sesiones', 'ajustes', 'estado'];
 
 // Un nombre que no es de ninguna pestaña —un `#loquesea` pegado a mano— cae
 // en el pedido, que es la pantalla de siempre: nunca una página en blanco.
@@ -5260,6 +5260,8 @@ const mostrarPestana = (nombre, enfocar) => {
   // Las sesiones se leen al abrir su pestaña y no al cargar la página: son
   // una pregunta a Doyle que solo hace falta cuando alguien las va a mirar.
   if (elegida === 'sesiones') cargarSesiones();
+  // Los mínimos también se leen al abrir la pestaña: nadie los mira hasta entonces.
+  if (elegida === 'ajustes') cargarAjustes();
   return elegida;
 };
 
@@ -5608,6 +5610,90 @@ const iniciarVigilancia = () => {
   revisar.onclick = () => trasTocarLaVigilancia(
     respuestaDe(fetch('/api/vigilancia/revisar', { method: 'POST' }), 'al_guardar'), revisar);
   cargarVigilancia();
+};
+
+// ----------------------------------------------------------------- Ajustes
+
+// EL MÍNIMO DEL PROVEEDOR (ticket 08 de lista-de-espera). Una fila por
+// proveedor conocido, con lo que vale hoy y quién lo puso. **Las frases llegan
+// hechas del servidor** (`minimos.py`): «sin mínimo capturado» (gris), «no
+// tiene mínimo» y «$2,000.00 sin IVA». Aquí solo se elige el estilo, y el gris
+// va con la palabra, no solo con el color, para no leer un hueco como un cero.
+
+const filaDeMinimo = (m) => {
+  const li = document.createElement('li');
+  li.dataset.proveedor = m.proveedor;
+
+  const nombre = document.createElement('b');
+  nombre.className = 'proveedor';
+  nombre.textContent = m.nombre;
+
+  const monto = document.createElement('input');
+  monto.type = 'text';
+  monto.inputMode = 'decimal';
+  monto.autocomplete = 'off';
+  monto.id = 'minimo-monto-' + m.proveedor;
+  monto.placeholder = '0 = no tiene mínimo';
+  monto.setAttribute('aria-label', 'Mínimo de ' + m.nombre);
+  // Sin fila el campo nace vacío —no en 0—: un cero guardado sin querer diría
+  // «no tiene mínimo» de un proveedor que sí tiene.
+  monto.value = m.monto === null ? '' : m.monto;
+
+  const casilla = document.createElement('input');
+  casilla.type = 'checkbox';
+  casilla.checked = m.incluye_iva === true;
+  const rotuloIva = document.createElement('label');
+  rotuloIva.append(casilla, 'incluye IVA');
+
+  const aviso = document.createElement('p');
+  aviso.className = 'nota';
+  aviso.hidden = true;
+
+  const guardar = botonDeAccion('Guardar', async (boton) => {
+    boton.disabled = true;
+    aviso.hidden = true;
+    const respuesta = await respuestaDe(fetch('/api/minimos/' + m.proveedor, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ monto: monto.value, incluye_iva: casilla.checked }),
+    }), 'al_guardar');
+    boton.disabled = false;
+    if (!respuesta.ok) {
+      notaDeFalla(aviso, respuesta);
+      aviso.hidden = false;
+      return;
+    }
+    // La fila se repinta con lo que quedó guardado, no con lo que se tecleó.
+    const nueva = filaDeMinimo(respuesta.minimo);
+    const confirmacion = nueva.querySelector('p.nota');
+    confirmacion.textContent = 'Guardado.';
+    confirmacion.hidden = false;
+    li.replaceWith(nueva);
+  }, 'llena');
+  const captura = document.createElement('div');
+  captura.className = 'captura-minimo';
+  captura.append(monto, rotuloIva, guardar);
+
+  const vale = document.createElement('p');
+  vale.className = 'vale-hoy' + (m.estado === 'sin_capturar' ? ' sin-capturar' : '');
+  vale.textContent = 'Hoy: ' + m.frase + (m.frase_de_quien ? '. ' + m.frase_de_quien : '');
+
+  li.append(nombre, captura, vale, aviso);
+  return li;
+};
+
+const cargarAjustes = async () => {
+  const datos = await respuestaDe(fetch('/api/minimos'));
+  if (!datos.ok) {
+    // «No se pudo leer» no se pinta como «sin mínimo capturado»: la lista se
+    // queda como estaba y la falla dice por qué.
+    const falla = document.getElementById('ajustes-falla');
+    notaDeFalla(falla, datos);
+    falla.hidden = false;
+    return;
+  }
+  nota('ajustes-falla', '');
+  document.getElementById('ajustes-lista').replaceChildren(...datos.minimos.map(filaDeMinimo));
 };
 
 // ---------------------------------------------------------------- Sesiones

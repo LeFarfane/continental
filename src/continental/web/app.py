@@ -134,6 +134,13 @@ from continental.fallas import (
     frase_del_hueco,
     que_hacer,
 )
+from continental.minimos import (
+    QUE_HACER_CON_EL_MINIMO,
+    frase_del_minimo,
+    minimos_como_json,
+    revisar_lo_que_llega,
+    un_minimo_como_json,
+)
 from continental.faltantes import (
     NIVEL_FALLA,
     NUNCA_SE_CONSULTO,
@@ -4754,6 +4761,96 @@ def como_va_la_busqueda(
             }
 
     return busqueda_como_json(estado, nuestros, catalogo_sin_leer)
+
+
+# --------------------------------------------------------------- Ajustes
+
+# EL MÍNIMO DEL PROVEEDOR (ticket 08 de lista-de-espera; enmienda del 2026-10-05
+# al ADR 0025, punto 7). Una pestaña, «Ajustes», con una fila por proveedor
+# conocido. Lo que cada estado quiere decir y por qué son tres está en
+# `minimos.py`; aquí solo se atiende el HTTP.
+
+
+@app.get("/api/minimos")
+def los_minimos(
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+):
+    """El mínimo de **todos** los proveedores conocidos, con o sin fila.
+
+    Un proveedor sin capturar viaja igual, con su `estado` y su frase «sin mínimo
+    capturado»: si solo salieran los capturados, uno sin capturar se vería como
+    un proveedor que no existe y no se podría capturar. Si la base no contesta
+    **no se manda ninguna lista**: «no se pudo leer» no es «sin mínimo
+    capturado», y la pantalla pintaría cuatro proveedores sin dato sobre una
+    base que sí tiene los mínimos. El error no viaja al navegador (regla 5).
+    """
+    negocio = cargar().negocio
+    try:
+        minimos = almacenamiento.minimos_de_los_proveedores(negocio)
+    except Exception as exc:  # noqa: BLE001 — la base caída es un hueco, no un 500
+        log.exception("No se pudieron leer los mínimos de los proveedores")
+        return {
+            "ok": False,
+            "detalle": f"no se pudieron leer los mínimos ({type(exc).__name__})",
+            "que_hacer": _que_hacer(AL_LEER),
+        }
+    return {"ok": True, "minimos": minimos_como_json(minimos)}
+
+
+class MinimoNuevo(BaseModel):
+    """Lo que manda la pestaña. `Any` a propósito: «dos mil» o `true` en el monto
+    se rechazan en `minimos.revisar_lo_que_llega` con una frase, no con el 422
+    genérico de pydantic que no dice qué corregir."""
+
+    monto: Any = None
+    incluye_iva: Any = None
+
+
+@app.put("/api/minimos/{proveedor}")
+def guardar_el_minimo(
+    proveedor: str,
+    cuerpo: MinimoNuevo,
+    request: Request,
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+):
+    """Pone el mínimo de un proveedor, **sobreescribiendo** el anterior.
+
+    Valida antes de tocar la base: proveedor conocido, monto numérico y de cero
+    en adelante, y la casilla de IVA dicha. Un rechazo es un 400 con su motivo
+    y qué hacer. **Cero es válido** y quiere decir «no tiene mínimo»; es lo que
+    lo distingue de no haberlo capturado. Firma con el correo de Access, que es
+    una firma y no un permiso (regla 3): cualquiera con acceso puede cambiarlo
+    (historia 34). Devuelve el proveedor ya guardado, en la misma forma que la
+    lista, para que la fila se repinte sin otra lectura.
+    """
+    negocio = cargar().negocio
+    firma = quien(request)
+
+    monto, incluye_iva, motivo = revisar_lo_que_llega(
+        proveedor, cuerpo.monto, cuerpo.incluye_iva
+    )
+    if motivo is not None:
+        log.info("%s intentó guardar el mínimo de %r y se rechazó: %s", firma, proveedor, motivo)
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "detalle": motivo, "que_hacer": QUE_HACER_CON_EL_MINIMO},
+        )
+
+    try:
+        guardado = almacenamiento.guardar_el_minimo(negocio, proveedor, monto, incluye_iva, firma)
+    except Exception as exc:  # noqa: BLE001 — la base caída es un hueco, no un 500
+        log.exception("No se pudo guardar el mínimo de %s", proveedor)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "detalle": f"no se pudo guardar el mínimo ({type(exc).__name__})",
+                "que_hacer": _que_hacer(AL_GUARDAR),
+            },
+        )
+
+    log.info("%s dejó el mínimo de %s en %s.", firma, proveedor, frase_del_minimo(guardado))
+    return {"ok": True, "minimo": un_minimo_como_json(proveedor, guardado)}
 
 
 # -------------------------------------------------------------- Vigilancia

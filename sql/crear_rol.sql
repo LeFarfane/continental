@@ -199,7 +199,13 @@ GRANT SELECT, INSERT, UPDATE ON pedidos.lectura_de_portal  TO continental;
 -- la 41 comprueba que de verdad no lo tenga. Tampoco DELETE, como ninguna.
 GRANT SELECT, INSERT ON pedidos.prueba_de_sesion TO continental;
 
--- Sin GRANT sobre secuencias, y no es un olvido: las siete llaves son
+-- La octava, desde el 2026-10-06 (ticket 08 de lista-de-espera, migración 0021):
+-- el mínimo que pide cada proveedor, una fila por negocio y proveedor que se
+-- sobreescribe con su firma. Lleva UPDATE como las demás que cambian de valor:
+-- guardar es `insert ... on conflict do update`. Sin DELETE, como ninguna.
+GRANT SELECT, INSERT, UPDATE ON pedidos.minimo_del_proveedor TO continental;
+
+-- Sin GRANT sobre secuencias, y no es un olvido: las siete llaves de identidad son
 -- `GENERATED ALWAYS AS IDENTITY`, y la secuencia de una columna de identidad
 -- es interna a la tabla -- el INSERT sobre la tabla basta. Con `serial` haría
 -- falta además `USAGE` sobre la secuencia, un permiso extra fácil de olvidar

@@ -58,6 +58,7 @@ TABLAS = (
     "pedidos.corrida_del_lote",
     "pedidos.lectura_de_portal",
     "pedidos.prueba_de_sesion",
+    "pedidos.minimo_del_proveedor",
 )
 
 #: Lo único que Continental lee del almacén. Cinco y ninguna más: `fct_merma`,
@@ -458,11 +459,11 @@ def test_la_tabla_de_pruebas_dice_negocio_y_limita_el_resultado_con_su_acento():
         assert not re.search(r"_por\b|precio", _sin_comentarios(texto))
 
 
-def test_el_verificador_espera_siete_tablas_y_exceptua_el_update_de_las_pruebas():
+def test_el_verificador_espera_ocho_tablas_y_exceptua_el_update_de_las_pruebas():
     verificador = _texto(VERIFICAR_ROL)
 
-    assert "'Las siete tablas existen y NO las posee continental'" in verificador
-    assert "SELECT count(*) = 7" in verificador
+    assert "'Las ocho tablas existen y NO las posee continental'" in verificador
+    assert "SELECT count(*) = 8" in verificador
     # La comprobación 6 no le exige UPDATE a la tabla de pruebas...
     assert "NOT (c.relname = 'prueba_de_sesion' AND p = 'UPDATE')" in verificador
     # ... y la 41 comprueba que de verdad no lo tenga; la 42, el acento.

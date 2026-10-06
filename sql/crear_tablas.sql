@@ -1831,6 +1831,72 @@ CREATE INDEX IF NOT EXISTS ix_prueba_proveedor_cuando
     ON pedidos.prueba_de_sesion (negocio, proveedor, probada_en);
 
 -- --------------------------------------------------------------------------
+-- pedidos.minimo_del_proveedor (migración 0021, ticket 08 de lista-de-espera)
+-- --------------------------------------------------------------------------
+--
+-- Lo que cada proveedor pide como mínimo para surtir, TAL COMO LO DICE ÉL: con
+-- o sin IVA según `incluye_iva`, sin convertir al guardar. Una fila por negocio
+-- y proveedor, sobreescrita con su firma y SIN HISTORIAL.
+--
+-- SIN FILA = «sin mínimo capturado»; `monto = 0` = «no tiene mínimo». Son dos
+-- cosas distintas, y por eso la ausencia es la ausencia de la fila y no un cero
+-- (regla 4 de CLAUDE.md). `fijado_por` es el correo de Access: una firma, no un
+-- permiso (regla 3).
+CREATE TABLE IF NOT EXISTS`, el GRANT se
+-- puede repetir, y los COMMENT se reescriben iguales.
+
+\set ON_ERROR_STOP on
+
+SET client_encoding TO 'UTF8';
+
+-- Que no lo corra quien no debe, igual que las anteriores.
+DO $guardia$
+BEGIN
+    IF current_user = 'continental' THEN
+        RAISE EXCEPTION '%',
+            'Esta migración se corre con credenciales de DUEÑO (usuario '
+            || 'farmacia), no con el rol acotado continental: el rol no tiene '
+            || 'CREATE sobre su esquema y eso es deliberado (ADR 0003).';
+    END IF;
+END
+$guardia$;
+
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS pedidos.minimo_del_proveedor (
+    negocio      text          NOT NULL,
+    proveedor    text          NOT NULL,
+    monto        numeric(12,2) NOT NULL,
+    incluye_iva  boolean       NOT NULL,
+    fijado_por   text          NOT NULL,
+    fijado_en    timestamptz   NOT NULL DEFAULT now(),
+
+    CONSTRAINT pk_minimo_del_proveedor
+        PRIMARY KEY (negocio, proveedor),
+
+    CONSTRAINT ck_minimo_negocio
+        CHECK (negocio <> ''),
+
+    CONSTRAINT ck_minimo_proveedor
+        CHECK (proveedor <> ''),
+
+    CONSTRAINT ck_minimo_monto
+        CHECK (monto >= 0),
+
+    CONSTRAINT ck_minimo_fijado_por
+        CHECK (btrim(fijado_por) <> '')
+);
+
+COMMENT ON TABLE pedidos.minimo_del_proveedor IS
+    'Lo que cada proveedor pide como mínimo para surtir, tal como lo dice él. Una fila por negocio y proveedor, sobreescrita con su firma, sin historial. Sin fila = sin mínimo capturado; monto 0 = no tiene mínimo.';
+COMMENT ON COLUMN pedidos.minimo_del_proveedor.monto IS
+    'El mínimo tal como lo dice el proveedor, con la base de IVA de incluye_iva. 0 quiere decir que no tiene mínimo.';
+COMMENT ON COLUMN pedidos.minimo_del_proveedor.incluye_iva IS
+    'Si el monto que dijo el proveedor ya trae IVA. No se convierte al guardar: se compara contra el total del pedido en esta misma base.';
+COMMENT ON COLUMN pedidos.minimo_del_proveedor.fijado_por IS
+    'Correo de Cloudflare Access de quien lo puso. Es una firma, no un permiso.';
+
+-- --------------------------------------------------------------------------
 -- Qué quedó
 -- --------------------------------------------------------------------------
 
