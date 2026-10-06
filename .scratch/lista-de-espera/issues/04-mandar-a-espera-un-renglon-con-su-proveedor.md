@@ -9,7 +9,7 @@ también guarda el proveedor si ya lo hay. Ver la enmienda 2026-10-05 al ADR
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] Migración nueva (después de la 0019) en el renglón: proveedor de la
       espera, desde cuándo espera, cuántas listas lleva. Con sus CHECK, y los

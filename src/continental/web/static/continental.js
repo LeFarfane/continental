@@ -4804,9 +4804,14 @@ const pintarParticion = (particion, pedidos, editable, alPartir, alEnviar, alTac
     quien.textContent = g.nombre;
     encabezado.append(quien, insigniaDelPedido(g));
 
+    // El total del servidor, recalculado con lo que hoy cuelga del pedido: la
+    // columna guardada se escribió al partir y un pedido que se vació
+    // mandándolo a espera la dejaría vieja. Sin `total`, la de siempre.
     const cuanto = document.createElement('span');
-    cuanto.className = 'total' + (g.hay_total ? '' : ' nose');
-    cuanto.textContent = g.hay_total ? '$' + g.total_sin_iva : 'total sin saber';
+    const hayTotal = g.total ? g.total.hay : g.hay_total;
+    cuanto.className = 'total' + (hayTotal ? '' : ' nose');
+    cuanto.textContent = g.total ? g.total.frase
+      : (g.hay_total ? '$' + g.total_sin_iva : 'total sin saber');
 
     const que = document.createElement('span');
     que.className = 'que';

@@ -9,14 +9,14 @@ decir «pasa al día siguiente». El estado en la base sigue llamándose
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Los botones de la fila y del detalle en Revisar dicen «Mandar a espera»;
+- [x] Los botones de la fila y del detalle en Revisar dicen «Mandar a espera»;
       el de devolver dice algo como «Sacar de la espera».
-- [ ] El título y la frase del bloque de pospuestos usan «espera».
-- [ ] Las frases del renglón de la lista siguiente dicen «esperaban» en vez de
+- [x] El título y la frase del bloque de pospuestos usan «espera».
+- [x] Las frases del renglón de la lista siguiente dicen «esperaban» en vez de
       «pasaron»: *«se vendieron 2 y esperaban 3, se piden 5»*.
-- [ ] No cambia ninguna regla: las pruebas existentes de `test_posponer.py`
+- [x] No cambia ninguna regla: las pruebas existentes de `test_posponer.py`
       siguen pasando, con solo los textos esperados actualizados.
-- [ ] La columna, el estado y las rutas internas no se renombran.
-- [ ] La suite completa pasa.
+- [x] La columna, el estado y las rutas internas no se renombran.
+- [x] La suite completa pasa.

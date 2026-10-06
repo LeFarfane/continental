@@ -9,14 +9,14 @@ Ver el spec, sección «El EAN que abre el portal».
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done (Doyle, commit 9c72f5e, rama lista-de-espera)
 
-- [ ] Una ruta GET nueva en Doyle devuelve, por cada proveedor configurado, su
+- [x] Una ruta GET nueva en Doyle devuelve, por cada proveedor configurado, su
       clave, la dirección de búsqueda y si busca por dirección.
-- [ ] La respuesta **no** incluye la dirección del login, usuarios,
+- [x] La respuesta **no** incluye la dirección del login, usuarios,
       contraseñas, el perfil ni nada de la sesión; una prueba lo fija.
-- [ ] Un proveedor sin dirección de búsqueda configurada se dice como tal, no
+- [x] Un proveedor sin dirección de búsqueda configurada se dice como tal, no
       se omite en silencio.
-- [ ] Prueba de la ruta en el repo de Doyle, con su propia configuración de
+- [x] Prueba de la ruta en el repo de Doyle, con su propia configuración de
       prueba (sin datos reales).
-- [ ] Commit en el repo de Doyle, en español, con la línea de coautoría.
+- [x] Commit en el repo de Doyle, en español, con la línea de coautoría.

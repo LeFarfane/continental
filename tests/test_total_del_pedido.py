@@ -364,3 +364,13 @@ def test_el_boton_enviar_pinta_la_misma_cifra_del_servidor():
     cuerpo = cuerpo_de_funcion(pantalla_completa(), "const pintarPasoCaptura")
     assert "guardado.total.dinero" in cuerpo
     assert "guardado.total_sin_iva" not in cuerpo
+
+
+def test_el_pedido_fuera_de_la_particion_pinta_el_total_del_servidor():
+    """Un pedido que se vació mandándolo a espera ya no está en la partición y
+    se pinta desde el guardado: su `total_sin_iva` se escribió al partir y
+    quedaría viejo. Va el `total` del servidor, con la columna como respaldo."""
+    cuerpo = cuerpo_de_funcion(pantalla_completa(), "const pintarParticion =")
+    fuera = cuerpo[cuerpo.index("fueraDeLaParticion.forEach"):]
+    assert "g.total ? g.total.frase" in fuera
+    assert "g.total ? g.total.hay : g.hay_total" in fuera

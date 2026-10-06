@@ -8,7 +8,7 @@ pinta. Ver el spec, «El total por pedido», historias 1–6.
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] La respuesta de la captura trae el total de cada pedido, calculado por la
       misma función que la cifra de «Enviar» (no una segunda suma).
