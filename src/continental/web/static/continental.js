@@ -1185,7 +1185,7 @@ const marcasDe = (r) => {
   // producto al día siguiente y sus piezas se suman aquí. La frase la compone
   // Python: sin ella, "pide 5" con 2 vendidas no se podría verificar.
   if (r.frase_de_lo_que_paso_del_dia_anterior) {
-    agrega('marca tenue pospuesto', 'morado', 'Del día anterior',
+    agrega('marca tenue pospuesto', 'morado', 'De la espera',
       r.frase_de_lo_que_paso_del_dia_anterior);
   }
 
@@ -1318,15 +1318,15 @@ const renglon = (r, acciones) => {
   // un clic, sin diálogo, y se deshace desde el bloque de abajo. Dice lo
   // contrario que la cruz: "se pide mañana", no "no se pide". La bandera viene
   // resuelta de `transiciones.motivo_para_no_editar`, igual que `editable`.
-  const posponer = botonDeAccion('Pasar al día siguiente', (boton) => acciones.posponer(r, boton));
+  const posponer = botonDeAccion('Mandar a espera', (boton) => acciones.posponer(r, boton));
   posponer.className = 'quitar posponer';
   posponer.textContent = '→';
   posponer.disabled = !r.se_puede_posponer || !acciones.posponer;
   posponer.title = r.se_puede_posponer
-    ? 'Pasar al día siguiente: se pide mañana, no hoy. Se puede devolver a la lista.'
-    : 'Ya no se puede pasar al día siguiente: la lista ya no está abierta, o el renglón ya se atendió.';
+    ? 'Mandar a espera: no se pide hoy, y entra a la siguiente lista. Se puede sacar de la espera.'
+    : 'Ya no se puede mandar a espera: la lista ya no está abierta, o el renglón ya se atendió.';
   // El nombre del producto va en el nombre accesible, por lo mismo que la cruz.
-  posponer.setAttribute('aria-label', 'Pasar al día siguiente ' + r.descripcion);
+  posponer.setAttribute('aria-label', 'Mandar a espera ' + r.descripcion);
   celdaAcciones.append(posponer, quitar);
 
   tr.append(producto, existencia, cobertura, cantidad,
@@ -1440,8 +1440,8 @@ const renglonDescartado = (r, alDevolver) => {
   const nombre = document.createElement('span');
   nombre.textContent = r.descripcion;
 
-  const devolver = botonDeAccion('Devolver a la lista', (boton) => alDevolver(r, boton));
-  devolver.setAttribute('aria-label', 'Devolver ' + r.descripcion + ' a la lista');
+  const devolver = botonDeAccion('Sacar de la espera', (boton) => alDevolver(r, boton));
+  devolver.setAttribute('aria-label', 'Sacar de la espera ' + r.descripcion);
   // Deshacer también es modificar, así que sigue la misma regla que descartar.
   // Apagarlo solo de un lado sería lo peor de los dos mundos: un renglón que
   // alguien quitó por error se quedaría fuera de una lista cerrada sin manera
@@ -1455,7 +1455,7 @@ const renglonDescartado = (r, alDevolver) => {
   // pero deja de recalcularlo sin prueba.
   devolver.disabled = !r.se_puede_devolver_a_abierto;
   devolver.title = r.se_puede_devolver_a_abierto
-    ? 'Vuelve a la lista como estaba.'
+    ? 'Vuelve a la lista de hoy como estaba.'
     : 'La lista ya se cerró: lo que se iba a pedir ya se pidió.';
 
   // Quién y cuándo, a la vista. Es una firma, no un permiso (regla 3 de
@@ -1480,14 +1480,14 @@ const renglonPospuesto = (r, alDevolver) => {
   const nombre = document.createElement('span');
   nombre.textContent = r.descripcion;
 
-  const devolver = botonDeAccion('Devolver a la lista', (boton) => alDevolver(r, boton));
-  devolver.setAttribute('aria-label', 'Devolver ' + r.descripcion + ' a la lista');
+  const devolver = botonDeAccion('Sacar de la espera', (boton) => alDevolver(r, boton));
+  devolver.setAttribute('aria-label', 'Sacar de la espera ' + r.descripcion);
   // Deshacer también es modificar: con la lista cerrada ya no se ofrece, y la
   // bandera viene resuelta de `transiciones.motivo_para_no_editar`.
   devolver.disabled = !r.se_puede_devolver_pospuesto;
   devolver.title = r.se_puede_devolver_pospuesto
-    ? 'Vuelve a la lista como estaba.'
-    : 'La lista ya se cerró: lo que pasó al día siguiente ya va en la siguiente lista.';
+    ? 'Vuelve a la lista de hoy como estaba.'
+    : 'La lista ya se cerró: lo que estaba en espera ya va en la siguiente lista.';
 
   // Quién y cuándo ya vienen dentro de la frase de Python (es una firma, no un
   // permiso: regla 3 de CLAUDE.md).
@@ -2122,8 +2122,8 @@ const pintarDetalle = (r, acciones) => {
   // volver a consultar el precio, teñida.
   const botones = [];
   if (r.se_puede_posponer && acciones.posponer) {
-    const posponer = botonDeAccion('Pasar al día siguiente', (b) => acciones.posponer(r, b), 'tenida');
-    posponer.setAttribute('aria-label', 'Pasar al día siguiente ' + r.descripcion);
+    const posponer = botonDeAccion('Mandar a espera', (b) => acciones.posponer(r, b), 'tenida');
+    posponer.setAttribute('aria-label', 'Mandar a espera ' + r.descripcion);
     botones.push(posponer);
   }
   if (r.se_puede_editar) {
@@ -2852,7 +2852,7 @@ async function cargarPedido(fecha) {
     moverRenglon(r.renglon_id, '/devolver', boton, aplicar);
   }
 
-  // Pasar al día siguiente y devolverlo (ADR 0025): la misma petición pelada
+  // Mandar a espera y sacar de la espera (ADR 0025): la misma petición pelada
   // que descartar y devolver, con otro final de ruta.
   function posponer(r, boton) {
     moverRenglon(r.renglon_id, '/posponer', boton, aplicar);
@@ -4991,7 +4991,7 @@ const pintarDescartados = (renglones, cuantos, alDevolver) => {
 const pintarPospuestos = (renglones, cuantos, titulo, alDevolver) => {
   const caja = document.getElementById('pospuestos');
   document.getElementById('pospuestos-resumen').textContent =
-    (titulo || 'Pasan al día siguiente') + ' de esta lista. Queda guardado quién y cuándo.';
+    (titulo || 'En espera') + ' de esta lista. Queda guardado quién y cuándo.';
   document.getElementById('pospuestos-lista').replaceChildren(
     ...renglones.map(r => renglonPospuesto(r, alDevolver)));
   caja.hidden = !cuantos;

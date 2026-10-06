@@ -149,8 +149,8 @@ def _frase_de_lo_normal(lista: PedidoSugeridoGuardado, sin_pedir: int, en_borrad
     """Lo que dice la confirmación siempre: cuánto queda sin pedir."""
     if sin_pedir == 0:
         cabeza = (
-            "Todo lo de esta lista ya se pidió, se descartó o pasa al día "
-            "siguiente."
+            "Todo lo de esta lista ya se pidió, se descartó o está en "
+            "espera."
             if lista.pospuestos
             else "Todo lo de esta lista ya se pidió o se descartó."
         )
@@ -178,9 +178,9 @@ def _frase_de_lo_normal(lista: PedidoSugeridoGuardado, sin_pedir: int, en_borrad
         # Lo que pasa a mañana NO se pierde al cerrar (ADR 0025): se dice, para
         # que quien cierra sepa que esos renglones sí vuelven.
         cabeza += (
-            " 1 renglón pasa al día siguiente y la siguiente lista lo trae."
+            " 1 renglón está en espera y la siguiente lista lo trae."
             if lista.pospuestos == 1
-            else f" {lista.pospuestos} renglones pasan al día siguiente y la "
+            else f" {lista.pospuestos} renglones están en espera y la "
             "siguiente lista los trae."
         )
     siguiente = lista.ventana.hasta + dt.timedelta(days=1)

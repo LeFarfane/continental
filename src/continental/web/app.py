@@ -1648,7 +1648,7 @@ def posponer_renglon(
         renglon_id,
         request,
         lambda negocio, firma: almacenamiento.posponer(negocio, renglon_id, firma),
-        verbo="pasar el renglón al día siguiente",
+        verbo="mandar el renglón a espera",
         choque=(
             "Ese renglón ya no estaba abierto. Vuelve a cargar la página para "
             "ver cómo quedó."
@@ -1675,9 +1675,9 @@ def devolver_renglon_pospuesto(
         renglon_id,
         request,
         lambda negocio, firma: almacenamiento.devolver_pospuesto(negocio, renglon_id),
-        verbo="devolver a la lista el renglón pospuesto",
+        verbo="sacar de la espera el renglón",
         choque=(
-            "Ese renglón ya no pasaba al día siguiente. Vuelve a cargar la "
+            "Ese renglón ya no estaba en espera. Vuelve a cargar la "
             "página para ver cómo quedó."
         ),
         accion="devolver_pospuesto",

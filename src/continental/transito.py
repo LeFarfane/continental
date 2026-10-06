@@ -542,7 +542,7 @@ def frase_de_lo_que_paso_del_dia_anterior(
 
     Es el par de `frase_de_lo_que_falto` (ADR 0025): sin ella, "pide 5" con 2
     vendidas no se podría verificar mirando la pantalla. Dice la aritmética
-    entera cuando hubo ventas —*se vendieron 2 y pasaron 3 de ayer, se piden
+    entera cuando hubo ventas —*se vendieron 2 y esperaban 3, se piden
     5*— y dice que **no se vendió nada** cuando no: el producto entra a la
     lista aunque no se haya vuelto a vender, y sin la frase un renglón con 0
     vendidas parecería un error. `None` con cero piezas pospuestas.
@@ -553,15 +553,15 @@ def frase_de_lo_que_paso_del_dia_anterior(
     if not pospuestas:
         return None
     pasaron = (
-        "pasó 1 pieza" if pospuestas == 1 else f"pasaron {pospuestas} piezas"
+        "esperaba 1 pieza" if pospuestas == 1 else f"esperaban {pospuestas} piezas"
     )
     if vendidas:
         return (
-            f"Trae piezas que pasaron del día anterior: se vendieron "
+            f"Trae piezas que estaban en espera: se vendieron "
             f"{_piezas(vendidas)} y {pasaron}, se piden {propuesta}."
         )
     return (
-        f"Trae piezas que pasaron del día anterior: no se vendió nada desde "
+        f"Trae piezas que estaban en espera: no se vendió nada desde "
         f"entonces y {pasaron}, se piden {propuesta}."
     )
 
@@ -580,8 +580,8 @@ def frase_del_renglon_pospuesto(renglon: "RenglonGuardado") -> str | None:
     cuantas = "1 pieza" if piezas == 1 else f"{piezas} piezas"
     firma = _firma_de_la_cancelacion(renglon.pospuesto_por, renglon.pospuesto_en)
     return (
-        f"Pasa al día siguiente ({cuantas}): se vuelve a proponer en la "
-        f"siguiente lista. Lo pasó {firma}."
+        f"En espera ({cuantas}): se vuelve a proponer en la "
+        f"siguiente lista. Lo mandó a espera {firma}."
     )
 
 
@@ -595,8 +595,8 @@ def titulo_de_los_pospuestos(cuantos: int) -> str | None:
     if not cuantos:
         return None
     if cuantos == 1:
-        return "1 renglón pasa al día siguiente"
-    return f"{cuantos} renglones pasan al día siguiente"
+        return "1 renglón en espera"
+    return f"{cuantos} renglones en espera"
 
 
 def frase_de_los_pospuestos(cuantos: int) -> str | None:

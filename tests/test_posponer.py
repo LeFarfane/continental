@@ -254,7 +254,7 @@ def test_solo_un_renglon_abierto_de_una_lista_abierta_se_pospone():
         ("recibido", "ya llegó"),
         ("cancelado", "se dejó de esperar"),
         (RENGLON_DESCARTADO, "primero hay que devolverlo"),
-        (RENGLON_POSPUESTO, "ya pasa al día siguiente"),
+        (RENGLON_POSPUESTO, "ya está en espera"),
     ],
 )
 def test_lo_que_ya_no_esta_abierto_no_se_pospone_y_dice_por_que(estado, pista):
@@ -280,7 +280,7 @@ def test_devolver_pospuesto_exige_lo_contrario_el_renglon_pospuesto():
         motivo = motivo_para_no_editar(
             _guardado(1, 1, estado), _lista_guardada(), "devolver_pospuesto"
         )
-        assert motivo is not None and "no pasa al día siguiente" in motivo
+        assert motivo is not None and "no está en espera" in motivo
     assert (
         motivo_para_no_editar(
             _guardado(1, 1, RENGLON_POSPUESTO), _lista_guardada(), "devolver_pospuesto"
@@ -294,7 +294,7 @@ def test_un_pospuesto_no_se_descarta_ni_se_ajusta_sin_devolverlo():
         motivo = motivo_para_no_editar(
             _guardado(1, 1, RENGLON_POSPUESTO), _lista_guardada(), accion
         )
-        assert motivo is not None and "primero hay que devolverlo" in motivo
+        assert motivo is not None and "primero hay que sacarlo de la espera" in motivo
 
 
 # ------------------------------------------------------------- las frases
@@ -303,7 +303,7 @@ def test_un_pospuesto_no_se_descarta_ni_se_ajusta_sin_devolverlo():
 def test_la_frase_del_renglon_de_manana_dice_la_aritmetica_entera():
     frase = frase_de_lo_que_paso_del_dia_anterior(pospuestas=3, vendidas=2, propuesta=5)
     assert frase == (
-        "Trae piezas que pasaron del día anterior: se vendieron 2 y pasaron 3 "
+        "Trae piezas que estaban en espera: se vendieron 2 y esperaban 3 "
         "piezas, se piden 5."
     )
 
@@ -311,11 +311,11 @@ def test_la_frase_del_renglon_de_manana_dice_la_aritmetica_entera():
 def test_la_frase_dice_que_no_se_vendio_nada_en_vez_de_dejar_un_cero_sin_explicar():
     frase = frase_de_lo_que_paso_del_dia_anterior(pospuestas=3, vendidas=0, propuesta=3)
     assert "no se vendió nada" in frase
-    assert "pasaron 3 piezas" in frase
+    assert "esperaban 3 piezas" in frase
 
 
 def test_la_frase_concuerda_con_una_sola_pieza_y_con_granel():
-    assert "pasó 1 pieza" in frase_de_lo_que_paso_del_dia_anterior(1, 2, 3)
+    assert "esperaba 1 pieza" in frase_de_lo_que_paso_del_dia_anterior(1, 2, 3)
     assert "se vendieron 2.5 y" in frase_de_lo_que_paso_del_dia_anterior(3, 2.5, 6)
 
 
@@ -342,8 +342,8 @@ def test_la_frase_del_pospuesto_concuerda_en_singular_y_calla_si_no_lo_esta():
 def test_el_titulo_y_la_frase_de_los_pospuestos_concuerdan_y_dicen_que_no_cuentan():
     assert titulo_de_los_pospuestos(0) is None
     assert frase_de_los_pospuestos(0) is None
-    assert titulo_de_los_pospuestos(1) == "1 renglón pasa al día siguiente"
-    assert titulo_de_los_pospuestos(3) == "3 renglones pasan al día siguiente"
+    assert titulo_de_los_pospuestos(1) == "1 renglón en espera"
+    assert titulo_de_los_pospuestos(3) == "3 renglones en espera"
     assert "no cuenta en el total de hoy" in frase_de_los_pospuestos(1)
     assert "no cuentan en el total de hoy" in frase_de_los_pospuestos(3)
     assert "siguiente lista" in frase_de_los_pospuestos(3)
@@ -355,7 +355,7 @@ def test_el_titulo_y_la_frase_de_los_pospuestos_concuerdan_y_dicen_que_no_cuenta
 
 
 def test_las_piezas_pospuestas_se_suman_a_lo_vendido_y_se_dicen_aparte():
-    """"Se vendieron 2 y pasaron 3, se piden 5": verificable de un vistazo."""
+    """"Se vendieron 2 y esperaban 3, se piden 5": verificable de un vistazo."""
     lista = calcular_pedido_sugerido(
         ventas=[_venta(MIERCOLES, 1, 2)], catalogo=[_producto(1)], pospuestos={1: 3}
     )
@@ -875,7 +875,7 @@ def test_cerrar_con_pospuestos_lo_dice_y_no_los_cuenta_como_sin_pedir():
     assert resumen["sin_pedir"] == 1
     assert resumen["se_perderian"] == []
     assert resumen["boton"] == "Cerrar la lista"
-    assert "2 renglones pasan al día siguiente" in resumen["frase"]
+    assert "2 renglones están en espera" in resumen["frase"]
     assert "la siguiente lista los trae" in resumen["frase"]
 
 
@@ -885,9 +885,9 @@ def test_cerrar_con_un_solo_pospuesto_concuerda_y_con_todo_atendido_lo_dice():
 
     assert resumen["sin_pedir"] == 0
     assert resumen["frase"].startswith(
-        "Todo lo de esta lista ya se pidió, se descartó o pasa al día siguiente."
+        "Todo lo de esta lista ya se pidió, se descartó o está en espera."
     )
-    assert "1 renglón pasa al día siguiente y la siguiente lista lo trae" in resumen["frase"]
+    assert "1 renglón está en espera y la siguiente lista lo trae" in resumen["frase"]
 
 
 def test_sin_pospuestos_la_frase_de_cerrar_no_cambia():
@@ -1022,9 +1022,9 @@ def test_la_respuesta_trae_los_conteos_y_las_frases_hechas_en_python(cliente, al
     assert cuerpo["pospuestos"] == 1
     assert cuerpo["descartados"] == 0
     assert cuerpo["de_trabajo"] == 1
-    assert cuerpo["titulo_de_los_pospuestos"] == "1 renglón pasa al día siguiente"
+    assert cuerpo["titulo_de_los_pospuestos"] == "1 renglón en espera"
     assert "no cuenta en el total de hoy" in cuerpo["frase_de_los_pospuestos"]
-    assert "Pasa al día siguiente (3 piezas)" in cuerpo["renglon"]["frase_de_lo_pospuesto"]
+    assert "En espera (3 piezas)" in cuerpo["renglon"]["frase_de_lo_pospuesto"]
     assert CORREO in cuerpo["renglon"]["frase_de_lo_pospuesto"]
 
 
@@ -1070,7 +1070,7 @@ def test_la_firma_va_tambien_a_la_bitacora(cliente, almacen, caplog):
         _posponer(cliente, renglon_id)
 
     assert CORREO in caplog.text
-    assert "pasar el renglón al día siguiente" in caplog.text
+    assert "mandar el renglón a espera" in caplog.text
 
 
 def test_devolver_lo_pospuesto_vuelve_a_abierto_y_a_la_lista_de_trabajo(
@@ -1102,7 +1102,7 @@ def test_posponer_dos_veces_contesta_409_y_no_mueve_la_firma(cliente, almacen):
 
     assert segunda.status_code == 409
     assert segunda.json()["ok"] is False
-    assert "ya pasa al día siguiente" in segunda.json()["detalle"]
+    assert "ya está en espera" in segunda.json()["detalle"]
     assert _renglon_de(cliente.get(RUTA).json(), 1)["pospuesto_en"] == primera
 
 
@@ -1113,7 +1113,7 @@ def test_devolver_lo_que_no_esta_pospuesto_contesta_409(cliente, almacen):
     respuesta = _devolver(cliente, renglon_id)
 
     assert respuesta.status_code == 409
-    assert "no pasa al día siguiente" in respuesta.json()["detalle"]
+    assert "no está en espera" in respuesta.json()["detalle"]
 
 
 def test_posponer_lo_que_no_existe_contesta_409(cliente, almacen):
@@ -1192,7 +1192,7 @@ def test_cerrar_la_lista_no_senala_un_pospuesto_como_perdida(cliente, almacen):
 
     assert resumen["se_perderian"] == []
     assert resumen["sin_pedir"] == 1
-    assert "pasa al día siguiente" in resumen["frase"]
+    assert "está en espera" in resumen["frase"]
 
 
 # ------------------------------------------ el día siguiente, de verdad
@@ -1217,7 +1217,7 @@ def test_la_siguiente_lista_trae_las_piezas_pospuestas_sumadas_a_lo_vendido(
     assert renglon["cantidad_propuesta"] == 5
     assert renglon["cantidad_a_pedir"] == 5
     assert renglon["frase_de_lo_que_paso_del_dia_anterior"] == (
-        "Trae piezas que pasaron del día anterior: se vendieron 2 y pasaron 3 "
+        "Trae piezas que estaban en espera: se vendieron 2 y esperaban 3 "
         "piezas, se piden 5."
     )
     # Lo que ayer NO se pasó no trae nada del día anterior.
@@ -1343,7 +1343,7 @@ def _funcion(nombre: str) -> str:
 def test_cada_fila_trae_su_flecha_con_el_nombre_del_producto_y_apagada_con_la_bandera():
     cuerpo = _funcion("renglon")
     assert "acciones.posponer" in cuerpo
-    assert "'Pasar al día siguiente ' + r.descripcion" in cuerpo
+    assert "'Mandar a espera ' + r.descripcion" in cuerpo
     assert "posponer.disabled = !r.se_puede_posponer" in cuerpo
     # Junto a la cruz, y con el mismo estilo de botón.
     assert "celdaAcciones.append(posponer, quitar)" in cuerpo
@@ -1353,7 +1353,7 @@ def test_cada_fila_trae_su_flecha_con_el_nombre_del_producto_y_apagada_con_la_ba
 def test_el_detalle_ofrece_pasar_al_dia_siguiente_solo_si_se_puede():
     cuerpo = _funcion("pintarDetalle")
     assert "r.se_puede_posponer && acciones.posponer" in cuerpo
-    assert "'Pasar al día siguiente ' + r.descripcion" in cuerpo
+    assert "'Mandar a espera ' + r.descripcion" in cuerpo
 
 
 def test_la_pantalla_no_pide_confirmacion_para_pasar_al_dia_siguiente():
@@ -1382,7 +1382,7 @@ def test_el_bloque_de_pospuestos_tiene_su_html_su_boton_de_devolver_y_se_esconde
 
     cuerpo = _funcion("renglonPospuesto")
     assert "se_puede_devolver_pospuesto" in cuerpo
-    assert "'Devolver ' + r.descripcion + ' a la lista'" in cuerpo
+    assert "'Sacar de la espera ' + r.descripcion" in cuerpo
     # Las frases las compone Python: el JavaScript solo las pinta.
     assert "r.frase_de_lo_pospuesto" in cuerpo
 
@@ -1413,7 +1413,7 @@ def test_el_css_nuevo_usa_solo_variables_de_root():
         for linea in css.splitlines()
         if linea.startswith((".quitar.posponer", ".descartados.pospuestos"))
     ]
-    assert reglas, "no se encontró el CSS del botón de pasar al día siguiente"
+    assert reglas, "no se encontró el CSS del botón de mandar a espera"
     for linea in reglas:
         assert "#" not in linea.split("/*")[0], linea
         assert "rgb(" not in linea and "hsl(" not in linea, linea

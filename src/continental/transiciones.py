@@ -397,7 +397,7 @@ def _motivo_por_estado_del_renglon(renglon: "RenglonGuardado", accion: str) -> s
         "descartar": "descartarlo",
         "ajustar_la_cantidad": "corregir su cantidad",
         "elegir_proveedor": "elegir a quién pedírselo",
-        "posponer": "pasarlo al día siguiente",
+        "posponer": "mandarlo a espera",
     }[accion]
     if renglon.esta_en_transito:
         return f"ya se le pidió a un proveedor: {verbo} diría que nadie lo pidió."
@@ -415,8 +415,8 @@ def _motivo_por_estado_del_renglon(renglon: "RenglonGuardado", accion: str) -> s
         )
     if renglon.estado == RENGLON_POSPUESTO:
         return (
-            "ese renglón ya pasa al día siguiente: primero hay que devolverlo "
-            "a la lista."
+            "ese renglón ya está en espera: primero hay que sacarlo de la "
+            "espera."
         )
     return f"ese renglón ya no está abierto: no se puede {verbo}."
 
@@ -458,8 +458,8 @@ def motivo_para_no_editar(
     elif accion == DEVOLVER_POSPUESTO:
         if renglon.estado != RENGLON_POSPUESTO:
             return (
-                "ese renglón no pasa al día siguiente: no hay nada que "
-                "devolver a la lista."
+                "ese renglón no está en espera: no hay nada que sacar de la "
+                "espera."
             )
     elif renglon.estado != RENGLON_ABIERTO:
         return _motivo_por_estado_del_renglon(renglon, accion)
