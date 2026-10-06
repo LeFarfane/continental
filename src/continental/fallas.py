@@ -60,7 +60,7 @@ PRUEBA_EN_CURSO = "prueba_en_curso"
 #: ventana es de quien está tecleando, y una búsqueda ahí le estorbaría.
 PORTAL_EN_EL_VISOR = "portal_en_el_visor"
 #: Doyle contestó 409 a «Ver en el portal» (ADR 0026): el visor lo usa una
-#: sesión o la vista de otro portal, o ese proveedor está consultando. La
+#: sesión que espera, o ese proveedor está consultando. La
 #: frase del porqué es de Doyle; esto solo dice qué hacer.
 VISOR_OCUPADO = "visor_ocupado"
 #: Una corrida programada del lote ya debía haber pasado sobre esta lista y
@@ -123,9 +123,9 @@ _QUE_HACER = {
         "ventana no está, avísale {a_quien}."
     ),
     VISOR_OCUPADO: (
-        "Termina primero con lo que tiene el visor —«Ya vi» si es otra vista, "
-        "«Ya entré» o «Cancelar» si es una sesión— y vuelve a intentarlo. Si "
-        "no hay nada abierto, avísale {a_quien}."
+        "Si hay una sesión esperando, termínala —«Ya entré» o «Cancelar»—; si "
+        "ese proveedor está consultando, espera a que acabe. Después vuelve a "
+        "intentarlo. Si no hay nada de eso, avísale {a_quien}."
     ),
     LOTE: (
         "Revisa `systemctl status continental-lote` y el journal "

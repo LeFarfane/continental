@@ -867,7 +867,7 @@ const filaDelPortal = (r, proveedor, nombre, acciones) => {
   ver.title = 'Abre el portal de ' + nombre + ' en el visor, con la búsqueda de este producto.';
   fila.append(ver);
 
-  if (VISTAS_EN_PORTAL.has(proveedor)) {
+  if (VISTA_EN_PORTAL === proveedor) {
     const ya = botonDeAccion('Ya vi', (b) => acciones.cerrarVista(proveedor, b), 'tenida');
     ya.setAttribute('aria-label', 'Ya vi el portal de ' + nombre + ': cerrar la vista');
     ya.title = 'Cierra la vista de ' + nombre + ' en el visor.';
@@ -1911,13 +1911,14 @@ const recargarLoQueSeVe = () =>
 let PASO = 'revisar';
 let PEDIDO_EN_CAPTURA = null;
 let RENGLON_ELEGIDO = null;
-// Los proveedores cuya vista de portal quedó abierta en el visor desde ESTA
-// pantalla (ADR 0026): lo que decide si su tarjeta enseña «Ya vi». Es memoria
-// de esta pestaña y no del servidor: recargar la olvida, y entonces volver a
-// darle «Ver en el portal» contesta «ya estaba abierto» y la recupera. Doyle
-// tiene una sola vista a la vez, así que la clave no incluye el renglón: la
-// vista abierta se cierra desde la tarjeta de ese proveedor en cualquier renglón.
-const VISTAS_EN_PORTAL = new Set();
+// El proveedor cuya vista de portal quedó abierta en el visor desde ESTA
+// pantalla (ADR 0026), o null: lo que decide qué tarjeta enseña «Ya vi». Es
+// UNO solo porque Doyle tiene una sola vista a la vez: abrir la de otro
+// proveedor reemplaza a la anterior, y «Ya vi» se mueve a la tarjeta nueva. Es
+// memoria de esta pestaña y no del servidor: recargar la olvida, y entonces
+// volver a darle «Ver en el portal» contesta «ya estaba abierto» y la recupera.
+// No incluye el renglón: se cierra desde la tarjeta de ese proveedor en cualquiera.
+let VISTA_EN_PORTAL = null;
 let DETALLE_ABIERTO = false;
 let HAY_DETALLE = false;
 // Si la franja de avisos está abierta. `null` es "que decida la pantalla":
@@ -3047,7 +3048,7 @@ async function cargarPedido(fecha) {
     }
     // Se repinta el detalle para que esa tarjeta ofrezca «Ya vi», y la nota se
     // escribe DESPUÉS: repintar no la toca, pero así el orden no importa.
-    VISTAS_EN_PORTAL.add(proveedor);
+    VISTA_EN_PORTAL = proveedor;
     elegirRenglon(r);
 
     // SIN VISOR CONFIGURADO no se inventa a dónde mandar a nadie: la frase del
@@ -3082,7 +3083,7 @@ async function cargarPedido(fecha) {
       notaDeFalla('pedido-accion', respuesta);
       return;
     }
-    VISTAS_EN_PORTAL.delete(proveedor);
+    VISTA_EN_PORTAL = null;
     const r = datos.renglones.find(x => x.renglon_id === RENGLON_ELEGIDO);
     if (r) elegirRenglon(r);
     nota('pedido-accion', respuesta.mensaje);

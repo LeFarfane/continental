@@ -42,9 +42,17 @@ sesión» ya abre con `window.open(respuesta.visor, 'visor-doyle')`.
 
 | Llamada | Respuesta |
 |---|---|
-| `POST /api/ver/{clave}` con `{"termino": "<EAN>"}` | 200 `{ok, ya_abierta, parece_login}`; 404 proveedor desconocido; 409 `{detail}` visor ocupado o proveedor consultando; 400 término vacío |
+| `POST /api/ver/{clave}` con `{"termino": "<EAN>"}` | 200 `{ok, ya_abierta, parece_login}`; 404 proveedor desconocido; 409 `{detail}` si una **sesión** espera en el visor o si ese proveedor está consultando; 400 término vacío |
 | `POST /api/ver/{clave}/cerrar` | 200 `{ok}`; 404 si no había vista |
 | `GET /api/ver` | `{clave: {termino, abierta_en}}` (no se usa hoy) |
+
+Una vista de **otro** proveedor no da 409: **reemplaza** a la abierta (Doyle
+cierra la vieja y abre la nueva). `ya_abierta` es «ya había una vista de ese
+mismo proveedor». Como Doyle tarda en lanzar Chromium y navegar (en LEVIC y
+QuePharma espera la caja de búsqueda hasta 20 s), `ver_en_portal` espera hasta
+60 s (`TOPE_DE_VER_EN_PORTAL_SEG`) y no los 10 s del YAML; «Ya vi» se queda con
+el corto. Si se agota, la frase dice que Doyle tardó demasiado y que el portal
+puede haberse abierto en el visor.
 
 La clave del proveedor es la misma de las sesiones (`nadro`, `levic`, `vicma`,
 `quepharma`).
@@ -77,6 +85,9 @@ viaja su tipo») no necesita ninguna excepción para él.
   manda encabezados que impiden embeberlo, y noVNC necesita el teclado en
   exclusiva.
 - **Que el navegador mande el término a buscar.** Se descartó (decisión 4).
+- **Que ver otro proveedor dé 409 hasta cerrar la vista.** Descartado al
+  construir Doyle: reemplazar es lo que la persona quiere al saltar de una
+  tarjeta a otra.
 - **Meter «Ya vi» en la misma tarjeta con un solo botón que alterna.** Se
   descartó: «Ver en el portal» sigue siendo útil con la vista abierta (volver a
   abrir la ventana del visor si se cerró la pestaña), y un botón que cambia de
@@ -88,12 +99,13 @@ viaja su tipo») no necesita ninguna excepción para él.
 
 ## Consecuencias
 
-- **Un solo uso del visor a la vez.** El visor muestra la pantalla entera de
-  atlas (ADR 0018): una vista abierta lo ocupa, y mientras tanto no se puede
-  abrir otra vista ni una sesión (Doyle contesta 409 y la pantalla dice por
-  qué). Hay que dar «Ya vi» al terminar; si se olvida, Doyle la cierra sola.
+- **Una sola vista a la vez.** El visor muestra la pantalla entera de atlas
+  (ADR 0018): ver otro proveedor **reemplaza** la vista abierta, y la pantalla
+  mueve «Ya vi» a la tarjeta nueva. Una vista no estorba a otra, pero **sí a una
+  sesión**: con una sesión esperando no se abre ninguna vista (409). Hay que dar
+  «Ya vi» al terminar; si se olvida, Doyle la cierra sola.
 - **El proveedor que se ve no se puede consultar mientras está abierto**
-  (Doyle contesta 409 en cualquiera de las dos direcciones). «Volver a
+  (Doyle contesta 409 si se pide ver al proveedor que está consultando). «Volver a
   consultar» o el lote nocturno que lo necesiten esperan a «Ya vi» o al tope.
 - La memoria de qué vistas hay abiertas es de cada pestaña; no se comparte
   entre computadoras.

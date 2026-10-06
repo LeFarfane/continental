@@ -389,14 +389,11 @@ class DoyleFalso:
                 "El visor lo usa una sesión que espera a que alguien entre; "
                 "termínala primero."
             )
-        otra = next((p for p in self.vistas_abiertas if p != proveedor), None)
-        if otra is not None:
-            return VisorOcupado(
-                f"El visor ya muestra el portal de {NOMBRES_DE_PROVEEDOR[otra]}; "
-                "ciérralo con «Ya vi»."
-            )
+        # La vista de OTRO proveedor no estorba: el Doyle real la REEMPLAZA
+        # (cierra la vieja y abre la nueva). `ya_abierta` es solo "ya había una
+        # de este mismo proveedor".
         ya_abierta = proveedor in self.vistas_abiertas
-        self.vistas_abiertas[proveedor] = termino
+        self.vistas_abiertas = {proveedor: termino}
         return VistaAbierta(
             proveedor=proveedor,
             ya_abierta=ya_abierta,

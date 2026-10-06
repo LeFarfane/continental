@@ -15,6 +15,7 @@ import pytest
 
 from continental import config
 from continental.doyle import (
+    TOPE_DE_VER_EN_PORTAL_SEG,
     DoylePorHttp,
     ProveedorDesconocido,
     VisorOcupado,
@@ -132,6 +133,17 @@ def test_el_409_de_doyle_llega_con_su_frase(cliente, doyle, renglon):
     assert cuerpo["que_hacer"]
 
 
+def test_ver_otro_proveedor_reemplaza_la_vista_abierta(cliente, doyle, renglon):
+    """Como el Doyle real: la vista nueva cierra la vieja, sin 409."""
+    _ver(cliente, "nadro", renglon["renglon_id"])
+
+    respuesta = _ver(cliente, "levic", renglon["renglon_id"])
+
+    assert respuesta.status_code == 200
+    assert respuesta.json()["ya_abierta"] is False
+    assert doyle.vistas_abiertas == {"levic": CLAVE}
+
+
 def test_con_una_sesion_esperando_el_visor_esta_ocupado(cliente, doyle, renglon):
     doyle.abrir_sesion("levic")
 
@@ -139,6 +151,33 @@ def test_con_una_sesion_esperando_el_visor_esta_ocupado(cliente, doyle, renglon)
 
     assert respuesta.status_code == 409
     assert "sesión" in respuesta.json()["detalle"]
+
+
+def test_si_doyle_tarda_mas_del_tope_la_frase_dice_que_pudo_abrirse(cliente, doyle, renglon):
+    doyle.falla = httpx.ReadTimeout("secreto interno")
+
+    respuesta = _ver(cliente, "nadro", renglon["renglon_id"]).json()
+
+    assert respuesta["ok"] is False
+    assert "tardó demasiado" in respuesta["detalle"]
+    assert "sí se haya abierto" in respuesta["detalle"]
+    assert "secreto" not in str(respuesta)
+
+
+def test_ver_espera_a_doyle_un_tope_propio_y_cerrar_el_corto():
+    esperas = {}
+
+    def contestar(peticion):
+        esperas[peticion.url.path] = peticion.extensions["timeout"]["read"]
+        return httpx.Response(200, json={"ok": True})
+
+    doyle = DoylePorHttp(url="http://127.0.0.1:8383", timeout_seg=10,
+                         transporte=httpx.MockTransport(contestar))
+    doyle.ver_en_portal("nadro", CLAVE)
+    doyle.cerrar_vista("nadro")
+
+    assert esperas["/api/ver/nadro"] == TOPE_DE_VER_EN_PORTAL_SEG == 60.0
+    assert esperas["/api/ver/nadro/cerrar"] == 10
 
 
 def test_doyle_caido_es_doyle_no_responde_sin_el_texto_de_la_excepcion(

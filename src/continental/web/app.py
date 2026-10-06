@@ -4073,6 +4073,21 @@ def ver_en_el_portal(
 
     try:
         vista = doyle.ver_en_portal(limpio, clave)
+    except httpx.TimeoutException:
+        # Doyle tardó más del tope: el portal PUDO abrirse en el visor.
+        log.warning("Doyle no contestó a tiempo al abrir %s para ver el EAN %s", limpio, clave)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "detalle": (
+                    f"Doyle tardó demasiado en abrir {nombre_del_proveedor(limpio)}. "
+                    "Puede que el portal sí se haya abierto en el visor: míralo "
+                    "ahí antes de volver a intentarlo."
+                ),
+                "que_hacer": _que_hacer(DOYLE),
+            },
+        )
     except Exception as exc:  # noqa: BLE001 — Doyle caído es un hueco, no un 500
         log.exception("Doyle no pudo abrir %s para ver el EAN %s", limpio, clave)
         return JSONResponse(

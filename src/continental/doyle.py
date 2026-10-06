@@ -281,6 +281,10 @@ class VigiladoDesconocido(LookupError):
 #: la hace en un hilo (`vigilancia.RegistroDeRevision`) y no dentro de la
 #: petición del navegador, que el túnel corta a los 100 s.
 TOPE_DE_LA_REVISION_SEG = 30 * 60
+#: Cuánto espera «Ver en el portal» a Doyle (ADR 0026): lanza Chromium, navega
+#: y en LEVIC y QuePharma espera la caja de búsqueda hasta 20 s. Los 10 s del
+#: YAML no alcanzan. «Ya vi» sí se queda con el corto.
+TOPE_DE_VER_EN_PORTAL_SEG = 60.0
 
 
 # --------------------------------------------------------------- interfaz
@@ -513,7 +517,9 @@ class DoylePorHttp:
         respuesta.raise_for_status()
 
     def ver_en_portal(self, proveedor: str, termino: str) -> VistaAbierta | VisorOcupado:
-        with self._cliente() as cliente:
+        with httpx.Client(
+            base_url=self._url, timeout=TOPE_DE_VER_EN_PORTAL_SEG, transport=self._transporte
+        ) as cliente:
             respuesta = cliente.post(f"/api/ver/{proveedor}", json={"termino": termino})
         if respuesta.status_code == 404:
             raise ProveedorDesconocido(proveedor)

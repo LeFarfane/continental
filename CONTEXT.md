@@ -98,8 +98,9 @@ guarda nada ni toca la sesión.**
 
 > **Una vista no es una sesión.** La sesión es la entrada de Doyle al portal;
 > la vista es una persona mirándolo. Comparten el visor, así que **una a la
-> vez**: con una vista abierta no se abre otra ni una sesión, y ese proveedor
-> no se consulta hasta cerrarla (o hasta que Doyle la cierre sola por tope).
+> vez**: ver otro proveedor reemplaza la vista abierta, con una sesión
+> esperando no se abre ninguna vista, y ese proveedor no se consulta mientras
+> se mira (hasta «Ya vi» o hasta que Doyle la cierre sola por tope).
 
 **Vigilancia** — la lista de productos que hacen falta y hoy no tiene ningún
 proveedor. Doyle los busca solo, a las 9:30 y a las 19:30, y avisa cuando

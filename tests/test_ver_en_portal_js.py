@@ -63,9 +63,9 @@ def test_el_boton_es_accesible_y_nombra_al_proveedor():
 def test_ya_vi_solo_sale_con_la_vista_de_ese_proveedor_abierta():
     cuerpo = _funcion("const filaDelPortal =")
 
-    assert "if (VISTAS_EN_PORTAL.has(proveedor))" in cuerpo
+    assert "if (VISTA_EN_PORTAL === proveedor)" in cuerpo
     assert "botonDeAccion('Ya vi'" in cuerpo
-    assert re.search(r"const VISTAS_EN_PORTAL = new Set\(\)", _script())
+    assert re.search(r"let VISTA_EN_PORTAL = null;", _script())
 
 
 def test_ver_abre_el_visor_con_el_mismo_window_open_y_el_mismo_respaldo():
@@ -90,7 +90,7 @@ def test_ver_recuerda_la_vista_solo_si_el_servidor_dijo_ok():
     cuerpo = _funcion("async function verEnElPortal")
 
     falla = cuerpo.index("if (!respuesta.ok)")
-    agrega = cuerpo.index("VISTAS_EN_PORTAL.add(proveedor)")
+    agrega = cuerpo.index("VISTA_EN_PORTAL = proveedor")
     assert falla < agrega
     assert "notaDeFalla('pedido-accion', respuesta)" in cuerpo[falla:agrega]
 
@@ -99,12 +99,12 @@ def test_ya_vi_olvida_la_vista_y_trata_el_cerrada_sola_como_exito():
     cuerpo = _funcion("async function cerrarVista")
 
     assert "/ver/cerrar'" in cuerpo
-    assert "VISTAS_EN_PORTAL.delete(proveedor)" in cuerpo
+    assert "VISTA_EN_PORTAL = null" in cuerpo
     # El 404 de Doyle lo absorbe el servidor (`ok: true`): aquí no hay rama
     # de error especial para «ya estaba cerrada».
     assert "404" not in cuerpo
     # Si falla de verdad, la vista NO se olvida: puede seguir abierta.
-    assert cuerpo.index("if (!respuesta.ok)") < cuerpo.index("VISTAS_EN_PORTAL.delete")
+    assert cuerpo.index("if (!respuesta.ok)") < cuerpo.index("VISTA_EN_PORTAL = null")
 
 
 def test_las_acciones_llegan_a_las_dos_construcciones_del_detalle():
