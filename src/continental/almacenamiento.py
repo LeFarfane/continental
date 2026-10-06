@@ -1519,6 +1519,32 @@ def columnas_de_la_lista(
     }
 
 
+def eleccion_de_la_espera(
+    renglon: Renglon,
+) -> tuple[str | None, str | None, dt.datetime | None]:
+    """`(proveedor_elegido, elegido_por, elegido_en)` con los que nace un renglón.
+
+    Un renglón que viene de una espera con proveedor **nace elegido**: quien lo
+    mandó a espera decidió a quién se le iba a pedir, y esa decisión sigue
+    siendo suya —con su firma y su hora, no las del sistema ni las de hoy—. La
+    firma y la hora van o las dos o ninguna (`ck_renglon_eleccion`): si falta
+    alguna —una espera vieja que no la dejó escrita— no se inventa una persona,
+    el renglón nace sin elegir y la partición lo reparte como cualquier otro, y
+    el proveedor de la espera queda guardado de todos modos.
+    """
+    if (
+        renglon.proveedor_de_la_espera
+        and renglon.espera_mandada_por
+        and renglon.espera_mandada_en is not None
+    ):
+        return (
+            renglon.proveedor_de_la_espera,
+            renglon.espera_mandada_por,
+            renglon.espera_mandada_en,
+        )
+    return (None, None, None)
+
+
 def columnas_del_renglon(
     renglon: Renglon, negocio: str, pedido_sugerido_id: int | None = None
 ) -> dict:
@@ -1557,6 +1583,7 @@ def columnas_del_renglon(
     revisó. `ck_renglon_ajuste` relaciona a las tres igual que
     `ck_renglon_descarte` a las suyas.
     """
+    eleccion = eleccion_de_la_espera(renglon)
     return {
         "negocio": negocio,
         "pedido_sugerido_id": pedido_sugerido_id,
@@ -1582,10 +1609,20 @@ def columnas_del_renglon(
         # `ck_renglon_eleccion` relaciona a tres de ellas y escribirlas juntas
         # deja ver que se respeta. `pedido_id` nulo es "nadie lo ha repartido"
         # (lo dice el COMMENT de la columna desde el ticket 07).
+        #
+        # **Salvo el que viene de una espera** (lista de espera, ticket 05): ahí
+        # una persona ya decidió a quién, al mandarlo, y nace con esa elección
+        # y su firma. `pedido_id` sigue en `None`: los pedidos nacen al partir
+        # la lista, y la partición respeta la elección (`particion.elegir`).
         "pedido_id": None,
-        "proveedor_elegido": None,
-        "elegido_por": None,
-        "elegido_en": None,
+        "proveedor_elegido": eleccion[0],
+        "elegido_por": eleccion[1],
+        "elegido_en": eleccion[2],
+        # LA ESPERA CON DUEÑO Y CON EDAD (migración 0020): se copia y suma de la
+        # lista anterior. Los tres juntos o ninguno, como los CHECK.
+        "proveedor_de_la_espera": renglon.proveedor_de_la_espera,
+        "espera_desde": renglon.espera_desde,
+        "listas_en_espera": renglon.listas_en_espera,
         # Y SIN TACHAR (ticket 22): nadie lo ha capturado en ningún portal. Las
         # dos explícitas por lo mismo que las de arriba: `ck_renglon_captura`
         # las relaciona.
@@ -3966,12 +4003,16 @@ _INSERTAR_RENGLONES = text(
         (negocio, pedido_sugerido_id, producto_id, clave, descripcion,
          piezas_vendidas, cantidad_propuesta, esta_en_el_catalogo, existencia,
          dias_de_cobertura, clasificacion, estado, ventas_desde,
-         piezas_que_faltaron, anaquel, piezas_pospuestas)
+         piezas_que_faltaron, anaquel, piezas_pospuestas,
+         proveedor_elegido, elegido_por, elegido_en,
+         proveedor_de_la_espera, espera_desde, listas_en_espera)
     values
         (:negocio, :pedido_sugerido_id, :producto_id, :clave, :descripcion,
          :piezas_vendidas, :cantidad_propuesta, :esta_en_el_catalogo,
          :existencia, :dias_de_cobertura, :clasificacion, :estado,
-         :ventas_desde, :piezas_que_faltaron, :anaquel, :piezas_pospuestas)
+         :ventas_desde, :piezas_que_faltaron, :anaquel, :piezas_pospuestas,
+         :proveedor_elegido, :elegido_por, :elegido_en,
+         :proveedor_de_la_espera, :espera_desde, :listas_en_espera)
     """
 )
 

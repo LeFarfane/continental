@@ -8,22 +8,22 @@ aritmética y desde cuándo espera. Ver la enmienda 2026-10-05 al ADR 0025
 
 **Blocked by:** 04
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Lo que espera se sigue leyendo de la lista **inmediatamente anterior**,
+- [x] Lo que espera se sigue leyendo de la lista **inmediatamente anterior**,
       como hoy lo pospuesto.
-- [ ] Un renglón con proveedor de la espera nace repartido a ese proveedor: su
+- [x] Un renglón con proveedor de la espera nace repartido a ese proveedor: su
       pedido en `borrador` se crea o se reutiliza. La elección lleva la firma
       y la hora de quien lo mandó a espera.
-- [ ] Sin proveedor de la espera se reparte como hoy.
-- [ ] Si el producto también se vendió, es un solo renglón con las piezas
+- [x] Sin proveedor de la espera se reparte como hoy.
+- [x] Si el producto también se vendió, es un solo renglón con las piezas
       sumadas: *«se vendieron 2 y esperaban 3, se piden 5»*.
-- [ ] «Desde cuándo» se arrastra y el contador de listas suma 1. Volver a
+- [x] «Desde cuándo» se arrastra y el contador de listas suma 1. Volver a
       mandarlo a espera no cuenta sus piezas dos veces.
-- [ ] Lo que viene en camino le sigue ganando.
-- [ ] Si otro proveedor lo da más barato, la tarjeta lo dice como hoy; no se
+- [x] Lo que viene en camino le sigue ganando.
+- [x] Si otro proveedor lo da más barato, la tarjeta lo dice como hoy; no se
       cambia solo.
-- [ ] El renglón muestra «en espera desde el lunes 5 · 3 listas».
-- [ ] Pruebas: lo puro (suma, contador, herencia de proveedor), el doble, y una
+- [x] El renglón muestra «en espera desde el lunes 5 · 3 listas».
+- [x] Pruebas: lo puro (suma, contador, herencia de proveedor), el doble, y una
       ruta de punta a punta de varios días (lunes manda, martes aparece
       repartido, martes vuelve a mandar, miércoles cuenta 2).

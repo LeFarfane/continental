@@ -206,6 +206,7 @@ from continental.transito import (
     esta_atrasado,
     frase_de_la_ventana_propia,
     frase_de_lo_que_falto,
+    frase_de_la_espera,
     frase_de_lo_que_paso_del_dia_anterior,
     frase_de_lo_que_ya_no_falta,
     frase_de_los_pospuestos,
@@ -6024,6 +6025,13 @@ def _renglon_como_json(
                 renglon.propuesto.piezas_vendidas,
                 renglon.propuesto.cantidad_propuesta,
             )
+        ),
+        # LA EDAD DE LO QUE VUELVE DE LA ESPERA (lista de espera, ticket 05):
+        # «en espera desde el lunes 5 · 3 listas». La compone Python.
+        "frase_de_la_espera": frase_de_la_espera(
+            renglon.espera_desde,
+            renglon.listas_en_espera,
+            renglon.propuesto.piezas_pospuestas,
         ),
         "frase_de_lo_recibido": frase_de_lo_recibido(renglon),
         # CUÁNTAS LLEGARON, Y CORREGIRLO (ticket 27, ADR 0015). Hasta el

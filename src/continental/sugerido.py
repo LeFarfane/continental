@@ -107,6 +107,27 @@ DIAS_DE_RITMO = 28
 
 
 @dataclass(frozen=True, slots=True)
+class LaEspera:
+    """Lo que la lista anterior dejó escrito de un renglón que mandó a espera.
+
+    Lo arma `transito.memoria_de_lo_pedido` y lo consume `calcular_pedido_
+    sugerido`: es lo que hace que el renglón nuevo **nazca con dueño y con
+    edad**. `listas` ya viene **sumada**: la lista que la recibe es una más.
+
+    `proveedor` puede ser `None` (el renglón no tenía a quién pedírselo) y
+    entonces el renglón nuevo se reparte como siempre. `mandada_por` y
+    `mandada_en` son la firma de la persona que lo mandó: si hay proveedor,
+    esa persona **fue quien lo decidió**, y esa firma es la elección.
+    """
+
+    desde: dt.date
+    listas: int
+    proveedor: str | None = None
+    mandada_por: str | None = None
+    mandada_en: dt.datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Renglon:
     """Un producto con su cantidad dentro de un pedido sugerido (CONTEXT.md).
 
@@ -202,6 +223,18 @@ class Renglon:
     piezas_que_faltaron: int = 0
     anaquel: str | None = None
     piezas_pospuestas: int = 0
+    # LA ESPERA QUE ESTE RENGLÓN TRAE (lista de espera, ticket 05). Los cinco
+    # vienen de `LaEspera` y solo se llenan cuando `piezas_pospuestas > 0`. Son
+    # datos del CÁLCULO, como `piezas_pospuestas`: los decide la memoria al
+    # armar, y `columnas_del_renglon` los escribe al nacer el renglón. Los tres
+    # primeros se guardan tal cual en `pedidos.renglon`; los dos últimos son la
+    # firma de quien lo mandó a espera y se vuelven `elegido_por` / `elegido_en`
+    # (no se guardan en otra columna ni se leen de vuelta).
+    proveedor_de_la_espera: str | None = None
+    espera_desde: dt.date | None = None
+    listas_en_espera: int | None = None
+    espera_mandada_por: str | None = None
+    espera_mandada_en: dt.datetime | None = None
 
     @property
     def esta_agotado(self) -> bool:
@@ -278,6 +311,7 @@ def calcular_pedido_sugerido(
     reglas: ReglasDeClasificacion | None = None,
     faltaron: Mapping[int, int] | None = None,
     pospuestos: Mapping[int, int] | None = None,
+    esperas: Mapping[int, LaEspera] | None = None,
 ) -> PedidoSugerido:
     """Ventas + catálogo → el pedido sugerido, en reposición 1 a 1 y por urgencia.
 
@@ -352,6 +386,7 @@ def calcular_pedido_sugerido(
             reglas if reglas is not None else ReglasDeClasificacion(),
             faltaron.get(producto_id, 0),
             pospuestos.get(producto_id, 0),
+            (esperas or {}).get(producto_id),
         )
         for producto_id, piezas in por_producto.items()
     ]
@@ -411,6 +446,7 @@ def _renglon(
     reglas: ReglasDeClasificacion,
     faltaron: int = 0,
     pospuestas: int = 0,
+    espera: LaEspera | None = None,
 ) -> Renglon:
     """Un renglón, esté o no el producto en el catálogo.
 
@@ -445,6 +481,13 @@ def _renglon(
         cantidad_propuesta=_piezas_a_pedir(piezas) + faltaron + pospuestas,
         piezas_que_faltaron=faltaron,
         piezas_pospuestas=pospuestas,
+        # La espera solo viaja con piezas que esperaron: sin ellas no hay nada
+        # que arrastrar, y un `LaEspera` huérfano no debe pintar una edad.
+        proveedor_de_la_espera=espera.proveedor if espera and pospuestas else None,
+        espera_desde=espera.desde if espera and pospuestas else None,
+        listas_en_espera=espera.listas if espera and pospuestas else None,
+        espera_mandada_por=espera.mandada_por if espera and pospuestas else None,
+        espera_mandada_en=espera.mandada_en if espera and pospuestas else None,
         esta_en_el_catalogo=producto is not None,
         existencia=existencia,
         dias_de_cobertura=_dias_de_cobertura(existencia, ritmo),
@@ -617,6 +660,8 @@ def armar_la_lista(
         faltaron=memoria.faltaron,
         # Lo que la lista anterior mandó a este día (ADR 0025): también piezas.
         pospuestos=memoria.pospuestos,
+        # Con quién esperaban y desde cuándo (lista de espera, ticket 05).
+        esperas=memoria.esperas,
     )
     return PedidoSugerido(
         fecha_de_ventas=lista.fecha_de_ventas,

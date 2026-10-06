@@ -90,6 +90,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from continental.almacen import LineaDeVenta
+from continental.sugerido import LaEspera
 
 if TYPE_CHECKING:  # pragma: no cover - solo para los tipos
     # `almacenamiento` importa `sugerido`, y `sugerido.armar_la_lista` recibe
@@ -166,6 +167,10 @@ class MemoriaDeLoPedido:
     desde: Mapping[int, dt.date] = field(default_factory=dict)
     faltaron: Mapping[int, int] = field(default_factory=dict)
     pospuestos: Mapping[int, int] = field(default_factory=dict)
+    #: Con quién esperaba y desde cuándo cada producto de `pospuestos` (lista de
+    #: espera, ticket 05). Va aparte porque `pospuestos` son piezas y esto es
+    #: edad y dueño; las llaves son un subconjunto de las de `pospuestos`.
+    esperas: Mapping[int, "LaEspera"] = field(default_factory=dict)
 
     def esta_en_camino(self, producto_id: int) -> bool:
         return producto_id in self.en_camino
@@ -266,6 +271,7 @@ def memoria_de_lo_pedido(
     # `ux_renglon_producto` da un renglón por producto y lista— se queda el
     # último, y no se suman.
     de_ayer: dict[int, int] = {}
+    esperas: dict[int, LaEspera] = {}
     for renglon in pospuestos:
         if not renglon.esta_pospuesto:
             continue
@@ -275,6 +281,16 @@ def memoria_de_lo_pedido(
         piezas = renglon.cantidad_a_pedir
         if piezas > 0:
             de_ayer[producto_id] = piezas
+            esperas.pop(producto_id, None)
+            if renglon.espera_desde is not None:
+                esperas[producto_id] = LaEspera(
+                    desde=renglon.espera_desde,
+                    # La lista que lo recibe es una más (ticket 05).
+                    listas=(renglon.listas_en_espera or 1) + 1,
+                    proveedor=renglon.proveedor_de_la_espera,
+                    mandada_por=renglon.pospuesto_por,
+                    mandada_en=renglon.pospuesto_en,
+                )
 
     return MemoriaDeLoPedido(
         en_camino=en_camino,
@@ -291,6 +307,7 @@ def memoria_de_lo_pedido(
             and ya.piezas_que_vuelven > 0
         },
         pospuestos=de_ayer,
+        esperas=esperas,
     )
 
 
@@ -564,6 +581,29 @@ def frase_de_lo_que_paso_del_dia_anterior(
         f"Trae piezas que estaban en espera: no se vendió nada desde "
         f"entonces y {pasaron}, se piden {propuesta}."
     )
+
+
+def frase_de_la_espera(
+    desde: dt.date | None, listas: int | None, piezas_pospuestas: int = 1
+) -> str | None:
+    """`en espera desde el lunes 5 · 3 listas`: la edad del renglón que vuelve.
+
+    Dice desde cuándo espera y cuántas listas lleva (lista de espera, ticket
+    05): sin esto la espera no tiene tope y tampoco tiene a la vista cuánto
+    lleva, que es lo que el ADR 0025 puso a cambio del tope. **Solo la dice un
+    renglón que trae piezas de la espera** (`piezas_pospuestas > 0`): uno que
+    se manda a espera hoy ya dice su propia frase (`frase_del_renglon_
+    pospuesto`), y uno que nunca esperó no tiene edad que enseñar. `None` en
+    cualquiera de esos casos, y si falta la fecha o el contador: no se inventa
+    una edad.
+
+    El día va con su número y sin mes: la espera es de días, y «el lunes 5» no
+    se confunde con otro lunes en el rango donde esto se lee.
+    """
+    if not piezas_pospuestas or desde is None or listas is None:
+        return None
+    cuantas = "1 lista" if listas == 1 else f"{listas} listas"
+    return f"en espera desde el {_DIAS[desde.weekday()]} {desde.day} · {cuantas}"
 
 
 def frase_del_renglon_pospuesto(renglon: "RenglonGuardado") -> str | None:

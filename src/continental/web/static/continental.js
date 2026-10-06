@@ -1189,6 +1189,12 @@ const marcasDe = (r) => {
       r.frase_de_lo_que_paso_del_dia_anterior);
   }
 
+  // Y SU EDAD (lista de espera, ticket 05): desde cuándo espera y cuántas
+  // listas lleva. También la compone Python.
+  if (r.frase_de_la_espera) {
+    agrega('marca tenue pospuesto', 'morado', 'En espera', r.frase_de_la_espera);
+  }
+
   // EL BORDE QUE LA MEMORIA NO ALCANZA (ticket 24): ya viene en camino desde
   // una lista enviada DESPUÉS de armar ésta. Y su par del 27: lo que faltó ya
   // llegó en otra factura. Lo guardado no se recalcula; se avisa.
