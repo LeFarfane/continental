@@ -10,14 +10,14 @@ pinta. Ver el spec, «El total por pedido», historias 1–6.
 
 **Status:** ready-for-agent
 
-- [ ] La respuesta de la captura trae el total de cada pedido, calculado por la
+- [x] La respuesta de la captura trae el total de cada pedido, calculado por la
       misma función que la cifra de «Enviar» (no una segunda suma).
-- [ ] Los renglones sin precio no se suman como cero: el total los dice aparte
+- [x] Los renglones sin precio no se suman como cero: el total los dice aparte
       («$1,200 + 2 sin precio»).
-- [ ] Los renglones descartados y en espera no cuentan.
-- [ ] El total se actualiza cuando cambia el pedido (descartar, devolver,
+- [x] Los renglones descartados y en espera no cuentan.
+- [x] El total se actualiza cuando cambia el pedido (descartar, devolver,
       ajustar cantidad) sin recargar la página.
-- [ ] Sigue a la vista cuántos renglones van tachados.
-- [ ] Pruebas: lo puro (total con y sin precios faltantes), la ruta de punta a
+- [x] Sigue a la vista cuántos renglones van tachados.
+- [x] Pruebas: lo puro (total con y sin precios faltantes), la ruta de punta a
       punta, y una estática del JS que fija que la columna pinta el total del
       servidor y no lo suma en el navegador.

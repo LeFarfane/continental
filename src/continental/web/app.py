@@ -149,6 +149,7 @@ from continental.faltantes import (
 from continental.particion import (
     Captura,
     captura_como_json,
+    el_total_del_pedido,
     eleccion_como_json,
     elegir,
     frase_del_envio,
@@ -156,6 +157,7 @@ from continental.particion import (
     lo_que_hay_que_capturar,
     particion_como_json,
     partir,
+    total_como_json,
 )
 from continental.precios import NOMBRES_DE_PROVEEDOR, nombre_del_proveedor
 from continental.vista_del_portal import frase_de_cerrar, frase_de_ver
@@ -5220,6 +5222,50 @@ def _mover_el_renglon(
                 )
             )
         ),
+        # EL TOTAL DE CADA PEDIDO, recalculado (ticket 03 de la lista de
+        # espera). Descartar, devolver, mandar a espera y corregir una cantidad
+        # lo mueven, y esta respuesta no trae los pedidos enteros: sin esto la
+        # columna de la captura se quedaría con el total de la carga. Va por
+        # `pedido_id` y con la misma función que usa la carga, así que el botón
+        # «Enviar» y la columna no pueden diferir. `null` cuando no se
+        # pudieron leer los precios o los pedidos: la pantalla conserva el que
+        # tenía, viejo pero verdadero.
+        "totales_de_los_pedidos": _totales_de_los_pedidos(
+            almacenamiento, negocio, guardado, por_renglon
+        ),
+    }
+
+
+def _totales_de_los_pedidos(
+    almacenamiento: AlmacenamientoDelPedido | None,
+    negocio: str,
+    guardado: PedidoSugeridoGuardado,
+    por_renglon: dict | None,
+) -> dict | None:
+    """`{pedido_id: total}` de los pedidos de la lista. **Lee**, no escribe.
+
+    Los pedidos ya guardados son los que existen; el total sale de
+    `particion.el_total_del_pedido` con los renglones y los precios que la
+    respuesta ya tiene. Una lectura que falla es un `None`, no un 500: lo que
+    se movió ya se guardó y la pantalla puede seguir con el total anterior.
+    """
+    if almacenamiento is None or por_renglon is None:
+        return None
+    try:
+        pedidos = almacenamiento.pedidos_de_la_lista(
+            negocio, guardado.pedido_sugerido_id
+        )
+    except Exception:  # noqa: BLE001 — sin los pedidos, el total viejo sigue valiendo
+        log.exception(
+            "No se pudieron leer los pedidos de la lista %s para sus totales.",
+            guardado.pedido_sugerido_id,
+        )
+        return None
+    return {
+        str(p.pedido_id): total_como_json(
+            el_total_del_pedido(p, guardado.renglones, por_renglon)
+        )
+        for p in pedidos
     }
 
 
@@ -5540,6 +5586,14 @@ def _como_json(
                     p,
                     *_lo_que_hay_dentro(guardado, p),
                     captura=lo_que_hay_que_capturar(p, guardado.renglones, precios or {}),
+                    # `None` cuando no se pudieron leer los precios: sin ellos
+                    # todo renglón saldría «sin precio», y eso afirmaría algo
+                    # que no se sabe. La pantalla dice «total sin saber».
+                    total=(
+                        None
+                        if precios is None
+                        else el_total_del_pedido(p, guardado.renglones, precios)
+                    ),
                     en_camino_dentro=sum(
                         1
                         for r in guardado.renglones
@@ -5605,8 +5659,14 @@ def _pedido_como_json(
     en_camino_dentro: int = 0,
     recibidos_dentro: int = 0,
     renglones_de_la_lista=(),
+    total=None,
 ) -> dict:
     """Un pedido ya guardado, como la pantalla lo lee.
+
+    `total` es el `TotalDelPedido` de lo que el pedido tiene dentro **ahora**
+    (`particion.el_total_del_pedido`): la cifra del botón «Enviar» y la de la
+    columna izquierda de la captura, una sola suma que las dos pintan.
+    `total_sin_iva`, más abajo, sigue siendo la columna guardada al partir.
 
     `total_sin_iva` viaja como **cadena** o como `null`, nunca como número de
     JSON ni como cero: el JSON de JavaScript solo tiene `double` y meterlo ahí
@@ -5668,6 +5728,7 @@ def _pedido_como_json(
             None if pedido.total_sin_iva is None else str(pedido.total_sin_iva)
         ),
         "hay_total": pedido.total_sin_iva is not None,
+        "total": None if total is None else total_como_json(total),
         "renglones": renglones_dentro,
         # LA FIRMA DEL ENVÍO. En ISO **con zona**, por la misma razón que
         # `armado_en`: sin ella el navegador la leería como hora local y el

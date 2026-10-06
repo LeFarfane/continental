@@ -2820,6 +2820,16 @@ async function cargarPedido(fecha) {
     // Y la partición, por lo mismo: `null` cuando el servidor no pudo releer
     // los precios, y entonces se conserva la anterior — vieja pero verdadera.
     if (respuesta.particion) datos.particion = respuesta.particion;
+    // Y el total de cada pedido, que descartar, devolver, mandar a espera y
+    // corregir una cantidad mueven. Llega por `pedido_id` y ya dicho: aquí solo
+    // se sustituye. `null` cuando el servidor no pudo releerlo, y entonces se
+    // conserva el de la carga, viejo pero verdadero.
+    if (respuesta.totales_de_los_pedidos && datos.pedidos) {
+      datos.pedidos.forEach(p => {
+        const nuevo = respuesta.totales_de_los_pedidos[String(p.pedido_id)];
+        if (nuevo) p.total = nuevo;
+      });
+    }
     repintar();
   };
 
@@ -4864,7 +4874,11 @@ const pintarPasoCaptura = (pedidos, alTachar, alEnviar) => {
     const avance = document.createElement('span');
     const captura = g.captura || { capturados: 0, cuantos: 0 };
     avance.className = 'avance-corto' + (g.fue_enviado ? ' listo' : '');
-    avance.textContent = g.fue_enviado ? 'Enviado' : captura.capturados + ' de ' + captura.cuantos;
+    // «NADRO · $1,661.94 · 0 de 9»: el total llega dicho del servidor —con su
+    // «+ 2 sin precio» cuando falta alguno— y aquí solo se escribe. Sin él
+    // (precios que no se pudieron leer) la columna dice lo que decía antes.
+    const avanceDicho = g.fue_enviado ? 'Enviado' : captura.capturados + ' de ' + captura.cuantos;
+    avance.textContent = g.total ? g.total.frase + ' · ' + avanceDicho : avanceDicho;
     fila.append(nombre, avance);
     // Cuánto lleva tachado, en una barra: las dos cifras vienen del servidor
     // y aquí solo se dibujan. Lo enviado se ve lleno.
@@ -4919,7 +4933,7 @@ const pintarPasoCaptura = (pedidos, alTachar, alEnviar) => {
     // nada a nadie (ADR 0009).
     const boton = botonDeAccion(
       'Ya está en el portal — Enviar '
-        + (guardado.hay_total ? '$' + guardado.total_sin_iva : '(total sin saber)'),
+        + (guardado.total && guardado.total.hay ? guardado.total.dinero : '(total sin saber)'),
       (b) => alEnviar(guardado.pedido_id, guardado.nombre, b), 'llena grande');
     // `se_puede_enviar` lo decide `particion.motivo_para_no_enviar`, que es
     // la MISMA decisión que el `WHERE` del UPDATE. Esto no es la garantía:

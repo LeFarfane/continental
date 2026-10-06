@@ -825,6 +825,106 @@ def lo_que_hay_que_capturar(
     )
 
 
+# ------------------------------------- el total de cada pedido, a la vista
+
+
+@dataclass(frozen=True, slots=True)
+class TotalDelPedido:
+    """Cuánto cuesta lo que un pedido tiene dentro **ahora**, y qué falta saber.
+
+    Es la cifra del botón «Enviar» y la de la columna izquierda de la captura:
+    las dos pintan este objeto. `total` es `None` en cuanto un renglón no tiene
+    precio de ese proveedor —jamás la suma de los demás, la regla de
+    `PedidoPorArmar.total_sin_iva`— y `parcial` es lo que sí se sabe, para
+    poder decir «$1,200.00 + 2 sin precio» en vez de un hueco mudo.
+    """
+
+    total: Decimal | None
+    parcial: Decimal
+    renglones: int
+    sin_precio: int
+
+    @property
+    def hay(self) -> bool:
+        return self.total is not None
+
+    @property
+    def dinero(self) -> str | None:
+        """El total ya escrito («$1,661.94»), o `None` cuando no se puede saber."""
+        return None if self.total is None else _en_pesos(self.total)
+
+    @property
+    def frase(self) -> str:
+        """Lo que la pantalla escribe junto al nombre del pedido.
+
+        Un renglón sin precio **nunca** se suma como cero: se dice aparte. Y un
+        pedido sin nada que contar dice eso, no «$0.00», que es justo la cifra
+        que pasaría desapercibida en una columna de totales.
+        """
+        if self.total is not None:
+            return _en_pesos(self.total)
+        if not self.renglones:
+            return "sin renglones"
+        if self.parcial == 0:
+            return f"{self.sin_precio} sin precio"
+        return f"{_en_pesos(self.parcial)} + {self.sin_precio} sin precio"
+
+
+def _en_pesos(valor: Decimal) -> str:
+    """`$1,661.94`: con coma de miles y dos decimales, para leerse de un vistazo."""
+    return f"${valor.quantize(_CENTAVOS):,.2f}"
+
+
+def el_total_del_pedido(
+    pedido: PedidoGuardado,
+    renglones: Sequence[RenglonGuardado],
+    precios: Mapping[int, Sequence[PrecioDeProveedor]],
+) -> TotalDelPedido:
+    """El total de **este** pedido con lo que tiene dentro en este momento.
+
+    **Es la única suma de dinero de un pedido que llega a la pantalla.** Antes
+    la cifra del botón «Enviar» era `pedido.total_sin_iva`, que `partir` escribe
+    una vez: descartar o corregir una cantidad después la dejaba enseñando lo
+    que costaba hace un rato. Recalcular aquí, con las mismas líneas y la misma
+    regla de precio que la captura (`_linea`) y el mismo total que la partición
+    (`PedidoPorArmar`), evita tener dos sumas que acaben por no cuadrar.
+
+    No cuentan los descartados ni los que esperan (`pospuesto`): no se van a
+    pedir hoy, y sumarlos —o contarlos como «sin precio»— inflaría el total que
+    se compara contra el tope del dueño.
+
+    Lee solo lo que recibe: sin base, sin red y sin reloj.
+    """
+    lineas = tuple(
+        _linea(r, pedido.proveedor, precios.get(r.renglon_id, ()))
+        for r in renglones
+        if r.pedido_id == pedido.pedido_id
+        and not (r.esta_descartado or r.esta_pospuesto)
+    )
+    cuenta = PedidoPorArmar(
+        proveedor=pedido.proveedor, proveedor_id=pedido.proveedor_id, lineas=lineas
+    )
+    return TotalDelPedido(
+        total=cuenta.total_sin_iva,
+        parcial=cuenta.parcial_sin_iva,
+        renglones=cuenta.renglones,
+        sin_precio=cuenta.sin_precio,
+    )
+
+
+def total_como_json(total: TotalDelPedido) -> dict:
+    """El total como la pantalla lo lee. Cadenas y `null`, jamás un número de JSON."""
+    return {
+        "cifra": _cadena(total.total),
+        "dinero": total.dinero,
+        "hay": total.hay,
+        "parcial": _cadena(total.parcial),
+        "sin_precio": total.sin_precio,
+        "renglones": total.renglones,
+        "frase": total.frase,
+    }
+
+
 def frase_del_avance(captura: Captura) -> str:
     """Cuánto va y **cuántos faltan**, dicho como lo diría una persona.
 
