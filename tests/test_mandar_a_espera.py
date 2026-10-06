@@ -845,7 +845,10 @@ def test_cada_renglon_de_la_captura_trae_su_boton_de_mandar_a_espera():
 
 def test_la_captura_recibe_posponer_desde_el_repintado_y_lo_pasa_hacia_abajo():
     script = _script()
-    assert "pintarPasoCaptura(datos.pedidos, tacharRenglon, enviarPedido, posponer)" in script
+    assert (
+        "pintarPasoCaptura(datos.pedidos, tacharRenglon, enviarPedido, posponer, "
+        "mandarPedidoAEspera)"
+    ) in script
     paso = cuerpo_de_funcion(script, "const pintarPasoCaptura")
     assert "pintarCaptura(guardado, alTachar, alPosponer)" in paso
 

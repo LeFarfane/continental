@@ -2747,7 +2747,7 @@ async function cargarPedido(fecha) {
     // números que ya no son.
     pintarParticion(datos.particion, datos.pedidos, acciones.editable, partir, enviarPedido, tacharRenglon);
     // EL PASO TRES: la captura de un pedido a la vez, con su botón de enviar.
-    pintarPasoCaptura(datos.pedidos, tacharRenglon, enviarPedido, posponer);
+    pintarPasoCaptura(datos.pedidos, tacharRenglon, enviarPedido, posponer, mandarPedidoAEspera);
     pintarPasos(datos);
     pintarResumenDeAvisos();
     tabla.hidden = false;
@@ -2999,6 +2999,32 @@ async function cargarPedido(fecha) {
       + '«en tránsito», así que la lista de mañana ya no los va a volver a '
       + 'proponer. Recuerda: esto no se lo mandó a ' + nombre + ' — lo capturas '
       + 'tú en su portal.');
+  }
+
+  // MANDAR A ESPERA EL PEDIDO ENTERO (lista de espera, ticket 06). Una sola
+  // petición: el servidor manda todo lo abierto y no tachado en una
+  // transacción y devuelve la lista entera, como tachar y enviar. Aquí no se
+  // cuenta nada: la frase —cuántos salieron, cuántos se quedaron tachados y
+  // qué hacer con ellos— viene hecha de Python.
+  async function mandarPedidoAEspera(pedidoId, nombre, boton) {
+    boton.disabled = true;
+    nota('pedido-accion', '');
+
+    const respuesta = await respuestaDe(fetch(
+        '/api/pedido/' + pedidoId + '/posponer', { method: 'POST' }), 'al_guardar');
+
+    if (!respuesta.ok) {
+      boton.disabled = false;
+      // Genérico a propósito (regla 5): el detalle está en la bitácora.
+      notaDeFalla('pedido-accion', respuesta);
+      return;
+    }
+
+    datos = conservarLoDeLaCarga(respuesta, datos);
+    if (Array.isArray(datos.puente)) PROVEEDORES = datos.puente;
+    if (datos.clases) CLASES_ABC_XYZ = datos.clases;
+    repintar();
+    nota('pedido-accion', respuesta.frase_de_mandar_a_espera, 'aviso');
   }
 
   // TACHAR UN RENGLÓN EN LA PANTALLA DE CAPTURA (ticket 22).
@@ -4863,14 +4889,18 @@ const pintarParticion = (particion, pedidos, editable, alPartir, alEnviar, alTac
 // CAPTURAR Y ENVIAR (tickets 21 y 22): EL PASO TRES. A la izquierda los
 // pedidos de esta lista, cada uno con cuánto lleva tachado; a la derecha el
 // elegido, renglón por renglón, y al pie su botón de enviar.
-const pintarPasoCaptura = (pedidos, alTachar, alEnviar, alPosponer) => {
+const pintarPasoCaptura = (pedidos, alTachar, alEnviar, alPosponer, alMandarElPedido) => {
   const caja = document.getElementById('captura-panel');
   caja.replaceChildren();
   // Los que se capturan —borradores con algo dentro— y los que ya se
   // enviaron, para ver su firma. Los cancelados ya no existen en ningún
   // portal y no se enseñan aquí: siguen en el paso dos con su motivo.
+  //
+  // Un borrador que se quedó SIN renglones (todo se mandó a espera) se queda en
+  // la columna con la frase del servidor: no se lee como enviado y no
+  // desaparece (ticket 06).
   const deEstePaso = (pedidos || []).filter(g => g.es_borrador
-    ? !!(g.captura && g.captura.cuantos)
+    ? !!(g.captura && g.captura.cuantos) || !!g.frase_del_pedido_vacio
     : g.fue_enviado);
 
   if (!deEstePaso.length) {
@@ -4913,7 +4943,11 @@ const pintarPasoCaptura = (pedidos, alTachar, alEnviar, alPosponer) => {
     // «+ 2 sin precio» cuando falta alguno— y aquí solo se escribe. Sin él
     // (precios que no se pudieron leer) la columna dice lo que decía antes.
     const avanceDicho = g.fue_enviado ? 'Enviado' : captura.capturados + ' de ' + captura.cuantos;
-    avance.textContent = g.total ? g.total.frase + ' · ' + avanceDicho : avanceDicho;
+    // El pedido vacío dice SU frase («sin renglones · todo en espera»), sin
+    // total ni «0 de 0»: no es un pedido que se vaya a enviar.
+    avance.textContent = g.frase_del_pedido_vacio
+      ? g.frase_del_pedido_vacio
+      : (g.total ? g.total.frase + ' · ' + avanceDicho : avanceDicho);
     fila.append(nombre, avance);
     // Cuánto lleva tachado, en una barra: las dos cifras vienen del servidor
     // y aquí solo se dibujan. Lo enviado se ve lleno.
@@ -4942,6 +4976,20 @@ const pintarPasoCaptura = (pedidos, alTachar, alEnviar, alPosponer) => {
   cabeza.append(texto);
   const archivo = enlaceCsv(guardado, 'Descargar CSV');
   if (archivo) cabeza.append(archivo);
+  // MANDAR A ESPERA EL PEDIDO ENTERO (ticket 06): todo lo abierto y no tachado
+  // sale a la espera con su proveedor, en una sola operación del servidor. El
+  // motivo de apagarlo viene del servidor; con el pedido vacío no hay nada que
+  // mandar y no se ofrece.
+  if (guardado.es_borrador && guardado.captura && guardado.captura.cuantos && alMandarElPedido) {
+    const aEspera = botonDeAccion('Mandar a espera',
+      (b) => alMandarElPedido(guardado.pedido_id, guardado.nombre, b), 'tenida');
+    aEspera.disabled = !guardado.se_puede_mandar_a_espera;
+    aEspera.title = guardado.se_puede_mandar_a_espera
+      ? 'Manda a espera todo lo que no está tachado. Lo tachado ya está en el carrito del portal y se queda.'
+      : 'No se puede mandar a espera: ' + guardado.motivo_para_no_mandar_a_espera;
+    aEspera.setAttribute('aria-label', 'Mandar a espera el pedido de ' + guardado.nombre);
+    cabeza.append(aEspera);
+  }
   trabajo.append(cabeza);
 
   if (guardado.captura && guardado.captura.cuantos) trabajo.append(pintarCaptura(guardado, alTachar, alPosponer));
@@ -4960,7 +5008,14 @@ const pintarPasoCaptura = (pedidos, alTachar, alEnviar, alPosponer) => {
     : (captura ? captura.frase : '');
   fila.append(avance);
 
-  if (guardado.es_borrador) {
+  if (guardado.es_borrador && guardado.frase_del_pedido_vacio) {
+    // PEDIDO VACÍO (ticket 06): se ve vacío, con su frase, y SIN botón de
+    // enviar: no hay nada que declarar en el portal.
+    const vacio = document.createElement('p');
+    vacio.className = 'nota';
+    vacio.textContent = guardado.frase_del_pedido_vacio + '.';
+    fila.replaceChildren(vacio);
+  } else if (guardado.es_borrador) {
     // EL BOTÓN, CON EL TOTAL DENTRO (ticket 21): el total en pesos se ve ANTES
     // de enviar, y el sitio donde de verdad se ve es la etiqueta del botón que
     // se va a apretar. Cuando no se puede saber, dice eso — nunca "$0.00".
@@ -4987,7 +5042,8 @@ const pintarPasoCaptura = (pedidos, alTachar, alEnviar, alPosponer) => {
   }
   pie.append(fila);
 
-  if (guardado.es_borrador && guardado.motivo_para_no_enviar) {
+  const sinRenglones = guardado.es_borrador && !!guardado.frase_del_pedido_vacio;
+  if (guardado.es_borrador && !sinRenglones && guardado.motivo_para_no_enviar) {
     const porque = document.createElement('span');
     porque.className = 'marca';
     porque.textContent = guardado.motivo_para_no_enviar + '.';
@@ -4996,20 +5052,22 @@ const pintarPasoCaptura = (pedidos, alTachar, alEnviar, alPosponer) => {
   // LLEVA A ENVIAR, SIN OBLIGAR (casilla 5). La frase viene hecha: con todo
   // tachado dice que el siguiente paso es enviar; a medias, que tachar no es
   // requisito. `null` cuando el botón está apagado por otra razón.
-  if (guardado.es_borrador && captura && captura.invitacion) {
+  if (guardado.es_borrador && !sinRenglones && captura && captura.invitacion) {
     const invitacion = document.createElement('p');
     invitacion.className = 'invitacion' + (captura.todo_capturado ? ' lista' : '');
     invitacion.textContent = captura.invitacion + '.';
     pie.append(invitacion);
   }
-  // QUÉ SIGNIFICA ENVIAR, o quién lo capturó: la frase del servidor.
-  const envio = document.createElement('p');
-  envio.className = 'envio' + (guardado.fue_enviado ? ' hecho' : '');
-  envio.textContent = guardado.frase_del_envio
-    + (guardado.fue_enviado && guardado.enviado_en
-       ? ' Fue ' + instanteEnPalabras(guardado.enviado_en)
-       : '');
-  pie.append(envio);
+  if (!sinRenglones) {
+    // QUÉ SIGNIFICA ENVIAR, o quién lo capturó: la frase del servidor.
+    const envio = document.createElement('p');
+    envio.className = 'envio' + (guardado.fue_enviado ? ' hecho' : '');
+    envio.textContent = guardado.frase_del_envio
+      + (guardado.fue_enviado && guardado.enviado_en
+         ? ' Fue ' + instanteEnPalabras(guardado.enviado_en)
+         : '');
+    pie.append(envio);
+  }
   trabajo.append(pie);
 
   caja.append(lateral, trabajo);

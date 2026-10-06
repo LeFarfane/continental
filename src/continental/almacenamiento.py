@@ -1082,6 +1082,34 @@ class PedidoEnviado:
 
 
 @dataclass(frozen=True, slots=True)
+class PedidoMandadoAEspera:
+    """Lo que dejó mandar a espera un pedido entero (lista de espera, ticket 06).
+
+    Dos cifras y no una, porque la pantalla tiene que decir las dos: `mandados`
+    es lo que salió del pedido y `tachados` lo que **se quedó** por estar ya en
+    el carrito del portal. Callar la segunda dejaría creer que el pedido quedó
+    vacío cuando en el portal sigue lleno.
+
+    `estado_del_pedido` y `estado_de_la_lista` son los que la sentencia vio **al
+    ejecutarse**, y existen para que quien llama diga por qué no se mandó nada
+    (`transiciones.motivo_para_no_mandar_el_pedido_a_espera`) sin una segunda
+    lectura que pudiera ver otra cosa. `lista` es la lista releída en la misma
+    transacción, ya sin esos renglones, o `None` si no se mandó nada.
+    """
+
+    estado_del_pedido: str
+    estado_de_la_lista: str
+    mandados: int = 0
+    tachados: int = 0
+    lista: PedidoSugeridoGuardado | None = None
+
+    @property
+    def se_mando(self) -> bool:
+        """La misma condición del `WHERE` de `_POSPONER_EL_PEDIDO`."""
+        return self.estado_del_pedido == BORRADOR and self.estado_de_la_lista == ABIERTO
+
+
+@dataclass(frozen=True, slots=True)
 class PedidoCancelado:
     """Lo que dejó cancelar un pedido: la fila nueva y qué renglones soltó (25).
 
@@ -3036,6 +3064,24 @@ class AlmacenamientoDelPedido(Protocol):
         """
         ...
 
+    def mandar_el_pedido_a_espera(
+        self, negocio: str, pedido_id: int, quien: str
+    ) -> PedidoMandadoAEspera | None:
+        """Manda a espera **todo lo abierto y no tachado** de un pedido (ticket 06).
+
+        **Una sola sentencia y una sola transacción** (`_POSPONER_EL_PEDIDO`), y
+        con el mismo `SET` que `posponer`: cada renglón guarda el proveedor del
+        pedido, la firma, la fecha y el contador, y sale del pedido
+        (`pedido_id` a `None`). Lo tachado **se queda**, porque ya está en el
+        carrito del portal, y se cuenta aparte en `tachados`.
+
+        `None` solo si el pedido no existe en este negocio. Si existe pero ya no
+        es `borrador` o su lista ya no está `abierta`, no se mueve nada y el
+        resultado lo dice con `se_mando=False` y los dos estados que la
+        sentencia vio. `quien` es una firma, no un permiso (regla 3).
+        """
+        ...
+
     def devolver_pospuesto(
         self, negocio: str, renglon_id: int
     ) -> PedidoSugeridoGuardado | None:
@@ -4132,10 +4178,13 @@ _DEVOLVER_A_ABIERTO = text(
 # **Y un renglón tachado no se manda a espera** (`r.capturado_por is null`): ya
 # está en el carrito del portal de su proveedor. Es la misma condición que
 # `transiciones.motivo_para_no_editar` dice con palabras.
-_POSPONER = text(
-    """
-    update pedidos.renglon as r
-       set estado = 'pospuesto',
+# El `SET` de mandar a espera, **una sola vez**: lo comparten `_POSPONER` (un
+# renglón) y `_POSPONER_EL_PEDIDO` (el pedido entero, ticket 06). Dos copias
+# serían dos reglas que un día difieren: un renglón mandado solo y el mismo
+# mandado con su pedido tienen que quedar idénticos. Pide dos alias en la
+# sentencia que lo use: `r` (el renglón) y `p` (con `fecha_del_pedido`, la de
+# la lista), y el parámetro `:quien`.
+_PONER_EN_ESPERA = """estado = 'pospuesto',
            pospuesto_por = :quien,
            pospuesto_en = now(),
            proveedor_de_la_espera = coalesce(
@@ -4148,6 +4197,12 @@ _POSPONER = text(
            espera_desde = coalesce(r.espera_desde, p.fecha_del_pedido),
            listas_en_espera = coalesce(r.listas_en_espera, 1),
            pedido_id = null
+"""
+
+_POSPONER = text(
+    f"""
+    update pedidos.renglon as r
+       set {_PONER_EN_ESPERA}
       from pedidos.pedido_sugerido as p
      where r.negocio = :negocio
        and r.renglon_id = :renglon_id
@@ -4157,6 +4212,61 @@ _POSPONER = text(
        and p.negocio = r.negocio
        and p.estado = 'abierto'
     returning r.renglon_id, r.pedido_sugerido_id
+    """
+)
+
+# MANDAR A ESPERA EL PEDIDO ENTERO (lista de espera, ticket 06). **Una sola
+# sentencia**, y no un ciclo de `_POSPONER`: o se mandan todos los renglones o
+# ninguno, y las dos cifras que la pantalla dice —cuántos salieron y cuántos se
+# quedaron tachados— salen de la misma foto de la tabla.
+#
+#   - `base` es el pedido con su lista, **sin filtrar por estado**: así la
+#     sentencia contesta aunque no mande nada y dice POR QUÉ (el pedido ya no es
+#     borrador, la lista ya no está abierta). Cero filas es solo "ese pedido no
+#     existe en este negocio".
+#   - `movidos` es el `UPDATE`, con el mismo `SET` de `_POSPONER` y las mismas
+#     condiciones por renglón (`abierto`, no tachado) más las dos del pedido en
+#     el `WHERE`: **la garantía es esta sentencia**, no la lectura de `base`.
+#   - Lo tachado (`capturado_por is not null`) no se toca —ya está en el carrito
+#     del portal— y se cuenta aparte.
+#
+# El proveedor de la espera sale del pedido, como en `_POSPONER`: el subselect
+# del `SET` lee `pedidos.pedido` por `r.pedido_id`, valor de ANTES del `UPDATE`.
+_POSPONER_EL_PEDIDO = text(
+    f"""
+    with base as (
+        select pe.pedido_id, pe.pedido_sugerido_id,
+               pe.estado as estado_del_pedido,
+               ls.estado as estado_de_la_lista,
+               ls.fecha_del_pedido
+          from pedidos.pedido as pe
+          join pedidos.pedido_sugerido as ls
+            on ls.pedido_sugerido_id = pe.pedido_sugerido_id
+           and ls.negocio = pe.negocio
+         where pe.negocio = :negocio
+           and pe.pedido_id = :pedido_id
+    ),
+    movidos as (
+        update pedidos.renglon as r
+           set {_PONER_EN_ESPERA}
+          from base as p
+         where r.negocio = :negocio
+           and r.pedido_id = p.pedido_id
+           and p.estado_del_pedido = 'borrador'
+           and p.estado_de_la_lista = 'abierto'
+           and r.estado = 'abierto'
+           and r.capturado_por is null
+        returning r.renglon_id
+    )
+    select b.pedido_sugerido_id, b.estado_del_pedido, b.estado_de_la_lista,
+           (select count(*) from movidos) as mandados,
+           (select count(*)
+              from pedidos.renglon as t
+             where t.negocio = :negocio
+               and t.pedido_id = b.pedido_id
+               and t.estado = 'abierto'
+               and t.capturado_por is not null) as tachados
+      from base as b
     """
 )
 
@@ -5917,6 +6027,51 @@ class AlmacenamientoPostgres:
             _POSPONER,
             {"negocio": negocio, "renglon_id": renglon_id, "quien": quien},
         )
+
+    def mandar_el_pedido_a_espera(
+        self, negocio: str, pedido_id: int, quien: str
+    ) -> PedidoMandadoAEspera | None:
+        """**Escribe.** `_POSPONER_EL_PEDIDO` y la relectura, en una transacción."""
+        with self._motor().begin() as conexion:
+            fila = (
+                conexion.execute(
+                    _POSPONER_EL_PEDIDO,
+                    {"negocio": negocio, "pedido_id": pedido_id, "quien": quien},
+                )
+                .mappings()
+                .first()
+            )
+            if fila is None:
+                return None
+            resultado = PedidoMandadoAEspera(
+                estado_del_pedido=fila["estado_del_pedido"],
+                estado_de_la_lista=fila["estado_de_la_lista"],
+                mandados=int(fila["mandados"]),
+                tachados=int(fila["tachados"]),
+            )
+            if not resultado.se_mando:
+                return resultado
+            cabecera = (
+                conexion.execute(
+                    _LEER_LISTA_POR_ID,
+                    {
+                        "negocio": negocio,
+                        "pedido_sugerido_id": fila["pedido_sugerido_id"],
+                    },
+                )
+                .mappings()
+                .first()
+            )
+            if cabecera is None:
+                # Imposible con la llave foránea puesta; se truena en vez de
+                # devolver una lista ausente que se leería como "no se mandó".
+                raise RuntimeError(
+                    f"El pedido {pedido_id} se mandó a espera y su lista no "
+                    "aparece. Es un estado imposible con fk_pedido_sugerido."
+                )
+            return dataclasses.replace(
+                resultado, lista=self._con_renglones(conexion, cabecera)
+            )
 
     def devolver_pospuesto(
         self, negocio: str, renglon_id: int

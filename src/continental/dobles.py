@@ -45,6 +45,7 @@ from continental.almacenamiento import (
     LoYaPedido,
     PedidoCancelado,
     PedidoEnviado,
+    PedidoMandadoAEspera,
     PedidoSugeridoDuplicado,
     PedidoSugeridoGuardado,
     PrecioDeProveedor,
@@ -1308,6 +1309,55 @@ class AlmacenamientoFalso:
             espera_desde=fila.get("espera_desde") or lista["fecha_del_pedido"],
             listas_en_espera=fila.get("listas_en_espera") or 1,
             pedido_id=None,
+        )
+
+    def mandar_el_pedido_a_espera(
+        self, negocio: str, pedido_id: int, quien: str
+    ) -> PedidoMandadoAEspera | None:
+        """`_POSPONER_EL_PEDIDO` en memoria: todo lo abierto y no tachado, o nada.
+
+        Mismas condiciones que la sentencia: el pedido es de este negocio; si
+        no es `borrador` o su lista no está `abierta` no se mueve nada y se
+        dicen los dos estados. Cada renglón se manda con `posponer`, la misma
+        función que el clic suelto, y por eso quedan idénticos. Lo tachado se
+        deja y se cuenta.
+        """
+        self._revisar()
+        pedido = next(
+            (
+                p
+                for p in self.pedidos
+                if p["pedido_id"] == pedido_id and p["negocio"] == negocio
+            ),
+            None,
+        )
+        if pedido is None:
+            return None
+        lista = self._por_id(pedido["pedido_sugerido_id"])
+        if lista is None:
+            return None
+        resultado = PedidoMandadoAEspera(
+            estado_del_pedido=pedido["estado"], estado_de_la_lista=lista["estado"]
+        )
+        if not resultado.se_mando:
+            return resultado
+        dentro = [
+            f
+            for f in lista["renglones"]
+            if f.get("pedido_id") == pedido_id
+            and f["negocio"] == negocio
+            and f["estado"] == RENGLON_ABIERTO
+        ]
+        tachados = sum(1 for f in dentro if f.get("capturado_por") is not None)
+        mandados = 0
+        for fila in [f for f in dentro if f.get("capturado_por") is None]:
+            if self.posponer(negocio, fila["renglon_id"], quien) is not None:
+                mandados += 1
+        return dataclasses.replace(
+            resultado,
+            mandados=mandados,
+            tachados=tachados,
+            lista=armar_guardado(lista, lista["renglones"]),
         )
 
     def devolver_pospuesto(

@@ -76,6 +76,7 @@ from typing import TYPE_CHECKING
 
 from continental.almacenamiento import (
     ABIERTO,
+    BORRADOR,
     RENGLON_ABIERTO,
     RENGLON_DESCARTADO,
     RENGLON_POSPUESTO,
@@ -417,6 +418,71 @@ def proveedor_de_la_espera(
     return (
         proveedor_del_pedido or proveedor_elegido or proveedor_que_ya_traia or None
     )
+
+
+# ------------------------------------- mandar a espera el pedido entero (06)
+
+
+def motivo_para_no_mandar_el_pedido_a_espera(
+    estado_del_pedido: str, estado_de_la_lista: str
+) -> str | None:
+    """Por qué no se puede mandar a espera un pedido entero, o `None` si sí.
+
+    La misma decisión que las dos condiciones del pedido en el `WHERE` de
+    `almacenamiento._POSPONER_EL_PEDIDO` (`borrador` y lista `abierta`), y no la
+    garantía: sirve para que el 409 diga la verdad. Lo de los renglones
+    —abierto, no tachado— no está aquí: no impide mandar el pedido, solo decide
+    cuántos salen, y eso lo dice `frase_de_mandar_el_pedido_a_espera`.
+    """
+    if estado_del_pedido != BORRADOR:
+        return (
+            "ese pedido ya no está en borrador: ya se envió o se canceló, y lo "
+            "que lleva dentro ya no se manda a espera."
+        )
+    if estado_de_la_lista != ABIERTO:
+        return (
+            "la lista ya no está abierta: lo que se iba a pedir ya se "
+            "pidió. Vuelve a cargar la página para ver cómo quedó."
+        )
+    return None
+
+
+def frase_de_mandar_el_pedido_a_espera(mandados: int, tachados: int) -> str:
+    """Lo que la pantalla dice después de mandar un pedido entero a espera.
+
+    Siempre dice **las dos cifras**: lo que salió y lo que se quedó por estar
+    tachado, porque callar la segunda deja creer que el pedido quedó vacío
+    cuando en el carrito del portal sigue lleno. Concordancia en Python, no en el
+    navegador.
+    """
+    if mandados == 0 and tachados == 0:
+        return "Ese pedido no tiene renglones que mandar a espera."
+    if tachados == 0:
+        verbo = "Se mandó" if mandados == 1 else "Se mandaron"
+        return f"{verbo} {mandados} a espera."
+    if tachados == 1:
+        queda = "1 ya tachado se queda: bórralo del carrito del portal o destáchalo primero."
+    else:
+        queda = (
+            f"{tachados} ya tachados se quedan: bórralos del carrito del portal "
+            "o destáchalos primero."
+        )
+    if mandados == 0:
+        return f"No se mandó ninguno a espera; {queda}"
+    verbo = "Se mandó" if mandados == 1 else "Se mandaron"
+    return f"{verbo} {mandados} a espera; {queda}"
+
+
+def frase_del_pedido_vacio(en_espera: int) -> str:
+    """Lo que dice un pedido en borrador que se quedó sin renglones.
+
+    No es un pedido enviado ni desaparece: sigue en la columna con esta frase.
+    «Todo en espera» solo se afirma cuando hay renglones esperando con el
+    proveedor de ese pedido; si no, se dice solo que no tiene renglones.
+    """
+    if en_espera > 0:
+        return "sin renglones · todo en espera"
+    return "sin renglones"
 
 
 def frase_de_sacar_de_la_espera(

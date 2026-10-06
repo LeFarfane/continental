@@ -187,11 +187,14 @@ from continental.sesiones import (
 )
 from continental.sugerido import armar_la_lista
 from continental.transiciones import (
+    frase_de_mandar_el_pedido_a_espera,
     frase_de_sacar_de_la_espera,
+    frase_del_pedido_vacio,
     motivo_para_no_cancelar,
     motivo_para_no_corregir,
     motivo_para_no_editar,
     motivo_para_no_enviar,
+    motivo_para_no_mandar_el_pedido_a_espera,
     motivo_para_no_reabrir,
     motivo_para_no_recibir_a_mano,
 )
@@ -1687,6 +1690,113 @@ def devolver_renglon_pospuesto(
         accion="devolver_pospuesto",
         almacenamiento=almacenamiento,
     )
+
+
+@app.post("/api/pedido/{pedido_id}/posponer")
+def mandar_el_pedido_a_espera(
+    pedido_id: int,
+    request: Request,
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+):
+    """Un clic: todo lo abierto y no tachado del pedido pasa a espera (ticket 06).
+
+    **Es una sola operación del servidor** (`almacenamiento.mandar_el_pedido_a_espera`,
+    una sentencia en una transacción) y no un ciclo de clics en el navegador: o
+    salen todos o no sale ninguno, y las dos cifras de la frase —cuántos se
+    mandaron, cuántos se quedaron— salen de la misma foto. Cada renglón queda
+    igual que si se hubiera mandado solo (proveedor del pedido, firma, fecha,
+    contador, fuera del pedido).
+
+    **Lo tachado se queda**: ya está en el carrito del portal del proveedor, y
+    sacarlo de aquí lo dejaría allá sin que nadie lo viera. La frase lo dice, con
+    qué hacer. Sin cuerpo y sin confirmación, por lo mismo que mandar uno: se
+    puede sacar de la espera mientras la lista siga abierta.
+
+    **Devuelve la lista entera**, como tachar y enviar: el pedido cambia de
+    contenido, de total y de avance, y la pantalla no deduce nada de eso. Además
+    de lo de siempre trae `mandados`, `tachados` y `frase_de_mandar_a_espera`,
+    hecha aquí.
+
+    Un 409 con su motivo cuando el pedido ya no es borrador o la lista ya no
+    está abierta, y uno genérico cuando el pedido no existe en este negocio. El
+    error de la base no viaja al navegador (regla 5).
+    """
+    negocio = cargar().negocio
+    firma = quien(request)
+
+    try:
+        resultado = almacenamiento.mandar_el_pedido_a_espera(negocio, pedido_id, firma)
+    except Exception as exc:  # noqa: BLE001 — el almacenamiento caído es un hueco
+        log.exception("No se pudo mandar a espera el pedido %s", pedido_id)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "detalle": f"no se pudo mandar el pedido a espera ({type(exc).__name__})",
+                "que_hacer": _que_hacer(AL_GUARDAR),
+            },
+        )
+
+    if resultado is None:
+        log.info(
+            "%s quiso mandar a espera el pedido %s de %s y no existe en ese negocio.",
+            firma,
+            pedido_id,
+            negocio,
+        )
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "detalle": (
+                    "Ese pedido ya no existe. Vuelve a cargar la página para "
+                    "ver cómo quedó."
+                ),
+            },
+        )
+
+    if not resultado.se_mando:
+        motivo = motivo_para_no_mandar_el_pedido_a_espera(
+            resultado.estado_del_pedido, resultado.estado_de_la_lista
+        )
+        log.info(
+            "%s quiso mandar a espera el pedido %s de %s y no se pudo: %s",
+            firma,
+            pedido_id,
+            negocio,
+            motivo,
+        )
+        return JSONResponse(
+            status_code=409,
+            content={"ok": False, "detalle": f"No se puede mandar a espera: {motivo}"},
+        )
+
+    log.info(
+        "%s mandó a espera el pedido %s de %s: %d renglón(es) salieron y %d "
+        "tachado(s) se quedaron.",
+        firma,
+        pedido_id,
+        negocio,
+        resultado.mandados,
+        resultado.tachados,
+    )
+    guardado = resultado.lista
+    lista_id = guardado.pedido_sugerido_id
+    corrida, corrida_fallo = _ultima_corrida(almacenamiento, negocio, lista_id)
+    cuerpo = _como_json(
+        guardado,
+        _precios_de_la_lista(almacenamiento, negocio, lista_id),
+        corrida,
+        almacenamiento.pedidos_de_la_lista(negocio, lista_id),
+        corrida_fallo=corrida_fallo,
+        atendidos_despues=_los_atendidos_despues(almacenamiento, negocio, guardado),
+    )
+    cuerpo["mandados"] = resultado.mandados
+    cuerpo["tachados"] = resultado.tachados
+    cuerpo["frase_de_mandar_a_espera"] = frase_de_mandar_el_pedido_a_espera(
+        resultado.mandados, resultado.tachados
+    )
+    return cuerpo
 
 
 class CantidadNueva(BaseModel):
@@ -5321,6 +5431,7 @@ def _pedidos_en_json(
                 if r.pedido_id == p.pedido_id and r.esta_recibido
             ),
             renglones_de_la_lista=guardado.renglones,
+            estado_de_la_lista=guardado.estado,
         )
         for p in pedidos
     ]
@@ -5722,6 +5833,7 @@ def _pedido_como_json(
     recibidos_dentro: int = 0,
     renglones_de_la_lista=(),
     total=None,
+    estado_de_la_lista: str = ABIERTO,
 ) -> dict:
     """Un pedido ya guardado, como la pantalla lo lee.
 
@@ -5749,6 +5861,9 @@ def _pedido_como_json(
     el encargado crea que Continental le mandó el pedido a NADRO.
     """
     motivo = motivo_para_no_enviar(pedido, renglones_dentro, total_envejecido)
+    motivo_de_espera = motivo_para_no_mandar_el_pedido_a_espera(
+        pedido.estado_declarado, estado_de_la_lista
+    )
     # Un pedido con algo recibido sí se capturó (ticket 26): no se cancela.
     motivo_de_cancelar = motivo_para_no_cancelar(pedido, recibidos_dentro)
     # LOS OTROS DOS ESTADOS (ticket 27, ADR 0015): `recibido` y `recibido
@@ -5813,6 +5928,26 @@ def _pedido_como_json(
         # captura. `null` cuando quien llama no la calculó.
         "captura": (
             None if captura is None else captura_como_json(captura, motivo is None)
+        ),
+        # MANDAR A ESPERA EL PEDIDO ENTERO (lista de espera, ticket 06). El
+        # botón se apaga con el motivo del servidor —la misma función que decide
+        # el 409—.
+        "se_puede_mandar_a_espera": motivo_de_espera is None,
+        "motivo_para_no_mandar_a_espera": motivo_de_espera,
+        # UN PEDIDO QUE SE QUEDÓ SIN RENGLONES se ve vacío y NO desaparece ni se
+        # lee como enviado: la frase viene hecha (`null` si tiene algo dentro o
+        # no es un borrador). «Todo en espera» solo si de verdad hay renglones
+        # esperando con el proveedor de este pedido.
+        "frase_del_pedido_vacio": (
+            frase_del_pedido_vacio(
+                sum(
+                    1
+                    for r in renglones_de_la_lista
+                    if r.esta_pospuesto and r.proveedor_de_la_espera == pedido.proveedor
+                )
+            )
+            if pedido.es_borrador and captura is not None and not captura.lineas
+            else None
         ),
         # EL ARCHIVO (ticket 23), con la URL hecha aquí y no en el JavaScript.
         # `null` cuando no hay nada que exportar —sin captura calculada, o sin
