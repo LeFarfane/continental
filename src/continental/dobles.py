@@ -85,10 +85,19 @@ from continental.doyle import (
     RespuestaDeProveedor,
     SesionAbriendose,
     SesionConfirmada,
+    ProveedorDesconocido,
     SesionDeProveedor,
     VigiladoDesconocido,
+    VisorOcupado,
+    VistaAbierta,
+    VistaDesconocida,
 )
-from continental.precios import MOTIVOS_QUE_PASARON_DEL_LOGIN, SESION_CADUCADA, LecturaDePrecio
+from continental.precios import (
+    MOTIVOS_QUE_PASARON_DEL_LOGIN,
+    NOMBRES_DE_PROVEEDOR,
+    SESION_CADUCADA,
+    LecturaDePrecio,
+)
 from continental.transiciones import (
     motivo_para_no_cancelar,
     motivo_para_no_corregir,
@@ -211,6 +220,18 @@ class DoyleFalso:
     #: "vuelve a intentarlo", y sin poder prepararla no se puede probar que la
     #: pantalla la dice.
     sesiones_que_siguen_en_login: list[str] = field(default_factory=list)
+    #: Las vistas del portal abiertas en el visor (ADR 0026): proveedor ->
+    #: término con que se abrió. Es el `_vistas` del Doyle real: una sola a la
+    #: vez, y un segundo `ver` del mismo proveedor NO abre otra.
+    vistas_abiertas: dict[str, str] = field(default_factory=dict)
+    #: Todo lo que se pidió ver, en orden: `(proveedor, término)`.
+    vistas_pedidas: list[tuple[str, str]] = field(default_factory=list)
+    #: Las vistas que se cerraron a petición, en orden.
+    vistas_cerradas: list[str] = field(default_factory=list)
+    #: Los proveedores cuya vista se prepara con el aviso «parece login».
+    vistas_que_parecen_login: list[str] = field(default_factory=list)
+    #: Los proveedores que Doyle está consultando ahora: ver ese portal rebota.
+    proveedores_consultando: list[str] = field(default_factory=list)
     falla: Exception | None = None
     #: Términos que se pidieron, en orden. Sirve para comprobar el ORDEN de
     #: importancia del lote nocturno sin mirar dentro de la implementación.
@@ -347,6 +368,47 @@ class DoyleFalso:
             raise ValueError(f"No hay una sesión de {proveedor!r} abriéndose.")
         self.sesiones_abriendose.remove(proveedor)
         self.sesiones_canceladas.append(proveedor)
+
+    # ------------------------------------------ ver en el portal (ADR 0026)
+    #
+    # Igual que abrir sesión: el doble no abre ningún navegador, apunta qué se
+    # le pidió y rechaza lo mismo que rechaza el Doyle real (409 con su frase).
+
+    def ver_en_portal(self, proveedor: str, termino: str) -> VistaAbierta | VisorOcupado:
+        self._revisar()
+        if proveedor not in NOMBRES_DE_PROVEEDOR:
+            raise ProveedorDesconocido(proveedor)
+        self.vistas_pedidas.append((proveedor, termino))
+        if proveedor in self.proveedores_consultando:
+            return VisorOcupado(
+                f"{NOMBRES_DE_PROVEEDOR[proveedor]} está consultando ahora; "
+                "espera a que termine."
+            )
+        if self.sesiones_abriendose:
+            return VisorOcupado(
+                "El visor lo usa una sesión que espera a que alguien entre; "
+                "termínala primero."
+            )
+        otra = next((p for p in self.vistas_abiertas if p != proveedor), None)
+        if otra is not None:
+            return VisorOcupado(
+                f"El visor ya muestra el portal de {NOMBRES_DE_PROVEEDOR[otra]}; "
+                "ciérralo con «Ya vi»."
+            )
+        ya_abierta = proveedor in self.vistas_abiertas
+        self.vistas_abiertas[proveedor] = termino
+        return VistaAbierta(
+            proveedor=proveedor,
+            ya_abierta=ya_abierta,
+            parece_login=proveedor in self.vistas_que_parecen_login,
+        )
+
+    def cerrar_vista(self, proveedor: str) -> None:
+        self._revisar()
+        if proveedor not in self.vistas_abiertas:
+            raise VistaDesconocida(proveedor)
+        del self.vistas_abiertas[proveedor]
+        self.vistas_cerradas.append(proveedor)
 
     # ----------------------------------------- la vigilancia (2026-09-28)
     #

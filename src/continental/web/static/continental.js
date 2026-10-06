@@ -852,6 +852,30 @@ const EN_ESCALA = COMPARACION_EN_LA_FILA === 'escala';
 
 const celdasDePrecio = (r) => EN_ESCALA ? [celdaDeEscala(r)] : celdasDeRejilla(r);
 
+// «VER EN EL PORTAL» (ADR 0026): debajo de CADA tarjeta de proveedor, siempre,
+// también la que dice «sin dato» —donde más sirve— y también con la lista
+// cerrada: mirar no cambia el pedido. No aparece y desaparece según falte la
+// cantidad porque un botón que cambia de sitio confunde, y sirve igual para
+// revisar un precio raro. Con la vista de ese proveedor abierta en el visor
+// se suma «Ya vi», que la cierra. Las dos acciones son de `cargarPedido`.
+const filaDelPortal = (r, proveedor, nombre, acciones) => {
+  const fila = document.createElement('div');
+  fila.className = 'ver-portal';
+
+  const ver = botonDeAccion('Ver en el portal', (b) => acciones.verEnElPortal(r, proveedor, b), 'plana');
+  ver.setAttribute('aria-label', 'Ver ' + r.descripcion + ' en el portal de ' + nombre);
+  ver.title = 'Abre el portal de ' + nombre + ' en el visor, con la búsqueda de este producto.';
+  fila.append(ver);
+
+  if (VISTAS_EN_PORTAL.has(proveedor)) {
+    const ya = botonDeAccion('Ya vi', (b) => acciones.cerrarVista(proveedor, b), 'tenida');
+    ya.setAttribute('aria-label', 'Ya vi el portal de ' + nombre + ': cerrar la vista');
+    ya.title = 'Cierra la vista de ' + nombre + ' en el visor.';
+    fila.append(ya);
+  }
+  return fila;
+};
+
 // EL DETALLE: cada proveedor en su línea, con lo que hay que saber de él. Lo
 // que devuelve son tres piezas porque van en tres sitios del detalle: el
 // cuerpo, cuándo se leyó (arriba a la derecha) y el botón de volver a
@@ -978,7 +1002,19 @@ const preciosDelDetalle = (r, acciones) => {
 
       linea.append(radio, quien, cifraOhueco);
       if (nota.childNodes.length) linea.append(nota);
-      lista.append(linea);
+
+      // La tarjeta es un contenedor y no la línea misma porque con la lista
+      // abierta la línea ES un botón, y un botón dentro de otro botón no es
+      // HTML válido: el clic de «Ver en el portal» además dispararía la
+      // selección del radio. Los dos son hermanos, sin que uno pueda llegarle
+      // al otro.
+      const tarjeta = document.createElement('div');
+      tarjeta.className = 'tarjeta-proveedor';
+      tarjeta.append(linea);
+      if (acciones.verEnElPortal) {
+        tarjeta.append(filaDelPortal(r, p.proveedor, c.nombre || p.nombre, acciones));
+      }
+      lista.append(tarjeta);
     });
     cuerpo.append(lista);
   }
@@ -1875,6 +1911,13 @@ const recargarLoQueSeVe = () =>
 let PASO = 'revisar';
 let PEDIDO_EN_CAPTURA = null;
 let RENGLON_ELEGIDO = null;
+// Los proveedores cuya vista de portal quedó abierta en el visor desde ESTA
+// pantalla (ADR 0026): lo que decide si su tarjeta enseña «Ya vi». Es memoria
+// de esta pestaña y no del servidor: recargar la olvida, y entonces volver a
+// darle «Ver en el portal» contesta «ya estaba abierto» y la recupera. Doyle
+// tiene una sola vista a la vez, así que la clave no incluye el renglón: la
+// vista abierta se cierra desde la tarjeta de ese proveedor en cualquier renglón.
+const VISTAS_EN_PORTAL = new Set();
 let DETALLE_ABIERTO = false;
 let HAY_DETALLE = false;
 // Si la franja de avisos está abierta. `null` es "que decida la pantalla":
@@ -2601,6 +2644,8 @@ async function cargarPedido(fecha) {
       ajustar: ajustar,
       elegirProveedor: elegirProveedor,
       consultarPrecio: consultarPrecio,
+      verEnElPortal: verEnElPortal,
+      cerrarVista: cerrarVista,
       completar: completarLoQueFalta,
       abrirSesion: abrirSesion,
       confirmarSesion: confirmarSesion,
@@ -2691,6 +2736,8 @@ async function cargarPedido(fecha) {
       ajustar: ajustar,
       elegirProveedor: elegirProveedor,
       consultarPrecio: consultarPrecio,
+      verEnElPortal: verEnElPortal,
+      cerrarVista: cerrarVista,
       elegir: elegirRenglon,
     });
     if (abrir) document.getElementById('inspector-cerrar').focus();
@@ -2974,6 +3021,71 @@ async function cargarPedido(fecha) {
 
     aplicarPrecios(r.renglon_id, respuesta);
     if (respuesta.consulta && respuesta.consulta.en_curso) sondear(r.renglon_id);
+  }
+
+  // VER EN EL PORTAL y YA VI (ADR 0026). Continental no abre el navegador: le
+  // pide a Doyle que deje en el visor el portal de ese proveedor con la
+  // búsqueda del EAN del renglón, y esta pantalla abre el visor igual que
+  // «Abrir sesión» —misma ventana, `visor-doyle`, y el mismo enlace de respaldo
+  // por si el navegador la bloquea—. El EAN no se manda: el servidor lo saca
+  // del renglón. Las frases llegan hechas de Python.
+  async function verEnElPortal(r, proveedor, boton) {
+    boton.disabled = true;
+    nota('pedido-accion', '');
+
+    const respuesta = await respuestaDe(fetch('/api/proveedor/' + proveedor + '/ver', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ renglon_id: r.renglon_id }),
+    }), 'al_guardar');
+
+    boton.disabled = false;
+    if (!respuesta.ok) {
+      // También el 409 de Doyle: su frase viaja en `detalle`.
+      notaDeFalla('pedido-accion', respuesta);
+      return;
+    }
+    // Se repinta el detalle para que esa tarjeta ofrezca «Ya vi», y la nota se
+    // escribe DESPUÉS: repintar no la toca, pero así el orden no importa.
+    VISTAS_EN_PORTAL.add(proveedor);
+    elegirRenglon(r);
+
+    // SIN VISOR CONFIGURADO no se inventa a dónde mandar a nadie: la frase del
+    // servidor ya dice qué falta en el YAML.
+    if (!respuesta.visor) {
+      nota('pedido-accion', respuesta.mensaje, 'aviso');
+      return;
+    }
+    // Mismo `window.open` y mismo manejo de ventana bloqueada que
+    // `abrirSesion`: el nombre de ventana es fijo para reusar la pestaña.
+    const ventana = window.open(respuesta.visor, 'visor-doyle');
+    notaConEnlace(
+      'pedido-accion',
+      ventana ? respuesta.mensaje : respuesta.mensaje + ' El navegador bloqueó la ventana del visor.',
+      respuesta.visor,
+      ventana ? 'Volver a abrir el visor' : 'Abrir el visor',
+      // Ámbar si Doyle vio un login en el visor.
+      respuesta.parece_login ? 'aviso' : '');
+  }
+
+  // «Ya vi». Si Doyle ya la había cerrado sola, el servidor contesta ok con su
+  // frase: no hay error ruidoso por llegar tarde.
+  async function cerrarVista(proveedor, boton) {
+    boton.disabled = true;
+    nota('pedido-accion', '');
+
+    const respuesta = await respuestaDe(fetch('/api/proveedor/' + proveedor + '/ver/cerrar',
+                                     { method: 'POST' }), 'al_guardar');
+
+    if (!respuesta.ok) {
+      boton.disabled = false;
+      notaDeFalla('pedido-accion', respuesta);
+      return;
+    }
+    VISTAS_EN_PORTAL.delete(proveedor);
+    const r = datos.renglones.find(x => x.renglon_id === RENGLON_ELEGIDO);
+    if (r) elegirRenglon(r);
+    nota('pedido-accion', respuesta.mensaje);
   }
 
   // COMPLETAR SOLO LOS PRECIOS QUE FALTAN (ticket 19, segunda casilla).

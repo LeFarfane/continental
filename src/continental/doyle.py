@@ -178,6 +178,50 @@ class SesionAbriendose:
 
 
 @dataclass(frozen=True, slots=True)
+class VistaAbierta:
+    """Doyle dejó en el visor el portal de un proveedor con una búsqueda
+    puesta (ADR 0026, «Ver en el portal»). **No es una sesión y no guarda
+    nada**: es mirar lo que el portal dice, con los ojos de una persona.
+
+    `ya_abierta` es verdadero cuando esa vista ya estaba: es la misma ventana
+    y no se abrió otra. `parece_login` es el aviso honesto de Doyle: la página
+    que quedó en el visor se ve como un login, o sea que la sesión de ese
+    proveedor parece caída. Viaja hasta la pantalla por lo mismo que
+    `SesionConfirmada.todavia_parece_login`.
+    """
+
+    proveedor: str
+    ya_abierta: bool = False
+    parece_login: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class VisorOcupado:
+    """Doyle contestó 409: el visor lo usa otra sesión u otra vista, o el
+    proveedor está consultando en ese momento.
+
+    **Se devuelve y no se levanta, a propósito.** `detalle` es texto para
+    personas, ya en español, escrito por Doyle, y es lo único de Doyle que se
+    deja llegar a la pantalla tal cual. Si viajara dentro de una excepción, el
+    cinturón de la regla 5 (`test_la_excepcion_solo_se_usa_para_su_tipo`) tendría
+    que hacer una excepción para él; como dato, la regla sigue sin excepciones:
+    de una excepción solo viaja su tipo.
+    """
+
+    detalle: str
+
+
+class ProveedorDesconocido(LookupError):
+    """Doyle contestó 404 a «ver»: esa clave no es de un proveedor suyo."""
+
+
+class VistaDesconocida(LookupError):
+    """Doyle contestó 404 a «cerrar»: no había vista abierta de ese proveedor.
+    Doyle la cierra sola por tope de tiempo, así que **no es una falla**: es
+    lo mismo que si «Ya vi» hubiera funcionado."""
+
+
+@dataclass(frozen=True, slots=True)
 class SesionConfirmada:
     """La persona ya entró y Doyle guardó las cookies.
 
@@ -244,7 +288,10 @@ TOPE_DE_LA_REVISION_SEG = 30 * 60
 
 @runtime_checkable
 class ClienteDeDoyle(Protocol):
-    """El borde hacia Doyle. Once verbos y ninguno más.
+    """El borde hacia Doyle. Trece verbos y ninguno más.
+
+    Eran once hasta el 2026-10-05, cuando se sumó «Ver en el portal»
+    (`ver_en_portal` y `cerrar_vista`, ADR 0026).
 
     Eran cinco hasta el 2026-09-28, cuando Continental absorbió las pestañas
     de Vigilancia (cinco verbos, al final) y de Sesiones (`cancelar_sesion`)
@@ -315,6 +362,22 @@ class ClienteDeDoyle(Protocol):
         otros tres portales hasta confirmar o reiniciar Doyle. Doyle contesta
         400 si no había ventana de ese proveedor.
         """
+        ...
+
+    def ver_en_portal(self, proveedor: str, termino: str) -> VistaAbierta | VisorOcupado:
+        """Le pide a Doyle que abra el portal de ese proveedor con la búsqueda
+        de `termino` y lo deje en el visor, **sin guardar nada** (ADR 0026).
+
+        Vuelve de inmediato. **Devuelve** `VisorOcupado` (409, con su detalle
+        para personas) si el visor lo usa otra cosa o el proveedor consulta
+        ahora, y levanta `ProveedorDesconocido` si Doyle no conoce la clave.
+        """
+        ...
+
+    def cerrar_vista(self, proveedor: str) -> None:
+        """Le dice a Doyle que cierre la vista de ese proveedor. Levanta
+        `VistaDesconocida` si no había ninguna (Doyle la cierra sola por
+        tope): quien llama lo trata como ya cerrada."""
         ...
 
     # -------------------------------------------- la vigilancia (2026-09-28)
@@ -449,6 +512,28 @@ class DoylePorHttp:
             respuesta = cliente.post(f"/api/sesion/{proveedor}/cancelar")
         respuesta.raise_for_status()
 
+    def ver_en_portal(self, proveedor: str, termino: str) -> VistaAbierta | VisorOcupado:
+        with self._cliente() as cliente:
+            respuesta = cliente.post(f"/api/ver/{proveedor}", json={"termino": termino})
+        if respuesta.status_code == 404:
+            raise ProveedorDesconocido(proveedor)
+        if respuesta.status_code == 409:
+            return VisorOcupado(_detalle_de_doyle(respuesta))
+        respuesta.raise_for_status()
+        datos = respuesta.json() or {}
+        return VistaAbierta(
+            proveedor=proveedor,
+            ya_abierta=bool(datos.get("ya_abierta")),
+            parece_login=bool(datos.get("parece_login")),
+        )
+
+    def cerrar_vista(self, proveedor: str) -> None:
+        with self._cliente() as cliente:
+            respuesta = cliente.post(f"/api/ver/{proveedor}/cerrar")
+        if respuesta.status_code == 404:
+            raise VistaDesconocida(proveedor)
+        respuesta.raise_for_status()
+
     def vigilados(self) -> list[ArticuloVigilado]:
         with self._cliente() as cliente:
             respuesta = cliente.get("/api/vigilancia")
@@ -485,6 +570,23 @@ class DoylePorHttp:
         ) as cliente:
             respuesta = cliente.post("/api/vigilancia/revisar")
         respuesta.raise_for_status()
+
+
+#: Lo que se dice cuando Doyle contesta 409 sin un `detail` legible.
+_VISOR_OCUPADO_SIN_DETALLE = "El visor de Doyle está ocupado ahora mismo."
+
+
+def _detalle_de_doyle(respuesta: httpx.Response) -> str:
+    """El `detail` de un error de Doyle, que es texto para personas. Si la
+    respuesta no trae uno que se pueda leer, una frase fija: nunca el cuerpo
+    crudo ni nada que no se sepa que es una frase."""
+    try:
+        detalle = (respuesta.json() or {}).get("detail")
+    except Exception:  # noqa: BLE001 — un cuerpo ilegible es "sin detalle"
+        return _VISOR_OCUPADO_SIN_DETALLE
+    if isinstance(detalle, str) and detalle.strip():
+        return detalle.strip()
+    return _VISOR_OCUPADO_SIN_DETALLE
 
 
 def _leer_vigilado(crudo: dict) -> ArticuloVigilado:

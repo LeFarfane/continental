@@ -894,6 +894,11 @@ tr.transito.atrasado > td:first-child { border-left: 4px double var(--aviso-vivo
   width: 100%; min-height: 0; padding: 9px 12px; border: 0; border-radius: var(--radio-lg);
   background: var(--relleno-tenue); color: inherit; text-align: left; font: inherit;
 }
+/* La tarjeta envuelve a la línea y a su fila de «Ver en el portal» (ADR 0026):
+   hermanas, no una dentro de la otra, porque la línea es un botón. */
+.tarjeta-proveedor { display: flex; flex-direction: column; gap: 2px; }
+.ver-portal { display: flex; justify-content: flex-end; gap: 6px; padding: 0 6px; }
+.ver-portal .accion { min-height: 1.5rem; font-size: .8125rem; }
 button.precio-detalle { cursor: pointer; }
 button.precio-detalle:hover { background: var(--relleno-suave); }
 .precio-detalle.gana, button.precio-detalle.gana:hover { background: var(--ok-fondo); }

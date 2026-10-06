@@ -90,6 +90,17 @@ no contesta— se dice el motivo y la sesión conserva su última etiqueta.
 > búsqueda antes de cada lote nocturno, pero no se guarda: decide si el lote
 > corre y se olvida.
 
+**Vista del portal** — el portal de un proveedor abierto en el visor, con la
+búsqueda del código de barras de un producto ya puesta, para que una persona
+lea lo que el portal dice. Se abre con «Ver en el portal», en cualquiera de las
+cuatro tarjetas de proveedor del panel, y se cierra con «Ya vi». **Mirar no
+guarda nada ni toca la sesión.**
+
+> **Una vista no es una sesión.** La sesión es la entrada de Doyle al portal;
+> la vista es una persona mirándolo. Comparten el visor, así que **una a la
+> vez**: con una vista abierta no se abre otra ni una sesión, y ese proveedor
+> no se consulta hasta cerrarla (o hasta que Doyle la cierre sola por tope).
+
 **Vigilancia** — la lista de productos que hacen falta y hoy no tiene ningún
 proveedor. Doyle los busca solo, a las 9:30 y a las 19:30, y avisa cuando
 alguno aparece.

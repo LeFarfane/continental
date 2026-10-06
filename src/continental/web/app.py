@@ -98,7 +98,13 @@ from continental.consultas import (
     termino_de_prueba_configurado,
     tope_del_completado_segundos,
 )
-from continental.doyle import BusquedaDesconocida, ClienteDeDoyle, VigiladoDesconocido
+from continental.doyle import (
+    BusquedaDesconocida,
+    ClienteDeDoyle,
+    VigiladoDesconocido,
+    VisorOcupado,
+    VistaDesconocida,
+)
 from continental.exportar import (
     TIPO_DEL_ARCHIVO,
     csv_del_pedido,
@@ -116,6 +122,7 @@ from continental.fallas import (
     PORTAL_EN_EL_VISOR,
     PRUEBA_EN_CURSO,
     SERVIDOR,
+    VISOR_OCUPADO,
     estado_de_las_ventas,
     frase_de_doyle_caido,
     frase_de_la_lista_vacia,
@@ -150,6 +157,7 @@ from continental.particion import (
     partir,
 )
 from continental.precios import NOMBRES_DE_PROVEEDOR, nombre_del_proveedor
+from continental.vista_del_portal import frase_de_cerrar, frase_de_ver
 from continental.proveedores import puente_como_json, puente_configurado
 from continental.recepcion import (
     PedidoALaVista,
@@ -3963,6 +3971,209 @@ def cancelar_la_sesion(
             f"Se cerró la ventana de {nombre_del_proveedor(proveedor)} sin guardar "
             "nada. Ya se puede abrir la de otro portal."
         ),
+    }
+
+
+# ----------------------------------------------- ver en el portal (ADR 0026)
+#
+# El botón «Ver en el portal» de cada tarjeta de proveedor del detalle, y su
+# «Ya vi». Mismo reparto que abrir una sesión —Continental le pide a Doyle, que
+# abre el navegador en atlas, y la pantalla abre el visor—, pero **no guarda
+# nada ni toca la sesión**: es mirar. El EAN sale del renglón que Continental
+# tiene guardado y no de lo que mande el navegador: es la clave de lo que se
+# lleva buscando todo el día, y una petición que trajera otra cosa buscaría en
+# un portal ajeno, con la cuenta del dueño, lo que cualquiera quisiera escribir.
+
+
+class VistaPedida(BaseModel):
+    #: El renglón del que sale el EAN. Opcional en el esquema para que su
+    #: ausencia sea un 422 con frase nuestra (como el resto) y no el de pydantic.
+    renglon_id: int | None = None
+
+
+def _proveedor_inexistente(proveedor: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=400,
+        content={
+            "ok": False,
+            "detalle": f"«{proveedor.strip()[:40]}» no es uno de los proveedores.",
+            "que_hacer": _que_hacer(PETICION),
+        },
+    )
+
+
+@app.post("/api/proveedor/{proveedor}/ver")
+def ver_en_el_portal(
+    proveedor: str,
+    request: Request,
+    cuerpo: VistaPedida = VistaPedida(),
+    doyle: ClienteDeDoyle = Depends(obtener_doyle),
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+):
+    """Le pide a Doyle que abra el portal de ese proveedor con la búsqueda del
+    EAN del renglón y lo deje en el visor. **Mirar no guarda nada.**
+
+    Funciona igual con la tarjeta que dice «sin dato», que es donde más sirve, y
+    con una lista cerrada: no cambia el pedido. Un 409 de Doyle —el visor lo usa
+    una sesión u otra vista, o ese proveedor está consultando— se devuelve con
+    **su** frase, que Doyle escribe para personas. Cualquier otra falla de Doyle
+    es «Doyle no responde», con el tipo de la excepción y nunca su texto (regla
+    5). Firma quién lo pidió en la bitácora; no es un permiso.
+    """
+    firma = quien(request)
+    limpio = proveedor.strip().lower()
+    if limpio not in NOMBRES_DE_PROVEEDOR:
+        return _proveedor_inexistente(proveedor)
+    if cuerpo.renglon_id is None:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "ok": False,
+                "detalle": "Falta decir de qué renglón se quiere ver el portal.",
+                "que_hacer": _que_hacer(PETICION),
+            },
+        )
+
+    try:
+        renglon = almacenamiento.leer_renglon(cargar().negocio, cuerpo.renglon_id)
+    except Exception as exc:  # noqa: BLE001 — el almacenamiento caído es un hueco, no un 500
+        log.exception("No se pudo leer el renglón %s para ver su portal", cuerpo.renglon_id)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "detalle": f"no se pudo leer el renglón ({type(exc).__name__})",
+                "que_hacer": _que_hacer(AL_LEER),
+            },
+        )
+    if renglon is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "ok": False,
+                "detalle": (
+                    "Ese renglón ya no existe. Vuelve a cargar la página para "
+                    "ver cómo quedó."
+                ),
+            },
+        )
+    clave = renglon.propuesto.clave
+    if not clave:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "ok": False,
+                "detalle": (
+                    "Este renglón no tiene código de barras, y sin él no hay "
+                    "qué buscar en el portal. Ponle la clave en SICAR y vuelve "
+                    "a intentarlo."
+                ),
+            },
+        )
+
+    try:
+        vista = doyle.ver_en_portal(limpio, clave)
+    except Exception as exc:  # noqa: BLE001 — Doyle caído es un hueco, no un 500
+        log.exception("Doyle no pudo abrir %s para ver el EAN %s", limpio, clave)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "detalle": (
+                    f"Doyle no responde: no pudo abrir "
+                    f"{nombre_del_proveedor(limpio)} ({type(exc).__name__})."
+                ),
+                "que_hacer": _que_hacer(DOYLE),
+            },
+        )
+
+    if isinstance(vista, VisorOcupado):
+        # El 409 de Doyle: su `detalle` es texto para personas y viaja tal cual.
+        # Es un dato devuelto y no una excepción atrapada: de una excepción solo
+        # viaja el tipo (regla 5).
+        log.info("%s quiso ver %s en el portal y el visor estaba ocupado.", firma, limpio)
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "detalle": vista.detalle,
+                "que_hacer": _que_hacer(VISOR_OCUPADO),
+            },
+        )
+
+    log.info(
+        "%s pidió ver %s en el portal con el EAN %s (renglón %s)%s%s.",
+        firma,
+        limpio,
+        clave,
+        cuerpo.renglon_id,
+        " (ya estaba abierta)" if vista.ya_abierta else "",
+        " (parece login)" if vista.parece_login else "",
+    )
+    visor = cargar().visor_de_doyle
+    return {
+        "ok": True,
+        "proveedor": limpio,
+        "ya_abierta": vista.ya_abierta,
+        "parece_login": vista.parece_login,
+        "visor": visor,
+        "mensaje": frase_de_ver(
+            limpio,
+            clave,
+            ya_abierta=vista.ya_abierta,
+            parece_login=vista.parece_login,
+            hay_visor=bool(visor),
+        ),
+    }
+
+
+@app.post("/api/proveedor/{proveedor}/ver/cerrar")
+def cerrar_la_vista(
+    proveedor: str,
+    request: Request,
+    doyle: ClienteDeDoyle = Depends(obtener_doyle),
+):
+    """«Ya vi»: le pide a Doyle que cierre la vista de ese proveedor.
+
+    **Que Doyle no la tuviera no es una falla**: la cierra sola por tope de
+    tiempo, y entonces su 404 se trata como ya cerrada (`ok: true`, con su
+    frase). Lo que sí es falla es que Doyle no responda: la vista puede seguir
+    abierta, y se dice así.
+    """
+    firma = quien(request)
+    limpio = proveedor.strip().lower()
+    if limpio not in NOMBRES_DE_PROVEEDOR:
+        return _proveedor_inexistente(proveedor)
+    ya_estaba_cerrada = False
+    try:
+        doyle.cerrar_vista(limpio)
+    except VistaDesconocida:
+        ya_estaba_cerrada = True
+    except Exception as exc:  # noqa: BLE001 — Doyle caído es un hueco, no un 500
+        log.exception("Doyle no pudo cerrar la vista de %s", limpio)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "detalle": (
+                    f"Doyle no responde: no pudo cerrar la vista de "
+                    f"{nombre_del_proveedor(limpio)} ({type(exc).__name__}). "
+                    "Puede que siga abierta."
+                ),
+                "que_hacer": _que_hacer(DOYLE),
+            },
+        )
+    log.info(
+        "%s cerró la vista de %s%s.",
+        firma,
+        limpio,
+        " (Doyle ya no la tenía)" if ya_estaba_cerrada else "",
+    )
+    return {
+        "ok": True,
+        "proveedor": limpio,
+        "visor": cargar().visor_de_doyle,
+        "mensaje": frase_de_cerrar(limpio, ya_estaba_cerrada=ya_estaba_cerrada),
     }
 
 

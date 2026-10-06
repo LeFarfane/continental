@@ -690,6 +690,7 @@ CUERPOS = {
     "BusquedaNueva": {"termino": "7501000000001"},
     "ArticuloNuevo": {"termino": "7501000000001", "proveedores": ["nadro"]},
     "PruebaPedida": {"proveedores": ["nadro"]},
+    "VistaPedida": {"renglon_id": 1},
 }
 
 #: Con qué se prueba cada parámetro de ruta. Se prueban todos y la ruta se

@@ -59,6 +59,10 @@ PRUEBA_EN_CURSO = "prueba_en_curso"
 #: Se pidió probar solo el portal que espera en el visor a que alguien entre: esa
 #: ventana es de quien está tecleando, y una búsqueda ahí le estorbaría.
 PORTAL_EN_EL_VISOR = "portal_en_el_visor"
+#: Doyle contestó 409 a «Ver en el portal» (ADR 0026): el visor lo usa una
+#: sesión o la vista de otro portal, o ese proveedor está consultando. La
+#: frase del porqué es de Doyle; esto solo dice qué hacer.
+VISOR_OCUPADO = "visor_ocupado"
 #: Una corrida programada del lote ya debía haber pasado sobre esta lista y
 #: no dejó fila (ADR 0007, enmienda 2026-09-21): atlas pudo estar apagado a
 #: las 22:00, el timer sin habilitar, o la unidad en `failed`.
@@ -74,7 +78,7 @@ PETICION = "peticion"
 
 CASOS = (
     AL_LEER, AL_GUARDAR, DOYLE, PORTAL, CONFIGURACION, SERVIDOR, PETICION, LOTE,
-    PRUEBA_EN_CURSO, PORTAL_EN_EL_VISOR,
+    PRUEBA_EN_CURSO, PORTAL_EN_EL_VISOR, VISOR_OCUPADO,
 )
 
 _QUE_HACER = {
@@ -117,6 +121,11 @@ _QUE_HACER = {
         "Termina primero con ese portal: entra en el visor y dale «Ya entré», "
         "o «Cancelar» si ya no vas a entrar. Después se puede probar. Si la "
         "ventana no está, avísale {a_quien}."
+    ),
+    VISOR_OCUPADO: (
+        "Termina primero con lo que tiene el visor —«Ya vi» si es otra vista, "
+        "«Ya entré» o «Cancelar» si es una sesión— y vuelve a intentarlo. Si "
+        "no hay nada abierto, avísale {a_quien}."
     ),
     LOTE: (
         "Revisa `systemctl status continental-lote` y el journal "
