@@ -422,7 +422,7 @@ def test_la_pantalla_marca_el_renglon_que_no_es_medicamento(cliente):
     # Abrir y «Ya entré» son las de siempre. Sube de 26 a 28.
     # La de «Probar» (2026-10-05, ADR 0024): `POST /api/sesiones/probar`. Sube de 28 a 29.
     # Las dos de «Ver en el portal» (2026-10-05, ADR 0026): `.../ver` y `.../ver/cerrar`. Sube de 29 a 31.
-    assert portada.count("fetch('/api/") == 31
+    assert portada.count("fetch('/api/") == 32
 
 
 # ------------------------------------------------------------------ ayudas

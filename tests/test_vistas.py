@@ -337,7 +337,7 @@ def test_la_pantalla_trae_el_interruptor_con_los_dos_nombres(cliente):
     # Abrir y «Ya entré» son las de siempre. Sube de 26 a 28.
     # La de «Probar» (2026-10-05, ADR 0024): `POST /api/sesiones/probar`. Sube de 28 a 29.
     # Las dos de «Ver en el portal» (2026-10-05, ADR 0026): `.../ver` y `.../ver/cerrar`. Sube de 29 a 31.
-    assert portada.count("fetch('/api/") == 31
+    assert portada.count("fetch('/api/") == 32
 
 
 def test_la_pantalla_recuerda_la_eleccion_y_aguanta_un_localStorage_roto(cliente):

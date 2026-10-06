@@ -274,6 +274,20 @@ def _en_un_hilo(tarea: Callable[[], object]) -> None:
     threading.Thread(target=tarea, daemon=True).start()
 
 
+@dataclass(frozen=True, slots=True)
+class Fila:
+    """Una vuelta del botón de completar que está corriendo. No es una fila de
+    tabla: vive en memoria, igual que las consultas en vuelo.
+
+    `lanzada_en` es lo que deja a la pantalla distinguir, en cada renglón de la
+    cola, la consulta de ESTA fila de una vieja que ya estaba terminada.
+    """
+
+    pedido_sugerido_id: int
+    renglones: tuple[int, ...]
+    lanzada_en: dt.datetime
+
+
 @dataclass
 class RegistroDeConsultas:
     """Qué consultas hay en vuelo, para toda la aplicación.
@@ -295,7 +309,37 @@ class RegistroDeConsultas:
 
     lanzar: Callable[[Callable[[], object]], object] = _en_un_hilo
     _consultas: dict[int, Consulta] = field(default_factory=dict)
+    _filas: dict[int, "Fila"] = field(default_factory=dict)
     _candado: threading.Lock = field(default_factory=threading.Lock)
+
+    def apartar_fila(
+        self, pedido_sugerido_id: int, renglones: Sequence[int]
+    ) -> tuple["Fila", bool]:
+        """Registra la fila del botón de completar, **salvo que ya corra una**.
+
+        Devuelve la fila y si es nueva. Con una fila en curso devuelve ESA, con
+        su cola y su hora de arranque, para que la pantalla —la que volvió a
+        apretar, o la que se recargó a la mitad— siga a la que ya corre en vez
+        de lanzar una segunda. Medido el 2026-10-05: la pantalla no mostraba el
+        avance, el botón se volvió a apretar, y dos filas recorrieron la misma
+        lista en paralelo, dos búsquedas a Doyle a la vez.
+        """
+        with self._candado:
+            previa = self._filas.get(pedido_sugerido_id)
+            if previa is not None:
+                return previa, False
+            fila = Fila(
+                pedido_sugerido_id=pedido_sugerido_id,
+                renglones=tuple(renglones),
+                lanzada_en=dt.datetime.now(dt.UTC),
+            )
+            self._filas[pedido_sugerido_id] = fila
+        return fila, True
+
+    def terminar_fila(self, pedido_sugerido_id: int) -> None:
+        """La fila acabó —completa, por el tope, o tronando—: se puede lanzar otra."""
+        with self._candado:
+            self._filas.pop(pedido_sugerido_id, None)
 
     def de(self, renglon_id: int) -> Consulta | None:
         """La última consulta de ese renglón, en curso o terminada. `None` si nunca."""

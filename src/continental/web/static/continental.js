@@ -3125,17 +3125,84 @@ async function cargarPedido(fecha) {
     // Se dice cuánto tarda y de qué depende. Una espera sin número se lee como
     // "se colgó" a los quince segundos, y ésta son ~36 s por renglón.
     nota('pedido-accion',
-      'Consultando ' + respuesta.lanzados + ' renglón(es), uno tras otro. Tarda ' +
+      (respuesta.ya_en_curso ? 'Ya se estaban consultando ' : 'Consultando ') +
+      respuesta.lanzados + ' renglón(es), uno tras otro. Tarda ' +
       'alrededor de medio minuto por renglón y se van pintando conforme llegan. ' +
       'Puedes cerrar la pestaña: los precios se guardan solos. Lo que no alcance ' +
       'en ' + respuesta.tope_minutos + ' min se queda como está, con su botón.', 'aviso');
 
-    // Un sondeo por renglón de la cola, con el mismo mecanismo que el botón de
-    // uno solo: la ruta de sondeo es de UN renglón y no hay una de lista, así
-    // que esto son N sondeos de un GET corto cada dos segundos. Es más ruido
-    // del que gustaría y es lo honesto con lo que hay: inventar aquí un estado
-    // de la cola sería una segunda versión de lo que el servidor sabe.
-    (respuesta.faltantes.renglones || []).forEach(f => sondear(f.renglon_id));
+    sondearCola(respuesta.cola || [], respuesta.lanzada_en, respuesta.tope_minutos);
+  }
+
+  // SEGUIR LA FILA RENGLÓN POR RENGLÓN. Antes se lanzaba un `sondear` por
+  // renglón de la cola, y ése se rinde en cuanto ve una consulta que no está
+  // en curso: al arrancar, solo la primera lo está, así que los otros 35 se
+  // dejaban de seguir en la primera vuelta y la etiqueta «consultando» nunca
+  // saltaba al siguiente (2026-10-05, con 36 en la cola).
+  //
+  // Ahora se pregunta UNO a la vez, en el orden de la fila: el renglón al que
+  // le toca se sondea hasta que su consulta de ESTA vuelta termina, y entonces
+  // se pasa al siguiente. "De esta vuelta" es lo que decide `lanzada_en`: un
+  // renglón que todavía no le toca puede traer una consulta vieja ya
+  // terminada, y tomarla por la nueva saltaría el renglón sin esperarlo.
+  function sondearCola(cola, lanzadaEn, topeMinutos) {
+    const desde = Date.now();
+    const arranque = Date.parse(lanzadaEn) || 0;
+    // El tope lo decide el servidor; este solo existe para que el navegador no
+    // pregunte para siempre si el servidor se reinició a la mitad.
+    const hastaMs = ((topeMinutos || 20) + 2) * 60000;
+    let posicion = 0;
+    let fallas = 0;
+
+    const deEstaVuelta = (consulta) => !!consulta && !consulta.en_curso && (
+      Date.parse(consulta.pedida_en) >= arranque
+      || Date.parse(consulta.terminada_en || '') >= arranque);
+
+    const vuelta = async () => {
+      if (posicion >= cola.length) {
+        nota('pedido-accion', 'Listo: se consultaron los ' + cola.length +
+          ' renglones de la fila. El conteo de arriba se pone al día al volver ' +
+          'a cargar la página.');
+        return;
+      }
+      if (Date.now() - desde > hastaMs) {
+        nota('pedido-accion',
+          'La fila está tardando más de lo normal. Vuelve a cargar la página ' +
+          'en un rato: cada precio se guarda solo en cuanto Doyle conteste.', 'aviso');
+        return;
+      }
+
+      const renglonId = cola[posicion];
+      const respuesta = await respuestaDe(fetch('/api/renglon/' + renglonId + '/precio'));
+      if (!respuesta.ok) {
+        // Una falla suelta no tumba el seguimiento de toda la fila; varias
+        // seguidas sí, y se dice.
+        fallas += 1;
+        if (fallas >= 5) {
+          notaDeFalla('pedido-accion', respuesta);
+          return;
+        }
+        setTimeout(vuelta, CADA_MS);
+        return;
+      }
+      fallas = 0;
+
+      if (deEstaVuelta(respuesta.consulta)) {
+        aplicarPrecios(renglonId, respuesta);
+        posicion += 1;
+        // El siguiente se pregunta de inmediato: ya está en curso.
+        setTimeout(vuelta, 0);
+        return;
+      }
+      // En curso: se pinta para que la etiqueta salte a este renglón. Sin
+      // consulta de esta vuelta todavía no se pinta nada: no se pisa lo que
+      // tenía con un estado viejo.
+      if (respuesta.consulta && respuesta.consulta.en_curso) {
+        aplicarPrecios(renglonId, respuesta);
+      }
+      setTimeout(vuelta, CADA_MS);
+    };
+    setTimeout(vuelta, CADA_MS);
   }
 
   // Lo que llega del servidor se mete DENTRO del renglón, que es donde vive el

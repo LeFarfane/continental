@@ -3534,6 +3534,31 @@ def completar_lo_que_falta(
 
     tope_seg, cada_seg = ajustes_de_la_consulta()
     tope_total_seg = tope_del_completado_segundos()
+
+    fila, nueva = consultas.apartar_fila(
+        pedido_sugerido_id, [f.renglon_id for f in faltantes]
+    )
+    if not nueva:
+        # Ya corre una fila sobre esta lista: se devuelve ESA para que la
+        # pantalla la siga, y no se lanza otra que recorrería la misma lista en
+        # paralelo con dos búsquedas a Doyle a la vez.
+        log.info(
+            "%s volvió a pedir completar los precios de la lista %s y ya había "
+            "una fila en curso desde %s: no se lanzó otra.",
+            firma,
+            pedido_sugerido_id,
+            fila.lanzada_en.isoformat(),
+        )
+        return {
+            "ok": True,
+            "lanzados": len(fila.renglones),
+            "ya_en_curso": True,
+            "cola": list(fila.renglones),
+            "lanzada_en": fila.lanzada_en.isoformat(),
+            "faltantes": faltantes_como_json(faltantes),
+            "tope_minutos": round(tope_total_seg / 60.0, 1),
+        }
+
     # El tope se arma AQUÍ y entra como predicado, no se calcula dentro: la
     # política de cuánto puede durar el completado es de esta ruta, que es
     # quien lee el YAML, y `consultar_en_fila` se queda sin una sola constante
@@ -3550,22 +3575,34 @@ def completar_lo_que_falta(
         tope_total_seg / 60.0,
     )
 
-    consultas.lanzar(
-        lambda: consultar_en_fila(
-            [(f.renglon_id, f.clave) for f in faltantes],
-            doyle=doyle,
-            almacenamiento=almacenamiento,
-            registro=consultas,
-            negocio=negocio,
-            tope_seg=tope_seg,
-            cada_seg=cada_seg,
-            se_acabo=lambda: time.monotonic() - arranque >= tope_total_seg,
-        )
-    )
+    def correr_la_fila() -> None:
+        # El `finally` es lo que impide que una fila que tronó deje la lista
+        # "con una fila en curso" para siempre y el botón ya no lance nada.
+        try:
+            consultar_en_fila(
+                [(f.renglon_id, f.clave) for f in faltantes],
+                doyle=doyle,
+                almacenamiento=almacenamiento,
+                registro=consultas,
+                negocio=negocio,
+                tope_seg=tope_seg,
+                cada_seg=cada_seg,
+                se_acabo=lambda: time.monotonic() - arranque >= tope_total_seg,
+            )
+        finally:
+            consultas.terminar_fila(pedido_sugerido_id)
+
+    consultas.lanzar(correr_la_fila)
 
     return {
         "ok": True,
         "lanzados": len(faltantes),
+        "ya_en_curso": False,
+        # La cola EN ORDEN y la hora de arranque: con eso la pantalla sigue a
+        # la fila renglón por renglón y no confunde la consulta vieja de un
+        # renglón que todavía no le toca con la de esta vuelta.
+        "cola": list(fila.renglones),
+        "lanzada_en": fila.lanzada_en.isoformat(),
         # La cola que se lanzó, para que la pantalla marque esos renglones como
         # "consultando" sin adivinar cuáles eran. Es la MISMA lista que se le
         # pasó al hilo, no una segunda manera de calcularla.

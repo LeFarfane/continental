@@ -1522,6 +1522,26 @@ def test_apartar_no_lanza_nada_y_pedir_si():
     assert len(lanzadas) == 1
 
 
+def test_una_fila_de_completar_por_lista_hasta_que_termina():
+    """La segunda fila sobre la misma lista no se aparta: se devuelve la que
+    corre, con su cola y su hora, para que la pantalla la siga. Al terminarla
+    se puede lanzar otra; y una lista distinta no choca con ésta."""
+    registro = _registro()
+
+    fila, nueva = registro.apartar_fila(11, [1027, 1028])
+    assert nueva is True and fila.renglones == (1027, 1028)
+
+    otra, otra_vez = registro.apartar_fila(11, [1028])
+    assert otra_vez is False and otra == fila
+
+    _, de_otra_lista = registro.apartar_fila(12, [5])
+    assert de_otra_lista is True
+
+    registro.terminar_fila(11)
+    _, despues = registro.apartar_fila(11, [1028])
+    assert despues is True
+
+
 def test_el_tope_del_completado_sale_del_yaml_y_no_es_el_del_lote():
     """Dos números distintos a propósito.
 
@@ -1707,6 +1727,68 @@ def test_el_boton_consulta_SOLO_los_faltantes(cliente, almacen, doyle):
     assert respuesta["ok"] is True
     assert respuesta["lanzados"] == 2
     assert doyle.pedidos[len(antes):] == [SIN_LECTURA_CLAVE, SIN_PRECIOS_CLAVE]
+
+
+def test_el_boton_devuelve_la_cola_en_orden_y_la_hora_de_arranque(
+    cliente, almacen, doyle
+):
+    """Es lo que deja a la pantalla seguir la fila renglón por renglón
+    (2026-10-05: la etiqueta «consultando» se quedaba en el primero)."""
+    _poblar(almacen, doyle)
+    datos = cliente.get(RUTA).json()
+
+    respuesta = cliente.post(f"{RUTA}/{datos['pedido_sugerido_id']}/completar").json()
+
+    assert respuesta["ya_en_curso"] is False
+    assert respuesta["cola"] == [
+        f["renglon_id"] for f in respuesta["faltantes"]["renglones"]
+    ]
+    assert dt.datetime.fromisoformat(respuesta["lanzada_en"]).tzinfo is not None
+
+
+def test_apretar_otra_vez_no_lanza_una_segunda_fila(cliente, almacen, doyle, consultas):
+    """Medido el 2026-10-05: sin ver avance se volvió a apretar, y dos filas
+    recorrieron la misma lista en paralelo. El segundo clic sigue a la que
+    corre; cuando ésa termina, el botón vuelve a lanzar."""
+    _poblar(almacen, doyle)
+    datos = cliente.get(RUTA).json()
+    lanzadas = []
+    consultas.lanzar = lanzadas.append
+    ruta = f"{RUTA}/{datos['pedido_sugerido_id']}/completar"
+
+    primera = cliente.post(ruta).json()
+    segunda = cliente.post(ruta).json()
+
+    assert len(lanzadas) == 1
+    assert segunda["ok"] is True and segunda["ya_en_curso"] is True
+    assert segunda["cola"] == primera["cola"]
+    assert segunda["lanzada_en"] == primera["lanzada_en"]
+
+    # La fila corre y termina: libera la lista aunque no haya respuesta que
+    # esperar, y el siguiente clic ya lanza.
+    lanzadas[0]()
+    cliente.post(ruta)
+    assert len(lanzadas) == 2
+
+
+def test_una_fila_que_truena_no_deja_la_lista_bloqueada(
+    cliente, almacen, doyle, consultas, monkeypatch
+):
+    _poblar(almacen, doyle)
+    datos = cliente.get(RUTA).json()
+    lanzadas = []
+    consultas.lanzar = lanzadas.append
+    ruta = f"{RUTA}/{datos['pedido_sugerido_id']}/completar"
+
+    def truena(*args, **kwargs):
+        raise RuntimeError("se cayó a la mitad")
+
+    monkeypatch.setattr(modulo_app, "consultar_en_fila", truena)
+    cliente.post(ruta)
+    with pytest.raises(RuntimeError):
+        lanzadas[0]()
+
+    assert cliente.post(ruta).json()["ya_en_curso"] is False
 
 
 def test_el_boton_no_lanza_nada_cuando_no_falta_ninguno(cliente, almacen, doyle):
