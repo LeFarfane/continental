@@ -656,3 +656,50 @@ def test_la_pantalla_pinta_la_edad_de_la_espera_sin_componerla():
     assert "r.frase_de_la_espera" in js
     # La frase llega hecha: el JS no sabe de días de la semana ni de listas.
     assert "listas_en_espera" not in js.split("r.frase_de_la_espera")[0][-400:]
+
+
+# ==========================================================================
+# AL CERRAR (ticket 07): lo que volvió de la espera se avisa
+# ==========================================================================
+
+
+def _martes_con_lo_de_la_espera(cliente, almacen, almacenamiento) -> dict:
+    """Lunes manda el producto 1 a espera; el día siguiente vuelve con 3 piezas."""
+    primera = _lunes(cliente, almacen, almacenamiento)
+    _posponer(cliente, _renglon_json(primera, 1)["renglon_id"])
+    almacen.ventas_en_memoria.append(_venta(MANANA, 1, 2))
+    return cliente.get(RUTA).json()
+
+
+def test_cerrar_con_un_renglon_que_volvio_de_la_espera_lo_avisa_de_punta_a_punta(
+    cliente, almacen, almacenamiento
+):
+    segunda = _martes_con_lo_de_la_espera(cliente, almacen, almacenamiento)
+
+    resumen = cliente.get(f"{RUTA}/{segunda['pedido_sugerido_id']}/al-cerrar").json()
+
+    [perdida] = resumen["se_perderian"]
+    assert perdida["renglon_id"] == _renglon_json(segunda, 1)["renglon_id"]
+    assert perdida["piezas_de_la_espera"] == 3
+    assert "3 piezas que volvieron de la espera (en espera desde el martes 5 · 2 listas)" in (
+        perdida["frase"]
+    )
+    assert "reabrir deja de servir en cuanto se arma la lista siguiente" in perdida["frase"]
+    assert resumen["boton"] == "Cerrar de todos modos"
+    # Avisa, no prohíbe: cerrar sigue funcionando y da por atendido.
+    cerrada = cliente.post(f"{RUTA}/{segunda['pedido_sugerido_id']}/cerrar")
+    assert cerrada.status_code == 200
+
+
+def test_cerrar_con_el_renglon_en_espera_no_lo_avisa_de_punta_a_punta(
+    cliente, almacen, almacenamiento
+):
+    """Volvió, y la encargada lo mandó a esperar otra vez: ya tiene adónde ir."""
+    segunda = _martes_con_lo_de_la_espera(cliente, almacen, almacenamiento)
+    cliente.post(f"{RUTA}/{segunda['pedido_sugerido_id']}/partir")
+    _posponer(cliente, _renglon_json(segunda, 1)["renglon_id"], correo=OTRO)
+
+    resumen = cliente.get(f"{RUTA}/{segunda['pedido_sugerido_id']}/al-cerrar").json()
+
+    assert resumen["se_perderian"] == []
+    assert resumen["boton"] == "Cerrar la lista"

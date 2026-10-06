@@ -10,15 +10,15 @@ historias 28–31.
 
 **Blocked by:** 05
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Un renglón abierto con piezas de la espera se señala al cerrar, con sus
+- [x] Un renglón abierto con piezas de la espera se señala al cerrar, con sus
       piezas y desde cuándo esperaba.
-- [ ] La frase dice que reabrir deja de servir cuando se arma la lista
+- [x] La frase dice que reabrir deja de servir cuando se arma la lista
       siguiente.
-- [ ] Un renglón en espera al cerrar no se señala.
-- [ ] El cierre automático no cambia de comportamiento: da por atendido igual
+- [x] Un renglón en espera al cerrar no se señala.
+- [x] El cierre automático no cambia de comportamiento: da por atendido igual
       que hoy; lo nuevo es solo que se diga.
-- [ ] Pruebas: lo puro en el mismo lugar que hoy prueba lo que se perdería, y
+- [x] Pruebas: lo puro en el mismo lugar que hoy prueba lo que se perdería, y
       una ruta de punta a punta que cierra con un renglón que volvió de la
       espera.

@@ -43,6 +43,7 @@ from continental.almacenamiento import (
     RENGLON_CANCELADO,
     RENGLON_DESCARTADO,
     RENGLON_EN_TRANSITO,
+    RENGLON_POSPUESTO,
     RENGLON_RECIBIDO,
     RENGLON_RECIBIDO_PARCIAL,
     SISTEMA,
@@ -96,6 +97,9 @@ def _renglon(
     ventas_desde: dt.date | None = None,
     pedido_id: int | None = None,
     descripcion: str | None = None,
+    piezas_pospuestas: int = 0,
+    espera_desde: dt.date | None = None,
+    listas_en_espera: int | None = None,
 ) -> RenglonGuardado:
     descartado = estado == RENGLON_DESCARTADO
     recibido = estado in (RENGLON_RECIBIDO, RENGLON_RECIBIDO_PARCIAL)
@@ -114,7 +118,10 @@ def _renglon(
             clasificacion="medicamento",
             ventas_desde=ventas_desde,
             piezas_que_faltaron=piezas_que_faltaron,
+            piezas_pospuestas=piezas_pospuestas,
         ),
+        espera_desde=espera_desde,
+        listas_en_espera=listas_en_espera,
         descartado_por=CORREO if descartado else None,
         descartado_en=_local(JUEVES, 9) if descartado else None,
         cantidad_final=cantidad_final,
@@ -275,6 +282,81 @@ def test_al_cerrar_con_algo_que_se_perderia():
     assert resumen["volver"] == "Volver a la lista"
     assert "reabrir" in resumen["deshacer"]
     assert "lista siguiente" in resumen["deshacer"]
+
+
+# --- lo que volvió de la espera (lista de espera, ticket 07)
+
+
+def _de_la_espera(renglon_id: int = 1, estado: str = ABIERTO, **campos) -> RenglonGuardado:
+    return _renglon(
+        renglon_id,
+        estado,
+        cantidad=5,
+        piezas_pospuestas=3,
+        espera_desde=LUNES,
+        listas_en_espera=3,
+        descripcion="LOSARTAN 50 MG",
+        **campos,
+    )
+
+
+def test_un_renglon_abierto_con_piezas_de_la_espera_se_perderia():
+    lista = _lista(_de_la_espera(1), _renglon(2))
+
+    assert [r.renglon_id for r in cierre.lo_que_se_perderia(lista)] == [1]
+    assert [r.renglon_id for r in cierre.lo_que_volvio_de_la_espera(lista)] == [1]
+
+
+def test_un_renglon_en_espera_al_cerrar_no_se_senala():
+    """Ya tiene adónde ir: la lista siguiente lo trae (historia 31)."""
+    lista = _lista(_de_la_espera(1, RENGLON_POSPUESTO))
+
+    assert cierre.lo_que_se_perderia(lista) == ()
+    assert cierre.lo_que_volvio_de_la_espera(lista) == ()
+
+
+def test_la_frase_de_lo_de_la_espera_dice_piezas_desde_cuando_y_que_reabrir_caduca():
+    frase = cierre.frase_de_lo_que_se_perderia(_de_la_espera(1), Ventana(JUEVES, JUEVES))
+
+    assert frase == (
+        "LOSARTAN 50 MG: 5 piezas sin pedir. Trae 3 piezas que volvieron de la "
+        "espera (en espera desde el lunes 14 · 3 listas): si se cierra así, "
+        "ninguna lista vuelve a traerlas. Si te equivocas, reabrir deja de "
+        "servir en cuanto se arma la lista siguiente; para que siga esperando, "
+        "mándalo a espera otra vez antes de cerrar."
+    )
+
+
+def test_la_frase_de_lo_de_la_espera_sin_edad_no_inventa_una():
+    renglon = _renglon(1, piezas_pospuestas=1)
+    frase = cierre.frase_de_lo_que_se_perderia(renglon, Ventana(JUEVES, JUEVES))
+
+    assert "Trae 1 pieza que volvió de la espera:" in frase
+    assert "en espera desde" not in frase
+
+
+def test_la_frase_suma_lo_de_la_espera_a_lo_otro_que_trae():
+    renglon = _renglon(1, piezas_que_faltaron=2, piezas_pospuestas=3)
+    frase = cierre.frase_de_lo_que_se_perderia(renglon, Ventana(JUEVES, JUEVES))
+
+    assert "2 piezas que faltaron en un pedido anterior y 3 piezas que volvieron de la espera" in frase
+
+
+def test_al_cerrar_con_lo_de_la_espera_ofrece_cerrar_de_todos_modos():
+    resumen = cierre.al_cerrar(_lista(_de_la_espera(1), _renglon(2)))
+
+    assert resumen["boton"] == "Cerrar de todos modos"
+    [perdida] = resumen["se_perderian"]
+    assert perdida["renglon_id"] == 1
+    assert perdida["piezas_de_la_espera"] == 3
+    assert "volvieron de la espera" in perdida["frase"]
+
+
+def test_al_cerrar_con_un_renglon_en_espera_no_lo_avisa_y_lo_dice_normal():
+    resumen = cierre.al_cerrar(_lista(_de_la_espera(1, RENGLON_POSPUESTO), _renglon(2)))
+
+    assert resumen["se_perderian"] == []
+    assert resumen["boton"] == "Cerrar la lista"
 
 
 def test_al_cerrar_sin_nada_que_se_pierda_dice_lo_normal():

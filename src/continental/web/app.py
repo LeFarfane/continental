@@ -57,6 +57,7 @@ from continental.cierre import (
     frase_de_la_reapertura,
     frase_del_cierre,
     lo_que_se_perderia,
+    lo_que_volvio_de_la_espera,
     reapertura as boton_de_reabrir,
 )
 from continental.busqueda import (
@@ -645,6 +646,23 @@ def pedido_sugerido(
                     len(perdidas),
                     [r.renglon_id for r in perdidas],
                 )
+                # Lo de la espera se dice aparte, con sus piezas: es lo único
+                # que una persona había decidido guardar para después (ADR
+                # 0025, enmienda 2026-10-05), y el cierre automático no
+                # cambia su comportamiento, solo lo cuenta.
+                de_la_espera = lo_que_volvio_de_la_espera(cerrada)
+                if de_la_espera:
+                    log.warning(
+                        "Del cierre automático del pedido sugerido %s, %d "
+                        "renglón(es) traían piezas de la espera que nadie "
+                        "pidió ni volvió a mandar a espera: %s",
+                        cerrada.pedido_sugerido_id,
+                        len(de_la_espera),
+                        [
+                            (r.renglon_id, r.propuesto.piezas_pospuestas)
+                            for r in de_la_espera
+                        ],
+                    )
 
         ventana = ventana_de_reposicion(
             corte=almacenamiento.corte_del_ultimo_cerrado(negocio, ultima),

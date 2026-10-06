@@ -123,7 +123,7 @@ from continental.almacenamiento import (
     dias_primera_vez_configurados,
     ventana_de_reposicion,
 )
-from continental.cierre import lo_que_se_perderia
+from continental.cierre import lo_que_se_perderia, lo_que_volvio_de_la_espera
 from continental.clasificacion import reglas_configuradas
 from continental.lecturas_de_portal import LOTE, SONDA_DEL_LOTE
 from continental.consultas import (
@@ -1341,6 +1341,23 @@ def correr_el_lote(
                     len(perdidas),
                     [r.renglon_id for r in perdidas],
                 )
+                # Lo de la espera se dice aparte, con sus piezas: es lo único
+                # que una persona había decidido guardar para después (ADR
+                # 0025, enmienda 2026-10-05), y el cierre automático no
+                # cambia su comportamiento, solo lo cuenta.
+                de_la_espera = lo_que_volvio_de_la_espera(cerrada)
+                if de_la_espera:
+                    log.warning(
+                        "Del cierre automático del pedido sugerido %s, %d "
+                        "renglón(es) traían piezas de la espera que nadie "
+                        "pidió ni volvió a mandar a espera: %s",
+                        cerrada.pedido_sugerido_id,
+                        len(de_la_espera),
+                        [
+                            (r.renglon_id, r.propuesto.piezas_pospuestas)
+                            for r in de_la_espera
+                        ],
+                    )
 
         ventana = ventana_de_reposicion(
             corte=almacenamiento.corte_del_ultimo_cerrado(negocio, ultima),

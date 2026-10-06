@@ -17,7 +17,12 @@ ventana eso es la decisión de todos los días. Pero un renglón puede traer
 
 - **lo que faltó de un parcial** (`piezas_que_faltaron`, ADR 0015), o
 - **lo vendido mientras un pedido viajaba**, o lo de un cancelado
-  (`ventas_desde` anterior a la ventana, ADRs 0012 y 0013).
+  (`ventas_desde` anterior a la ventana, ADRs 0012 y 0013), o
+- **lo que volvió de la espera** (`piezas_pospuestas`, ADR 0025 y su enmienda
+  del 2026-10-05): un renglón `abierto` que trae piezas que alguien mandó a
+  esperar y que nadie pidió ni volvió a mandar a espera. Al cerrar se da por
+  atendido como todo lo demás, y la frase lo dice **con desde cuándo esperaba**
+  y con que reabrir deja de servir en cuanto se arma la lista siguiente.
 
 Ésa es la segunda y última oportunidad de esas piezas: `_LO_YA_PEDIDO` ve la
 lista cerrada con el producto y no lo vuelve a traer, esté el renglón
@@ -47,7 +52,11 @@ from continental.almacenamiento import (
     RenglonGuardado,
     Ventana,
 )
-from continental.transito import ZONA_DE_LA_FARMACIA, fecha_en_palabras
+from continental.transito import (
+    ZONA_DE_LA_FARMACIA,
+    fecha_en_palabras,
+    frase_de_la_espera,
+)
 
 #: Los rótulos de los botones. Son de aquí y no del JavaScript: el de cerrar
 #: cambia según haya algo que se perdería, y esa decisión es de Python.
@@ -93,6 +102,17 @@ def trae_ventas_de_otros_dias(renglon: RenglonGuardado, ventana: Ventana) -> boo
     return desde is not None and desde < ventana.desde
 
 
+def trae_piezas_de_la_espera(renglon: RenglonGuardado) -> bool:
+    """Si es un renglón **abierto** que trae piezas que volvieron de la espera.
+
+    Solo `abierto`: uno `pospuesto` al cerrar ya tiene adónde ir (la siguiente
+    lista lo trae otra vez) y volver a mandarlo a espera es justo la salida que
+    el aviso ofrece. Uno `descartado` es una decisión de una persona y por sí
+    solo no se señala (el ticket pide solo los `abierto`).
+    """
+    return renglon.estado == RENGLON_ABIERTO and renglon.propuesto.piezas_pospuestas > 0
+
+
 def se_perderia(renglon: RenglonGuardado, ventana: Ventana) -> bool:
     """Si cerrar daría por atendido algo de este renglón que no es de esta lista.
 
@@ -104,14 +124,23 @@ def se_perderia(renglon: RenglonGuardado, ventana: Ventana) -> bool:
     """
     if renglon.estado not in (RENGLON_ABIERTO, RENGLON_DESCARTADO):
         return False
-    return bool(renglon.propuesto.piezas_que_faltaron) or trae_ventas_de_otros_dias(
-        renglon, ventana
+    return (
+        bool(renglon.propuesto.piezas_que_faltaron)
+        or trae_ventas_de_otros_dias(renglon, ventana)
+        or trae_piezas_de_la_espera(renglon)
     )
 
 
 def lo_que_se_perderia(lista: PedidoSugeridoGuardado) -> tuple[RenglonGuardado, ...]:
     """Los renglones que traen algo de otro pedido y se darían por atendidos."""
     return tuple(r for r in lista.renglones if se_perderia(r, lista.ventana))
+
+
+def lo_que_volvio_de_la_espera(
+    lista: PedidoSugeridoGuardado,
+) -> tuple[RenglonGuardado, ...]:
+    """De lo que se perdería, lo que volvió de la espera (para la bitácora del cierre automático)."""
+    return tuple(r for r in lista.renglones if trae_piezas_de_la_espera(r))
 
 
 def frase_de_lo_que_se_perderia(renglon: RenglonGuardado, ventana: Ventana) -> str:
@@ -139,10 +168,30 @@ def frase_de_lo_que_se_perderia(renglon: RenglonGuardado, ventana: Ventana) -> s
             f"lo vendido desde {fecha_en_palabras(renglon.propuesto.ventas_desde)} "
             "mientras venía en camino"
         )
-    return (
+    if trae_piezas_de_la_espera(renglon):
+        pospuestas = renglon.propuesto.piezas_pospuestas
+        edad = frase_de_la_espera(
+            renglon.espera_desde,
+            renglon.listas_en_espera,
+            pospuestas,
+        )
+        cuales = "que volvió" if pospuestas == 1 else "que volvieron"
+        de_la_espera = f"{_piezas(pospuestas)} {cuales} de la espera"
+        que_trae.append(f"{de_la_espera} ({edad})" if edad else de_la_espera)
+    frase = (
         f"{cabeza} Trae {' y '.join(que_trae)}: si se cierra así, ninguna lista "
         "vuelve a traerlas."
     )
+    if trae_piezas_de_la_espera(renglon):
+        # Lo que el dueño pidió que se diga (ADR 0025, enmienda 2026-10-05):
+        # reabrir sirve solo mientras no se arme la lista siguiente, y a esa
+        # altura lo de la espera ya se dio por atendido.
+        frase += (
+            " Si te equivocas, reabrir deja de servir en cuanto se arma la "
+            "lista siguiente; para que siga esperando, mándalo a espera otra "
+            "vez antes de cerrar."
+        )
+    return frase
 
 
 def _frase_de_lo_normal(lista: PedidoSugeridoGuardado, sin_pedir: int, en_borrador: int) -> str:
@@ -241,6 +290,9 @@ def al_cerrar(lista: PedidoSugeridoGuardado) -> dict:
                 "estado": r.estado,
                 "piezas": r.cantidad_a_pedir,
                 "piezas_que_faltaron": r.propuesto.piezas_que_faltaron,
+                "piezas_de_la_espera": (
+                    r.propuesto.piezas_pospuestas if trae_piezas_de_la_espera(r) else 0
+                ),
                 "ventas_desde": (
                     r.propuesto.ventas_desde.isoformat()
                     if trae_ventas_de_otros_dias(r, lista.ventana)
