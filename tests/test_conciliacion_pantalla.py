@@ -27,11 +27,13 @@ prueba toca Postgres ni la red.
 from __future__ import annotations
 
 import datetime as dt
+from dataclasses import replace
 from decimal import Decimal
 
 from continental.almacen import LineaDeCompra, LineaDeVenta, Producto
 from continental.almacenamiento import PrecioDeProveedor
 from continental.conciliacion import (
+    MOTIVO_DATOS_NO_HAN_LLEGADO,
     MOTIVO_NUNCA_EN_COMPRAS,
     Coincidencia,
     Conciliacion,
@@ -222,6 +224,21 @@ class TestConciliacionComoJson:
         [grupo] = cuerpo["sin_comprar"]
         assert grupo["motivo"] == MOTIVO_NUNCA_EN_COMPRAS
         assert grupo["renglones"][0]["producto_id"] == 2
+
+    def test_lo_que_todavia_es_pronto_no_se_lista_renglon_por_renglon(self):
+        """Pedido del dueño, 2026-10-05: doce renglones con la misma frase de
+        "el respaldo puede tardar 2.5 días" eran ruido que nadie lee. El
+        resumen del bloque los sigue contando; la lista ya no los repite."""
+        resultado = self._conciliacion_con_los_tres_bloques()
+        [s] = resultado.sin_comprar
+        resultado = replace(
+            resultado, sin_comprar=(replace(s, motivo=MOTIVO_DATOS_NO_HAN_LLEGADO),)
+        )
+
+        cuerpo = conciliacion_como_json(resultado)
+
+        assert cuerpo["sin_comprar"] == []
+        assert "1 sin comprar todavía" in cuerpo["frase"]
 
     def test_la_coincidencia_trae_lo_que_paga_el_modulo(self):
         resultado = self._conciliacion_con_los_tres_bloques()

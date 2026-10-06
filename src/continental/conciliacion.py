@@ -742,6 +742,13 @@ def conciliacion_como_json(
     comparaciones = comparaciones or {}
     grupos_sin_comprar = []
     for motivo in MOTIVOS_SIN_COMPRAR:
+        # Lo que todavía es pronto para juzgar no se lista renglón por
+        # renglón (pedido del dueño, 2026-10-05): era la misma frase de "el
+        # respaldo puede tardar 2.5 días" repetida en cada producto, y nadie
+        # la lee. `frase_del_bloque` los sigue contando en "N sin comprar
+        # todavía"; cuando pasa la ventana, el renglón vuelve como no comprado.
+        if motivo == MOTIVO_DATOS_NO_HAN_LLEGADO:
+            continue
         de_este = [s for s in resultado.sin_comprar if s.motivo == motivo]
         if not de_este:
             continue
