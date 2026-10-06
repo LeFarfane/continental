@@ -78,6 +78,7 @@ from continental.almacenamiento import (
     ABIERTO,
     RENGLON_ABIERTO,
     RENGLON_DESCARTADO,
+    RENGLON_POSPUESTO,
     VENCIDO,
 )
 from continental.transito import fecha_en_palabras, motivo_para_no_cancelar_por_lo_recibido
@@ -357,24 +358,32 @@ def motivo_para_no_reabrir(
 # `almacenamiento._DESCARTAR`, `_DEVOLVER_A_ABIERTO`, `_AJUSTAR_LA_CANTIDAD` y
 # `_ELEGIR_PROVEEDOR`, y una copia sin prueba en `continental.js`.
 
-#: Las tres acciones que exigen el renglón **abierto** (y su lista abierta):
-#: el mismo `WHERE`, letra por letra, en `_DESCARTAR`, `_AJUSTAR_LA_CANTIDAD`
-#: y `_ELEGIR_PROVEEDOR`. `devolver_a_abierto` es la única que exige lo
-#: contrario —el renglón **descartado**— y por eso no está en esta tupla.
+#: Las acciones que exigen el renglón **abierto** (y su lista abierta): el
+#: mismo `WHERE`, letra por letra, en `_DESCARTAR`, `_AJUSTAR_LA_CANTIDAD`,
+#: `_ELEGIR_PROVEEDOR` y, desde el ADR 0025, `_POSPONER`. Las dos que deshacen
+#: —`devolver_a_abierto` y `devolver_pospuesto`— exigen lo contrario y por eso
+#: no están en esta tupla.
 ACCIONES_QUE_EXIGEN_RENGLON_ABIERTO = (
     "descartar",
     "ajustar_la_cantidad",
     "elegir_proveedor",
+    "posponer",
 )
 
-#: Y la que exige lo contrario.
+#: Las que exigen lo contrario: el renglón **descartado**…
 DEVOLVER_A_ABIERTO = "devolver_a_abierto"
+
+#: …y el renglón **pospuesto** (ADR 0025).
+DEVOLVER_POSPUESTO = "devolver_pospuesto"
 
 #: Todas las acciones que `motivo_para_no_editar` conoce, en el orden en que
 #: `almacenamiento.py` las declara. Sirve para que quien llama con una
 #: cadena mal escrita reciba un error claro y no un "sí se puede" por
 #: accidente.
-ACCIONES_DE_EDICION = ACCIONES_QUE_EXIGEN_RENGLON_ABIERTO + (DEVOLVER_A_ABIERTO,)
+ACCIONES_DE_EDICION = ACCIONES_QUE_EXIGEN_RENGLON_ABIERTO + (
+    DEVOLVER_A_ABIERTO,
+    DEVOLVER_POSPUESTO,
+)
 
 
 def _motivo_por_estado_del_renglon(renglon: "RenglonGuardado", accion: str) -> str:
@@ -388,6 +397,7 @@ def _motivo_por_estado_del_renglon(renglon: "RenglonGuardado", accion: str) -> s
         "descartar": "descartarlo",
         "ajustar_la_cantidad": "corregir su cantidad",
         "elegir_proveedor": "elegir a quién pedírselo",
+        "posponer": "pasarlo al día siguiente",
     }[accion]
     if renglon.esta_en_transito:
         return f"ya se le pidió a un proveedor: {verbo} diría que nadie lo pidió."
@@ -402,6 +412,11 @@ def _motivo_por_estado_del_renglon(renglon: "RenglonGuardado", accion: str) -> s
         return (
             "ese renglón está descartado: primero hay que devolverlo a la "
             "lista."
+        )
+    if renglon.estado == RENGLON_POSPUESTO:
+        return (
+            "ese renglón ya pasa al día siguiente: primero hay que devolverlo "
+            "a la lista."
         )
     return f"ese renglón ya no está abierto: no se puede {verbo}."
 
@@ -420,9 +435,10 @@ def motivo_para_no_editar(
     `se_puede_editar` del JSON) y para contestar ese 409 con el motivo real.
 
     `accion` es una de `ACCIONES_DE_EDICION`: `"descartar"`,
-    `"ajustar_la_cantidad"` y `"elegir_proveedor"` exigen el renglón
-    `abierto`; `"devolver_a_abierto"` exige lo contrario, `descartado`. Las
-    cuatro exigen además la lista `abierta` — la condición que el
+    `"ajustar_la_cantidad"`, `"elegir_proveedor"` y `"posponer"` (ADR 0025)
+    exigen el renglón `abierto`; `"devolver_a_abierto"` exige lo contrario,
+    `descartado`, y `"devolver_pospuesto"` exige `pospuesto`. Todas exigen
+    además la lista `abierta` — la condición que el
     2026-09-20 unificó en las cuatro sentencias (ver `almacenamiento.py`).
 
     `lista` es la lista guardada del renglón (`PedidoSugeridoGuardado`).
@@ -438,6 +454,12 @@ def motivo_para_no_editar(
             return (
                 "ese renglón no está descartado: no hay nada que devolver a "
                 "la lista."
+            )
+    elif accion == DEVOLVER_POSPUESTO:
+        if renglon.estado != RENGLON_POSPUESTO:
+            return (
+                "ese renglón no pasa al día siguiente: no hay nada que "
+                "devolver a la lista."
             )
     elif renglon.estado != RENGLON_ABIERTO:
         return _motivo_por_estado_del_renglon(renglon, accion)

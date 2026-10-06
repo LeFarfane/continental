@@ -137,6 +137,12 @@
 --      por portal cada vez que alguien aprieta «Probar». Es la primera que el
 --      rol NO puede actualizar: solo INSERT y SELECT. Como la 0003, la 0004 y
 --      la 0015, exige volver a correr `crear_rol.sql` (o trae su propio GRANT).
+--  19. `sql/migraciones/0019-el-renglon-pospuesto.sql` (2026-10-05, ADR 0025),
+--      que le da a `renglon` el séptimo estado, `pospuesto` -una persona lo
+--      pasó a la siguiente lista-, con su firma, y `piezas_pospuestas`, las
+--      piezas que el renglón de mañana trae de ayer. NO crea tabla, y NO rompe
+--      el código de antes: las firmas admiten nulos y las piezas tienen
+--      DEFAULT 0.
 --
 -- Las trece son idempotentes, así que correrlas sobre una base que ya las
 -- tiene -o sobre una recién creada con este archivo- no rompe nada.
@@ -675,6 +681,14 @@ CREATE TABLE IF NOT EXISTS pedidos.renglon (
     -- (una fila de antes de la 0017), '' es "no hay anaquel que enseñar", y
     -- cualquier otro texto es el anaquel tal cual.
     anaquel                 text,
+    -- PASAR AL DÍA SIGUIENTE (ADR 0025, migración 0019). La firma de quien
+    -- mandó el renglón a la siguiente lista y cuándo —NULL las dos en todo
+    -- renglón que no esté `pospuesto`—, y las piezas que la lista anterior
+    -- pasó a ESTE renglón, ya sumadas a `cantidad_propuesta`: el par de
+    -- `piezas_que_faltaron`. Casi siempre cero.
+    pospuesto_por           text,
+    pospuesto_en            timestamptz,
+    piezas_pospuestas       integer NOT NULL DEFAULT 0,
 
     CONSTRAINT pk_renglon
         PRIMARY KEY (renglon_id),
@@ -724,7 +738,8 @@ CREATE TABLE IF NOT EXISTS pedidos.renglon (
     -- final, igual que en `almacenamiento.ESTADOS_DEL_RENGLON`.
     CONSTRAINT ck_renglon_estado
         CHECK (estado IN ('abierto', 'en tránsito', 'recibido',
-                          'recibido parcial', 'descartado', 'cancelado')),
+                          'recibido parcial', 'descartado', 'cancelado',
+                          'pospuesto')),
 
     -- La firma vacía no existe, por la misma razón que la clave vacía: una
     -- cadena vacía se compara igual que un dato y no se distingue de "no se
@@ -911,6 +926,24 @@ CREATE TABLE IF NOT EXISTS pedidos.renglon (
     CONSTRAINT ck_renglon_piezas_que_faltaron
         CHECK (piezas_que_faltaron >= 0
                AND piezas_que_faltaron <= cantidad_propuesta),
+
+    -- Lo que la lista anterior pasó a este día también se SUMA a lo vendido
+    -- (ADR 0025): cabe en la propuesta y nunca es negativo.
+    CONSTRAINT ck_renglon_piezas_pospuestas
+        CHECK (piezas_pospuestas >= 0
+               AND piezas_pospuestas <= cantidad_propuesta),
+
+    -- La firma vacía no existe, igual que en el descarte.
+    CONSTRAINT ck_renglon_pospuesto_por
+        CHECK (pospuesto_por <> ''),
+
+    -- Pospuesto si y solo si hay firma Y hora, el mismo par que
+    -- `ck_renglon_descarte`: sin la mitad de ida, "¿por qué esto pasó a mañana?"
+    -- no tendría a quién hacérsele; sin la de vuelta, un renglón devuelto a
+    -- `abierto` conservaría una firma que ya no describe nada.
+    CONSTRAINT ck_renglon_pospuesto
+        CHECK ((estado = 'pospuesto')
+               = (pospuesto_por IS NOT NULL AND pospuesto_en IS NOT NULL)),
 
     CONSTRAINT fk_renglon_sugerido
         FOREIGN KEY (pedido_sugerido_id, negocio)
@@ -1121,6 +1154,18 @@ COMMENT ON COLUMN pedidos.renglon.piezas_que_faltaron IS
     'Piezas de un pedido anterior que llegó de menos y que este renglón trae de '
     'vuelta, ya sumadas a cantidad_propuesta. Son piezas, no ventas (ADR 0015). '
     'Casi siempre 0.';
+
+COMMENT ON COLUMN pedidos.renglon.pospuesto_por IS
+    'Quién pasó este renglón al día siguiente (ADR 0025). Es una FIRMA, no un '
+    'permiso. NULL si no está pospuesto.';
+
+COMMENT ON COLUMN pedidos.renglon.pospuesto_en IS
+    'Cuándo lo pasó, instante con zona. NULL si no está pospuesto.';
+
+COMMENT ON COLUMN pedidos.renglon.piezas_pospuestas IS
+    'Piezas que la lista anterior pasó al día siguiente y que este renglón trae, '
+    'ya sumadas a cantidad_propuesta. Son piezas, no ventas (ADR 0025). Casi '
+    'siempre 0.';
 
 
 -- --------------------------------------------------------------------------

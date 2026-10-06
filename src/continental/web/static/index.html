@@ -197,7 +197,7 @@
                   <th class="numero" title="Días de cobertura"><span aria-hidden="true">Alcanza</span><span class="oculto">Días de cobertura</span></th>
                   <th class="cantidad" title="Cantidad a pedir"><span aria-hidden="true">Pedir</span><span class="oculto">Cantidad a pedir</span></th>
                   <th class="proveedor" id="encabezado-proveedor">Se le pide a</th>
-                  <th class="acciones"><span class="oculto">Descartar</span></th>
+                  <th class="acciones"><span class="oculto">Pasar al día siguiente o descartar</span></th>
                 </tr>
               </thead>
               <tbody id="pedido-renglones"></tbody>
@@ -206,6 +206,12 @@
             <details class="descartados" id="descartados" hidden>
               <summary id="descartados-resumen"></summary>
               <ul id="descartados-lista"></ul>
+            </details>
+            <!-- Los que pasan al día siguiente (ADR 0025): también aparte y
+                 plegados, y con su botón para devolverlos. -->
+            <details class="descartados pospuestos" id="pospuestos" hidden>
+              <summary id="pospuestos-resumen"></summary>
+              <ul id="pospuestos-lista"></ul>
             </details>
           </div>
           <!-- LA CONCILIACIÓN DIARIA (ADR 0021): lo propuesto contra lo que de

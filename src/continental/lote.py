@@ -1365,7 +1365,11 @@ def correr_el_lote(
             lambda: armar_la_lista(
                 almacen,
                 ventana,
-                memoria_de_lo_pedido(almacenamiento.lo_ya_pedido(negocio, ultima)),
+                memoria_de_lo_pedido(
+                    almacenamiento.lo_ya_pedido(negocio, ultima),
+                    # Lo que la lista anterior pasó a este día (ADR 0025).
+                    almacenamiento.lo_pospuesto(negocio, ultima),
+                ),
                 reglas=reglas,
                 catalogo=catalogo,
             ).renglones,

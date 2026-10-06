@@ -963,7 +963,9 @@ def test_la_interfaz_trae_las_dos_escrituras():
 
 def test_cancelado_es_el_tercer_estado_del_pedido_y_el_sexto_del_renglon():
     assert ESTADOS_DEL_PEDIDO == (BORRADOR, ENVIADO, CANCELADO)
-    assert ESTADOS_DEL_RENGLON[-1] == RENGLON_CANCELADO == "cancelado"
+    # Sexto de siete desde el ADR 0025: `pospuesto` se agregó detrás.
+    assert ESTADOS_DEL_RENGLON[5] == RENGLON_CANCELADO == "cancelado"
+    assert ESTADOS_DEL_RENGLON[-1] == "pospuesto"
 
 
 def test_el_glosario_nombra_cancelado_y_atrasado_sin_confundirlo_con_vencido():

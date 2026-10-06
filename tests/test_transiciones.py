@@ -30,6 +30,7 @@ from continental.almacenamiento import (
     RENGLON_CANCELADO,
     RENGLON_DESCARTADO,
     RENGLON_EN_TRANSITO,
+    RENGLON_POSPUESTO,
     RENGLON_RECIBIDO,
     RENGLON_RECIBIDO_PARCIAL,
     VENCIDO,
@@ -43,6 +44,7 @@ from continental.transiciones import (
     ACCIONES_DE_EDICION,
     ACCIONES_QUE_EXIGEN_RENGLON_ABIERTO,
     DEVOLVER_A_ABIERTO,
+    DEVOLVER_POSPUESTO,
     motivo_para_no_corregir,
     motivo_para_no_editar,
     motivo_para_no_recibir_a_mano,
@@ -259,13 +261,24 @@ def _lista_guardada(
     )
 
 
-def test_las_tres_acciones_de_edicion_exigen_el_renglon_abierto():
+def _estado_que_exige(accion: str) -> str:
+    """El estado en que el renglón SÍ califica para `accion`: `abierto` casi
+    siempre, y lo contrario para las dos que deshacen."""
+    return {
+        DEVOLVER_A_ABIERTO: RENGLON_DESCARTADO,
+        DEVOLVER_POSPUESTO: RENGLON_POSPUESTO,
+    }.get(accion, RENGLON_ABIERTO)
+
+
+def test_las_acciones_de_edicion_exigen_el_renglon_abierto():
     """El mismo `WHERE`, letra por letra, en `_DESCARTAR`,
-    `_AJUSTAR_LA_CANTIDAD` y `_ELEGIR_PROVEEDOR`."""
+    `_AJUSTAR_LA_CANTIDAD`, `_ELEGIR_PROVEEDOR` y, desde el ADR 0025,
+    `_POSPONER`."""
     assert ACCIONES_QUE_EXIGEN_RENGLON_ABIERTO == (
         "descartar",
         "ajustar_la_cantidad",
         "elegir_proveedor",
+        "posponer",
     )
     for accion in ACCIONES_QUE_EXIGEN_RENGLON_ABIERTO:
         for estado in (
@@ -274,6 +287,7 @@ def test_las_tres_acciones_de_edicion_exigen_el_renglon_abierto():
             RENGLON_RECIBIDO,
             RENGLON_RECIBIDO_PARCIAL,
             RENGLON_DESCARTADO,
+            RENGLON_POSPUESTO,
         ):
             motivo = motivo_para_no_editar(_renglon(estado), _lista_guardada(), accion)
             assert motivo is not None, (accion, estado)
@@ -338,9 +352,7 @@ def test_las_cuatro_acciones_exigen_ademas_la_lista_abierta():
     """La condición unificada el 2026-09-20: sin ella, una lista cerrada
     seguiría dejándose modificar."""
     for accion in ACCIONES_DE_EDICION:
-        estado_que_pasa = (
-            RENGLON_DESCARTADO if accion == DEVOLVER_A_ABIERTO else RENGLON_ABIERTO
-        )
+        estado_que_pasa = _estado_que_exige(accion)
         for estado_de_lista in (CERRADO, VENCIDO):
             motivo = motivo_para_no_editar(
                 _renglon(estado_que_pasa), _lista_guardada(estado_de_lista), accion
@@ -354,9 +366,7 @@ def test_sin_lista_no_se_afirma_que_se_pueda_editar():
     poder leerla, no se puede afirmar que sí lo esté — la misma convención
     que `motivo_para_no_corregir` usa con `pedido=None`."""
     for accion in ACCIONES_DE_EDICION:
-        estado_que_pasa = (
-            RENGLON_DESCARTADO if accion == DEVOLVER_A_ABIERTO else RENGLON_ABIERTO
-        )
+        estado_que_pasa = _estado_que_exige(accion)
         motivo = motivo_para_no_editar(_renglon(estado_que_pasa), None, accion)
         assert motivo is not None
 

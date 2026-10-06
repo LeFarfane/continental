@@ -169,6 +169,15 @@ class Renglon:
     verificar. Son **piezas y no ventas**: lo que faltó se sabe como "pedí 10,
     llegaron 6", no como qué días se vendieron esas 4 (ver el ADR).
 
+    **`piezas_pospuestas` son las piezas que la lista anterior mandó a este
+    día** (ADR 0025): una persona pasó el renglón al día siguiente y aquí
+    vuelven, **sumadas** en `cantidad_propuesta` junto a lo vendido —"se
+    vendieron 2 y pasaron 3 de ayer, se piden 5"—. Mismo mecanismo y misma
+    razón que `piezas_que_faltaron`: piezas y no ventas, guardadas aparte para
+    que la suma se verifique de un vistazo. Si el renglón de ayer ya traía
+    piezas que faltaron o pospuestas, `cantidad_a_pedir` ya las incluía: se
+    pasa entera y no se cuenta dos veces.
+
     **`anaquel` es el lugar físico tal como lo trajo el catálogo cuando se
     propuso el renglón** (`dim_producto.ubicacion`, migración 0017), y viaja
     aquí por la misma razón que `clasificacion`, que sale de él: se congela con
@@ -192,6 +201,7 @@ class Renglon:
     ventas_desde: dt.date | None = None
     piezas_que_faltaron: int = 0
     anaquel: str | None = None
+    piezas_pospuestas: int = 0
 
     @property
     def esta_agotado(self) -> bool:
@@ -267,6 +277,7 @@ def calcular_pedido_sugerido(
     ventas_del_ritmo: Sequence[LineaDeVenta] | None = None,
     reglas: ReglasDeClasificacion | None = None,
     faltaron: Mapping[int, int] | None = None,
+    pospuestos: Mapping[int, int] | None = None,
 ) -> PedidoSugerido:
     """Ventas + catálogo → el pedido sugerido, en reposición 1 a 1 y por urgencia.
 
@@ -313,13 +324,21 @@ def calcular_pedido_sugerido(
     vendieron antes, se pidieron y no llegaron—. Sin una sola venta no hay
     lista, y lo que faltó espera a la primera que haya: no se pierde, porque
     nadie lo atendió y la memoria lo sigue trayendo.
+
+    `pospuestos` son las piezas que la lista anterior **mandó al día
+    siguiente** (ADR 0025), por producto, y funcionan igual que `faltaron`: se
+    suman a lo vendido, el producto entra aunque no se haya vuelto a vender, y
+    sin una sola venta no hay lista. Van en un argumento aparte y no mezcladas
+    con `faltaron` porque se guardan aparte (`piezas_pospuestas`) y la frase
+    del renglón dice de cuál de las dos viene cada pieza.
     """
     if not ventas:
         return PedidoSugerido(fecha_de_ventas=None, renglones=())
 
     por_producto = _piezas_por_producto(ventas)
     faltaron = {p: n for p, n in (faltaron or {}).items() if n > 0}
-    for producto_id in faltaron:
+    pospuestos = {p: n for p, n in (pospuestos or {}).items() if n > 0}
+    for producto_id in (*faltaron, *pospuestos):
         por_producto.setdefault(producto_id, 0.0)
     ritmo = _ritmo_diario(ventas if ventas_del_ritmo is None else ventas_del_ritmo)
     productos = {p.producto_id: p for p in catalogo}
@@ -332,6 +351,7 @@ def calcular_pedido_sugerido(
             ritmo.get(producto_id, 0.0),
             reglas if reglas is not None else ReglasDeClasificacion(),
             faltaron.get(producto_id, 0),
+            pospuestos.get(producto_id, 0),
         )
         for producto_id, piezas in por_producto.items()
     ]
@@ -390,6 +410,7 @@ def _renglon(
     ritmo: float,
     reglas: ReglasDeClasificacion,
     faltaron: int = 0,
+    pospuestas: int = 0,
 ) -> Renglon:
     """Un renglón, esté o no el producto en el catálogo.
 
@@ -421,8 +442,9 @@ def _renglon(
         piezas_vendidas=piezas,
         # Lo vendido, subido al entero, MÁS lo que faltó (ticket 27): las dos
         # cifras se guardan aparte para que la suma se pueda verificar.
-        cantidad_propuesta=_piezas_a_pedir(piezas) + faltaron,
+        cantidad_propuesta=_piezas_a_pedir(piezas) + faltaron + pospuestas,
         piezas_que_faltaron=faltaron,
+        piezas_pospuestas=pospuestas,
         esta_en_el_catalogo=producto is not None,
         existencia=existencia,
         dias_de_cobertura=_dias_de_cobertura(existencia, ritmo),
@@ -593,6 +615,8 @@ def armar_la_lista(
         # Lo que faltó en un recibido parcial (ticket 27, ADR 0015): piezas,
         # no ventas, y por eso no pasa por `recortar`.
         faltaron=memoria.faltaron,
+        # Lo que la lista anterior mandó a este día (ADR 0025): también piezas.
+        pospuestos=memoria.pospuestos,
     )
     return PedidoSugerido(
         fecha_de_ventas=lista.fecha_de_ventas,

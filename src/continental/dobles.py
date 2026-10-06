@@ -32,6 +32,7 @@ from continental.almacenamiento import (
     RENGLON_CANCELADO,
     RENGLON_DESCARTADO,
     RENGLON_EN_TRANSITO,
+    RENGLON_POSPUESTO,
     RENGLON_RECIBIDO,
     RENGLON_RECIBIDO_PARCIAL,
     ESTADOS_QUE_ATIENDEN_EL_PRODUCTO,
@@ -760,6 +761,30 @@ class AlmacenamientoFalso:
                 )
         return tuple(resultado)
 
+    def lo_pospuesto(
+        self, negocio: str, antes_de: dt.date
+    ) -> tuple[RenglonGuardado, ...]:
+        """`_LO_POSPUESTO`, en memoria: los `pospuesto` de la lista anterior (ADR 0025).
+
+        **Solo la lista inmediatamente anterior** a `antes_de` —la de fecha más
+        reciente que sea menor—, y de ninguna otra: pasan una vez. En el orden
+        de los renglones, como el `order by renglon_id` de allá.
+        """
+        self._revisar()
+        anteriores = [
+            lista
+            for lista in self.listas
+            if lista["negocio"] == negocio and lista["fecha_del_pedido"] < antes_de
+        ]
+        if not anteriores:
+            return ()
+        ultima = max(anteriores, key=lambda lista: lista["fecha_del_pedido"])
+        return tuple(
+            renglon_guardado_desde_columnas(fila)
+            for fila in sorted(ultima["renglones"], key=lambda f: f["renglon_id"])
+            if fila["negocio"] == negocio and fila["estado"] == RENGLON_POSPUESTO
+        )
+
     # ----------------------------------------------------------- escritura
 
     def abrir_el_dia(
@@ -1042,6 +1067,8 @@ class AlmacenamientoFalso:
         recibido_en: dt.datetime | None = None,
         recibido_con_compras: Sequence[int] | None = None,
         piezas_recibidas: float | None = None,
+        pospuesto_por: str | None = None,
+        pospuesto_en: dt.datetime | None = None,
     ) -> PedidoSugeridoGuardado | None:
         """El `UPDATE` pelado de un renglón, revisado contra los CHECK.
 
@@ -1058,6 +1085,9 @@ class AlmacenamientoFalso:
         Postgres. **Desde el 27 dice también cuántas llegaron**
         (`ck_renglon_piezas_recibidas`, `ck_renglon_completo_o_parcial`):
         `piezas_recibidas` entra por argumento, y un `recibido` sin ella rebota.
+        **Desde el ADR 0025 un `pospuesto` también va firmado**
+        (`ck_renglon_pospuesto`): `pospuesto_por` y `pospuesto_en` entran por
+        argumento, y sin ellos esto rebota igual que Postgres.
         """
         self._revisar()
         encontrado = self._renglon_por_id(renglon_id)
@@ -1081,6 +1111,8 @@ class AlmacenamientoFalso:
             "piezas_recibidas": (
                 None if piezas_recibidas is None else round(float(piezas_recibidas), 3)
             ),
+            "pospuesto_por": pospuesto_por,
+            "pospuesto_en": pospuesto_en,
         }
         revisar_el_renglon(propuesta)
 
@@ -1094,6 +1126,8 @@ class AlmacenamientoFalso:
             recibido_en=propuesta["recibido_en"],
             recibido_con_compras=propuesta["recibido_con_compras"],
             piezas_recibidas=propuesta["piezas_recibidas"],
+            pospuesto_por=pospuesto_por,
+            pospuesto_en=pospuesto_en,
         )
         return armar_guardado(lista, lista["renglones"])
 
@@ -1140,6 +1174,62 @@ class AlmacenamientoFalso:
             descartado_por=quien,
             descartado_en=dt.datetime.now(dt.UTC),
         )
+
+    def posponer(
+        self, negocio: str, renglon_id: int, quien: str
+    ) -> PedidoSugeridoGuardado | None:
+        """`_POSPONER`, en memoria y con las mismas condiciones (ADR 0025).
+
+        Las mismas que `descartar`: el negocio, el renglón y que sea `abierto`
+        en una lista `abierta` —esas dos las juzga
+        `transiciones.motivo_para_no_editar`, la misma función que decide la
+        bandera de la pantalla y el motivo del 409—.
+        """
+        self._revisar()
+        encontrado = self._renglon_por_id(renglon_id)
+        if encontrado is None:
+            return None
+        fila, lista = encontrado
+        if fila["negocio"] != negocio:
+            return None
+        if (
+            motivo_para_no_editar(
+                renglon_guardado_desde_columnas(fila),
+                armar_guardado(lista, lista["renglones"]),
+                "posponer",
+            )
+            is not None
+        ):
+            return None
+        return self.poner_estado_del_renglon(
+            renglon_id,
+            RENGLON_POSPUESTO,
+            pospuesto_por=quien,
+            pospuesto_en=dt.datetime.now(dt.UTC),
+        )
+
+    def devolver_pospuesto(
+        self, negocio: str, renglon_id: int
+    ) -> PedidoSugeridoGuardado | None:
+        """`_DEVOLVER_DE_POSPUESTO`: `pospuesto` → `abierto`, sin firma (ADR 0025)."""
+        self._revisar()
+        encontrado = self._renglon_por_id(renglon_id)
+        if encontrado is None:
+            return None
+        fila, lista = encontrado
+        if fila["negocio"] != negocio:
+            return None
+        if (
+            motivo_para_no_editar(
+                renglon_guardado_desde_columnas(fila),
+                armar_guardado(lista, lista["renglones"]),
+                "devolver_pospuesto",
+            )
+            is not None
+        ):
+            return None
+        # Las dos columnas se van a `None` juntas: lo exige ck_renglon_pospuesto.
+        return self.poner_estado_del_renglon(renglon_id, RENGLON_ABIERTO)
 
     def poner_la_cantidad(
         self,

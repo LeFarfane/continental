@@ -215,9 +215,10 @@ def test_los_estados_del_pedido_sugerido_son_los_del_glosario():
 
 
 def test_los_estados_del_renglon_son_los_del_glosario_con_su_acento():
-    """Los seis de `CONTEXT.md`, y **`en tránsito` lleva acento**.
+    """Los siete de `CONTEXT.md`, y **`en tránsito` lleva acento**.
 
-    Eran cinco hasta el ticket 25, que agregó `cancelado` al final (ADR 0013).
+    Eran cinco hasta el ticket 25, que agregó `cancelado` al final (ADR 0013),
+    y seis hasta el ADR 0025, que agregó `pospuesto` detrás de él.
 
     El glosario manda sobre el nombre de cualquier cosa. Guardar `en_transito`
     sería un segundo nombre para lo mismo, que es justo lo que el repo
@@ -232,6 +233,7 @@ def test_los_estados_del_renglon_son_los_del_glosario_con_su_acento():
         "recibido parcial",
         "descartado",
         "cancelado",
+        "pospuesto",
     ]
 
 

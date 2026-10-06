@@ -362,6 +362,14 @@ def conciliar(
         if r.estado in _YA_ATENDIDOS_POR_OTRA_VIA:
             ya_tratados.add(producto_id)
             continue
+        if r.esta_pospuesto:
+            # Un pospuesto no se iba a comprar HOY (ADR 0025): no es "sin
+            # comprar" —nadie falló en pedirlo— ni coincidencia de hoy, donde
+            # una compra suya se confirmaría como cumplida. Se busca en el
+            # renglón de mañana, donde ya viene sumado. Si de todos modos
+            # se compró hoy, cae en el bloque 3 como una compra suelta, sin
+            # marca: no es un descartado y no hay que decir que lo fue.
+            continue
         if r.esta_descartado:
             # Se resuelve en el bloque 3, con su marca: se propuso, una
             # persona dijo que no, y no se auto-confirma nada aquí.

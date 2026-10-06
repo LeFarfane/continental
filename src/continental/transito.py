@@ -96,7 +96,7 @@ if TYPE_CHECKING:  # pragma: no cover - solo para los tipos
     # una `MemoriaDeLoPedido`: importarlo aquí de verdad cerraría el ciclo. Lo
     # que este módulo usa de `LoYaPedido` son sus propiedades, que no hace
     # falta importar para llamar.
-    from continental.almacenamiento import LoYaPedido, Ventana
+    from continental.almacenamiento import LoYaPedido, RenglonGuardado, Ventana
 
 #: La hora del centro de México: **UTC-6 fijo**, sin horario de verano.
 #:
@@ -151,6 +151,12 @@ class MemoriaDeLoPedido:
     - `faltaron` — el producto llegó **de menos** (o se canceló trayendo algo
       que faltó antes): esas piezas se **suman** a lo vendido en la siguiente
       lista. Nunca junto con `en_camino`: lo que viene en camino le gana.
+    - `pospuestos` — una persona **pasó el renglón al día siguiente** (ADR
+      0025): sus piezas se suman igual, y el producto entra aunque no se haya
+      vuelto a vender. Tampoco junto con `en_camino`. Y si el mismo producto
+      traía algo de `faltaron` o de `desde`, **el pospuesto manda**: su
+      `cantidad_a_pedir` ya incluía esas piezas y esa ventana, y sumarlas otra
+      vez sería pedirlas dos veces.
 
     Vacía, es exactamente la lista del ticket 09: recorta la ventana y nada
     más. Así la construye quien de verdad no tiene nada pedido.
@@ -159,6 +165,7 @@ class MemoriaDeLoPedido:
     en_camino: Mapping[int, "LoYaPedido"] = field(default_factory=dict)
     desde: Mapping[int, dt.date] = field(default_factory=dict)
     faltaron: Mapping[int, int] = field(default_factory=dict)
+    pospuestos: Mapping[int, int] = field(default_factory=dict)
 
     def esta_en_camino(self, producto_id: int) -> bool:
         return producto_id in self.en_camino
@@ -206,7 +213,10 @@ class MemoriaDeLoPedido:
         return recortadas
 
 
-def memoria_de_lo_pedido(ya_pedidos: Iterable["LoYaPedido"]) -> MemoriaDeLoPedido:
+def memoria_de_lo_pedido(
+    ya_pedidos: Iterable["LoYaPedido"],
+    pospuestos: Iterable["RenglonGuardado"] = (),
+) -> MemoriaDeLoPedido:
     """Lo ya pedido → la memoria con la que se arma la lista.
 
     **Lo que viene en camino le gana a lo que ya llegó**: si un producto se
@@ -222,6 +232,15 @@ def memoria_de_lo_pedido(ya_pedidos: Iterable["LoYaPedido"]) -> MemoriaDeLoPedid
     Un renglón que no está ni en tránsito ni en un estado que lo cierre —un
     `abierto` o un `descartado` que alguien pasara por error— **no entra**: la
     memoria solo puede sacar de la lista lo que de verdad se le pidió a alguien.
+
+    **`pospuestos` son los renglones que la lista anterior pasó al día
+    siguiente** (ADR 0025; `lo_pospuesto` los lee). De cada uno se toma
+    `cantidad_a_pedir` —la ajustada si alguien la cambió, la propuesta si no—, y
+    esa cifra ya incluye lo que el renglón traía de un parcial o de otro
+    pospuesto, así que se pasa **entera**, sin sumar nada de `faltaron`. Lo que
+    **viene en camino le gana**, como a `faltaron`: si el producto ya está en
+    tránsito cuando se arma la lista, lo pospuesto no se suma. Un renglón que
+    no esté `pospuesto` se ignora, igual que arriba.
     """
     en_camino: dict[int, LoYaPedido] = {}
     llegados: dict[int, LoYaPedido] = {}
@@ -241,18 +260,37 @@ def memoria_de_lo_pedido(ya_pedidos: Iterable["LoYaPedido"]) -> MemoriaDeLoPedid
     # LO QUE FALTÓ (ticket 27) sale del MISMO renglón que dice desde cuándo:
     # un solo renglón por producto manda, así que las piezas y las fechas no
     # pueden venir de dos pedidos distintos y sumarse dos veces.
+    #
+    # LO POSPUESTO (ADR 0025) se decide primero: de qué productos se trata, y
+    # con cuántas piezas. Si hay dos pospuestos del mismo producto —no debería:
+    # `ux_renglon_producto` da un renglón por producto y lista— se queda el
+    # último, y no se suman.
+    de_ayer: dict[int, int] = {}
+    for renglon in pospuestos:
+        if not renglon.esta_pospuesto:
+            continue
+        producto_id = renglon.propuesto.producto_id
+        if producto_id in en_camino:
+            continue
+        piezas = renglon.cantidad_a_pedir
+        if piezas > 0:
+            de_ayer[producto_id] = piezas
+
     return MemoriaDeLoPedido(
         en_camino=en_camino,
         desde={
             producto_id: ya.retiene_desde
             for producto_id, ya in llegados.items()
-            if producto_id not in en_camino
+            if producto_id not in en_camino and producto_id not in de_ayer
         },
         faltaron={
             producto_id: ya.piezas_que_vuelven
             for producto_id, ya in llegados.items()
-            if producto_id not in en_camino and ya.piezas_que_vuelven > 0
+            if producto_id not in en_camino
+            and producto_id not in de_ayer
+            and ya.piezas_que_vuelven > 0
         },
+        pospuestos=de_ayer,
     )
 
 
@@ -494,6 +532,92 @@ def frase_de_lo_que_ya_no_falta(piezas: int) -> str:
     return (
         f"{cuales}: el resto llegó y se corrigió lo recibido. Si no las "
         "necesitas, corrige esta cantidad; pedirlas sería pedirlas dos veces."
+    )
+
+
+def frase_de_lo_que_paso_del_dia_anterior(
+    pospuestas: int, vendidas: float, propuesta: int
+) -> str | None:
+    """Lo que dice el renglón que trae lo que la lista anterior pasó a este día.
+
+    Es el par de `frase_de_lo_que_falto` (ADR 0025): sin ella, "pide 5" con 2
+    vendidas no se podría verificar mirando la pantalla. Dice la aritmética
+    entera cuando hubo ventas —*se vendieron 2 y pasaron 3 de ayer, se piden
+    5*— y dice que **no se vendió nada** cuando no: el producto entra a la
+    lista aunque no se haya vuelto a vender, y sin la frase un renglón con 0
+    vendidas parecería un error. `None` con cero piezas pospuestas.
+
+    "De ayer" se evita a propósito: "el día anterior" es la lista anterior, y
+    un sábado que pasa al lunes no es de ayer.
+    """
+    if not pospuestas:
+        return None
+    pasaron = (
+        "pasó 1 pieza" if pospuestas == 1 else f"pasaron {pospuestas} piezas"
+    )
+    if vendidas:
+        return (
+            f"Trae piezas que pasaron del día anterior: se vendieron "
+            f"{_piezas(vendidas)} y {pasaron}, se piden {propuesta}."
+        )
+    return (
+        f"Trae piezas que pasaron del día anterior: no se vendió nada desde "
+        f"entonces y {pasaron}, se piden {propuesta}."
+    )
+
+
+def frase_del_renglon_pospuesto(renglon: "RenglonGuardado") -> str | None:
+    """Lo que dice el renglón **de hoy** que se pasó al día siguiente (ADR 0025).
+
+    Dice cuántas piezas pasan —`cantidad_a_pedir`, la ajustada si alguien la
+    cambió— y quién lo mandó y cuándo, que es una firma (regla 3 de
+    `CLAUDE.md`) y permite preguntar "¿por qué esto a mañana?" a la persona
+    correcta. `None` si el renglón no está pospuesto.
+    """
+    if not renglon.esta_pospuesto:
+        return None
+    piezas = renglon.cantidad_a_pedir
+    cuantas = "1 pieza" if piezas == 1 else f"{piezas} piezas"
+    firma = _firma_de_la_cancelacion(renglon.pospuesto_por, renglon.pospuesto_en)
+    return (
+        f"Pasa al día siguiente ({cuantas}): se vuelve a proponer en la "
+        f"siguiente lista. Lo pasó {firma}."
+    )
+
+
+def titulo_de_los_pospuestos(cuantos: int) -> str | None:
+    """`1 renglón pasa al día siguiente` / `3 renglones pasan…`. Con cero, calla.
+
+    La concordancia la decide Python: "1 renglones pasan" es lo que sale de
+    pegar un número a una frase fija, y una pantalla que parece rota se deja de
+    creer.
+    """
+    if not cuantos:
+        return None
+    if cuantos == 1:
+        return "1 renglón pasa al día siguiente"
+    return f"{cuantos} renglones pasan al día siguiente"
+
+
+def frase_de_los_pospuestos(cuantos: int) -> str | None:
+    """Lo que se dice junto al total de la lista: por qué bajó. Con cero, calla.
+
+    Dice lo que **no** cuenta —el total y el reparto de hoy— además de adónde
+    va y dónde se ve, porque es para lo que existe el botón: bajar el total, y
+    el número de arriba bajó y la razón tiene que estar donde se lee.
+    """
+    if not cuantos:
+        return None
+    if cuantos == 1:
+        return (
+            f"{titulo_de_los_pospuestos(cuantos)}: no cuenta en el total de hoy y "
+            "vuelve a proponerse en la siguiente lista. Se ve abajo y se puede "
+            "devolver."
+        )
+    return (
+        f"{titulo_de_los_pospuestos(cuantos)}: no cuentan en el total de hoy y "
+        "vuelven a proponerse en la siguiente lista. Se ven abajo y se pueden "
+        "devolver."
     )
 
 

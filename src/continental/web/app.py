@@ -194,16 +194,20 @@ from continental.transito import (
     esta_atrasado,
     frase_de_la_ventana_propia,
     frase_de_lo_que_falto,
+    frase_de_lo_que_paso_del_dia_anterior,
     frase_de_lo_que_ya_no_falta,
+    frase_de_los_pospuestos,
     frase_de_ya_en_camino,
     frase_del_atraso,
     PROBABLEMENTE_LLEGO,
     frase_del_pedido_cancelado,
     frase_del_renglon_cancelado,
     frase_del_renglon_devuelto,
+    frase_del_renglon_pospuesto,
     frase_del_transito,
     frase_para_cancelar,
     memoria_de_lo_pedido,
+    titulo_de_los_pospuestos,
     vendido_desde_que_se_pidio,
 )
 from continental.vigilancia import (
@@ -646,7 +650,11 @@ def pedido_sugerido(
             lambda: _armar(
                 almacen,
                 ventana,
-                memoria_de_lo_pedido(almacenamiento.lo_ya_pedido(negocio, ultima)),
+                memoria_de_lo_pedido(
+                    almacenamiento.lo_ya_pedido(negocio, ultima),
+                    # Lo que la lista anterior pasó a este día (ADR 0025).
+                    almacenamiento.lo_pospuesto(negocio, ultima),
+                ),
             ).renglones,
         )
     except Exception as exc:  # noqa: BLE001 — los dos bordes caídos son un hueco, no un 500
@@ -1565,6 +1573,72 @@ def devolver_renglon(
             "para ver cómo quedó."
         ),
         accion="devolver_a_abierto",
+        almacenamiento=almacenamiento,
+    )
+
+
+@app.post("/api/renglon/{renglon_id}/posponer")
+def posponer_renglon(
+    renglon_id: int,
+    request: Request,
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+):
+    """Un clic: el renglón pasa al día siguiente y sale del total de hoy (ADR 0025).
+
+    **Sin cuerpo y sin confirmación**, por la misma razón que descartar (ADR
+    0002): lo que lo hace seguro es que se puede deshacer con
+    `/devolver-pospuesto` mientras la lista siga abierta.
+
+    **No es un descarte con otro nombre.** Los dos sacan el renglón de la lista
+    de trabajo, pero dicen cosas opuestas —"se pide mañana" contra "no se
+    pide"—, y por eso son estados distintos y se cuentan aparte. Lo que pasa a
+    la siguiente lista son **piezas**, no ventas: `cantidad_a_pedir` tal como
+    esté cuando esa lista se arme, sumada a lo que se venda del producto
+    (`transito.memoria_de_lo_pedido`).
+
+    Quién lo pasó se guarda en la fila —una firma, no un permiso (regla 3 de
+    `CLAUDE.md`)—. Un 409 y no un 500 cuando no hay nada que posponer: el
+    renglón no existe, es de otro negocio, ya no está `abierto` o su lista ya
+    no está abierta; el motivo real lo dice
+    `transiciones.motivo_para_no_editar`.
+    """
+    return _mover_el_renglon(
+        renglon_id,
+        request,
+        lambda negocio, firma: almacenamiento.posponer(negocio, renglon_id, firma),
+        verbo="pasar el renglón al día siguiente",
+        choque=(
+            "Ese renglón ya no estaba abierto. Vuelve a cargar la página para "
+            "ver cómo quedó."
+        ),
+        accion="posponer",
+        almacenamiento=almacenamiento,
+    )
+
+
+@app.post("/api/renglon/{renglon_id}/devolver-pospuesto")
+def devolver_renglon_pospuesto(
+    renglon_id: int,
+    request: Request,
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+):
+    """Deshacer pasar al día siguiente: vuelve a `abierto` y se borra la firma (ADR 0025).
+
+    La firma y la hora se van juntas (`ck_renglon_pospuesto`), y no queda
+    rastro del clic deshecho, igual que al devolver un descarte. Un 409 si el
+    renglón no estaba `pospuesto` o su lista ya no está abierta: después de
+    cerrada, lo pospuesto ya es lo que la siguiente lista va a traer.
+    """
+    return _mover_el_renglon(
+        renglon_id,
+        request,
+        lambda negocio, firma: almacenamiento.devolver_pospuesto(negocio, renglon_id),
+        verbo="devolver a la lista el renglón pospuesto",
+        choque=(
+            "Ese renglón ya no pasaba al día siguiente. Vuelve a cargar la "
+            "página para ver cómo quedó."
+        ),
+        accion="devolver_pospuesto",
         almacenamiento=almacenamiento,
     )
 
@@ -4737,8 +4811,8 @@ def _mover_el_renglon(
     )
     precios = () if por_renglon is None else por_renglon.get(renglon_id, ())
     log.info(
-        "%s acaba de %s %s (%s) de la lista %s.%s Van %d descartado(s) de %d "
-        "renglones.",
+        "%s acaba de %s %s (%s) de la lista %s.%s Van %d descartado(s) y %d "
+        "pospuesto(s) de %d renglones.",
         firma,
         verbo,
         renglon_id,
@@ -4746,6 +4820,7 @@ def _mover_el_renglon(
         guardado.pedido_sugerido_id,
         f" {nota}" if nota else "",
         guardado.descartados,
+        guardado.pospuestos,
         len(guardado.renglones),
     )
     return {
@@ -4776,6 +4851,12 @@ def _mover_el_renglon(
         # JavaScript va sumando se separe de la verdad, y ese número es el que
         # el ADR 0002 va a mirar después de un mes.
         "descartados": guardado.descartados,
+        # LOS QUE PASAN AL DÍA SIGUIENTE (ADR 0025), contados en el servidor por
+        # lo mismo que los descartados y APARTE de ellos: no son lo mismo, y el
+        # día que alguien cuente descartes los recortes por tope no deben sumar.
+        "pospuestos": guardado.pospuestos,
+        "frase_de_los_pospuestos": frase_de_los_pospuestos(guardado.pospuestos),
+        "titulo_de_los_pospuestos": titulo_de_los_pospuestos(guardado.pospuestos),
         "de_trabajo": len(guardado.de_trabajo),
         "tiene_renglones_sin_atender": guardado.tiene_renglones_sin_atender,
         # El conteo de huecos, recalculado. Va `null` cuando no se pudieron
@@ -5020,6 +5101,9 @@ def _como_json(
         # JavaScript. `descartados` es lo que el ticket pide que se vea y, de
         # paso, el numerador de la condición de revisión del ADR 0002.
         "descartados": guardado.descartados,
+        "pospuestos": guardado.pospuestos,
+        "frase_de_los_pospuestos": frase_de_los_pospuestos(guardado.pospuestos),
+        "titulo_de_los_pospuestos": titulo_de_los_pospuestos(guardado.pospuestos),
         "de_trabajo": len(guardado.de_trabajo),
         # CUÁNTOS YA SE PIDIERON (ticket 21). Se cuenta en Python, donde hay
         # pruebas, y sale del ESTADO del renglón y no de los pedidos: la
@@ -5482,6 +5566,33 @@ def _renglon_como_json(
         "se_puede_devolver_a_abierto": (
             motivo_para_no_editar(renglon, lista, "devolver_a_abierto") is None
         ),
+        # PASAR AL DÍA SIGUIENTE (ADR 0025), con la misma función que las
+        # banderas de arriba y por la misma razón: `_POSPONER` y
+        # `_DEVOLVER_DE_POSPUESTO` llevan en su `WHERE` lo que juzga
+        # `motivo_para_no_editar`, y el JavaScript solo lee la bandera.
+        "se_puede_posponer": (
+            motivo_para_no_editar(renglon, lista, "posponer") is None
+        ),
+        "se_puede_devolver_pospuesto": (
+            motivo_para_no_editar(renglon, lista, "devolver_pospuesto") is None
+        ),
+        "esta_pospuesto": renglon.esta_pospuesto,
+        "pospuesto_por": renglon.pospuesto_por,
+        "pospuesto_en": (
+            renglon.pospuesto_en.isoformat() if renglon.pospuesto_en else None
+        ),
+        # Lo que dice el renglón pospuesto de hoy —cuántas piezas pasan y quién
+        # lo mandó— y lo que dice el renglón de mañana que las trae: las dos
+        # frases se componen en `transito.py`, con pruebas. `piezas_pospuestas`
+        # ya viene de `asdict(propuesto)`.
+        "frase_de_lo_pospuesto": frase_del_renglon_pospuesto(renglon),
+        "frase_de_lo_que_paso_del_dia_anterior": (
+            frase_de_lo_que_paso_del_dia_anterior(
+                renglon.propuesto.piezas_pospuestas,
+                renglon.propuesto.piezas_vendidas,
+                renglon.propuesto.cantidad_propuesta,
+            )
+        ),
         "frase_de_lo_recibido": frase_de_lo_recibido(renglon),
         # CUÁNTAS LLEGARON, Y CORREGIRLO (ticket 27, ADR 0015). Hasta el
         # 2026-09-21 esta bandera era solo `renglon.esta_recibido`, sin mirar
@@ -5774,6 +5885,9 @@ def _sin_ventas(ventas: dict | None = None) -> dict:
         "tiene_renglones_sin_atender": False,
         "renglones": [],
         "descartados": 0,
+        "pospuestos": 0,
+        "frase_de_los_pospuestos": None,
+        "titulo_de_los_pospuestos": None,
         "de_trabajo": 0,
         "sin_catalogo": 0,
         "sin_clasificar": 0,

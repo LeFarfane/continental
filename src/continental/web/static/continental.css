@@ -772,7 +772,7 @@ td.proveedor, th.proveedor { width: 9rem; }
 
 /* DESCARTAR: una cruz que se pone roja al pasar. Angosta a propósito: es
    frecuente pero secundaria, y no compite con la cantidad. */
-td.acciones, th.acciones { width: 2rem; text-align: center; }
+td.acciones, th.acciones { width: 4.2rem; text-align: center; white-space: nowrap; }
 .quitar {
   width: 24px; height: 24px; display: inline-grid; place-items: center; padding: 0;
   border: 0; border-radius: 50%; background: transparent; cursor: pointer;
@@ -780,6 +780,9 @@ td.acciones, th.acciones { width: 2rem; text-align: center; }
 }
 .quitar:hover:not(:disabled) { background: var(--relleno-medio); color: var(--mal); }
 .quitar:disabled { cursor: default; opacity: .35; }
+/* PASAR AL DÍA SIGUIENTE (ADR 0025): la flecha al lado de la cruz. Dice lo
+   contrario que ella, y por eso se pone del color de acento y no del rojo. */
+.quitar.posponer:hover:not(:disabled) { background: var(--relleno-medio); color: var(--acento); }
 @media (pointer: coarse) {
   .quitar { width: 2.2rem; height: 2.2rem; }
 }

@@ -315,6 +315,11 @@ const celdaDeCifra = (valor, etiqueta, sufijo, urgente) => {
 // compara en tres lugares.
 const DESCARTADO = 'descartado';
 
+// El otro estado que saca un renglón de la lista de trabajo, pero que dice lo
+// contrario: una persona lo pasó al día siguiente (ADR 0025). Se compara en el
+// reparto de la lista y nada más.
+const POSPUESTO = 'pospuesto';
+
 // `estilo` es la variante del botón del diseño (2026-09-30): sin ella es el
 // gris chico de siempre; 'llena' es la acción principal de un lugar —una
 // sola—, 'tenida' la que se ofrece al lado, y 'plana' la que casi no pesa.
@@ -1122,6 +1127,14 @@ const marcasDe = (r) => {
     agrega('marca tenue falto', 'morado', 'Faltante', r.frase_de_lo_que_falto);
   }
 
+  // LO QUE PASÓ DEL DÍA ANTERIOR (ADR 0025): la lista anterior mandó este
+  // producto al día siguiente y sus piezas se suman aquí. La frase la compone
+  // Python: sin ella, "pide 5" con 2 vendidas no se podría verificar.
+  if (r.frase_de_lo_que_paso_del_dia_anterior) {
+    agrega('marca tenue pospuesto', 'morado', 'Del día anterior',
+      r.frase_de_lo_que_paso_del_dia_anterior);
+  }
+
   // EL BORDE QUE LA MEMORIA NO ALCANZA (ticket 24): ya viene en camino desde
   // una lista enviada DESPUÉS de armar ésta. Y su par del 27: lo que faltó ya
   // llegó en otra factura. Lo guardado no se recalcula; se avisa.
@@ -1246,7 +1259,21 @@ const renglon = (r, acciones) => {
   // El nombre del producto va en el nombre accesible: con veinte botones
   // iguales, "Descartar" a secas no dice cuál se está tocando.
   quitar.setAttribute('aria-label', 'Descartar ' + r.descripcion);
-  celdaAcciones.append(quitar);
+
+  // PASAR AL DÍA SIGUIENTE (ADR 0025): junto a la cruz, con el mismo criterio:
+  // un clic, sin diálogo, y se deshace desde el bloque de abajo. Dice lo
+  // contrario que la cruz: "se pide mañana", no "no se pide". La bandera viene
+  // resuelta de `transiciones.motivo_para_no_editar`, igual que `editable`.
+  const posponer = botonDeAccion('Pasar al día siguiente', (boton) => acciones.posponer(r, boton));
+  posponer.className = 'quitar posponer';
+  posponer.textContent = '→';
+  posponer.disabled = !r.se_puede_posponer || !acciones.posponer;
+  posponer.title = r.se_puede_posponer
+    ? 'Pasar al día siguiente: se pide mañana, no hoy. Se puede devolver a la lista.'
+    : 'Ya no se puede pasar al día siguiente: la lista ya no está abierta, o el renglón ya se atendió.';
+  // El nombre del producto va en el nombre accesible, por lo mismo que la cruz.
+  posponer.setAttribute('aria-label', 'Pasar al día siguiente ' + r.descripcion);
+  celdaAcciones.append(posponer, quitar);
 
   tr.append(producto, existencia, cobertura, cantidad,
             ...celdasDePrecio(r),
@@ -1387,6 +1414,34 @@ const renglonDescartado = (r, alDevolver) => {
     (r.descartado_en ? ' · ' + instanteEnPalabras(r.descartado_en) : '');
 
   li.append(nombre, devolver, firma);
+  return li;
+};
+
+// Un renglón que pasa al día siguiente, en su bloque de abajo. Misma forma que
+// el descartado —cuál era, qué se hace con él y quién lo mandó— pero con su
+// frase de Python, que dice cuántas piezas pasan y adónde van.
+const renglonPospuesto = (r, alDevolver) => {
+  const li = document.createElement('li');
+
+  const nombre = document.createElement('span');
+  nombre.textContent = r.descripcion;
+
+  const devolver = botonDeAccion('Devolver a la lista', (boton) => alDevolver(r, boton));
+  devolver.setAttribute('aria-label', 'Devolver ' + r.descripcion + ' a la lista');
+  // Deshacer también es modificar: con la lista cerrada ya no se ofrece, y la
+  // bandera viene resuelta de `transiciones.motivo_para_no_editar`.
+  devolver.disabled = !r.se_puede_devolver_pospuesto;
+  devolver.title = r.se_puede_devolver_pospuesto
+    ? 'Vuelve a la lista como estaba.'
+    : 'La lista ya se cerró: lo que pasó al día siguiente ya va en la siguiente lista.';
+
+  // Quién y cuándo ya vienen dentro de la frase de Python (es una firma, no un
+  // permiso: regla 3 de CLAUDE.md).
+  const frase = document.createElement('span');
+  frase.className = 'quien';
+  frase.textContent = r.frase_de_lo_pospuesto || '';
+
+  li.append(nombre, devolver, frase);
   return li;
 };
 
@@ -1745,8 +1800,8 @@ let FECHA_ACTUAL = null;
 // recuadros, y sin apagarlos se verían pegados de un día que ya no es éste.
 const ocultarLoDeOtroDia = () => {
   ['pedido-tabla', 'armado', 'cierre', 'pedido-avisos', 'vistas', 'completar',
-    'particion', 'descartados', 'pedido-corrida', 'pedido-sin-clasificar',
-    'recepcion', 'en-camino', 'conciliacion',
+    'particion', 'descartados', 'pospuestos', 'pedido-corrida',
+    'pedido-sin-clasificar', 'recepcion', 'en-camino', 'conciliacion',
     // Y las piezas del diseño del 2026-09-30: el estado, los pasos, la barra
     // de la lista, el detalle del renglón y el paso de captura.
     'pedido-estado', 'pasos', 'barra-lista', 'inspector', 'paso-repartir',
@@ -1996,6 +2051,11 @@ const pintarDetalle = (r, acciones) => {
   // Las dos del diseño: descartar —en rojo, es la que saca el renglón— y
   // volver a consultar el precio, teñida.
   const botones = [];
+  if (r.se_puede_posponer && acciones.posponer) {
+    const posponer = botonDeAccion('Pasar al día siguiente', (b) => acciones.posponer(r, b), 'tenida');
+    posponer.setAttribute('aria-label', 'Pasar al día siguiente ' + r.descripcion);
+    botones.push(posponer);
+  }
   if (r.se_puede_editar) {
     const quitar = botonDeAccion('Descartar', (b) => acciones.descartar(r, b), 'peligro');
     quitar.setAttribute('aria-label', 'Descartar ' + r.descripcion);
@@ -2474,7 +2534,7 @@ async function cargarPedido(fecha) {
     // día pegada debajo (armado, cierre, avisos y lo que viene en camino ya
     // se pintaron arriba con los datos de HOY, y esos sí se quedan).
     tabla.hidden = true;
-    ['vistas', 'completar', 'particion', 'descartados', 'pedido-corrida',
+    ['vistas', 'completar', 'particion', 'descartados', 'pospuestos', 'pedido-corrida',
       'pedido-sin-clasificar', 'pedido-sin-comparar', 'barra-lista', 'inspector',
       'pasos'].forEach(id => {
       document.getElementById(id).hidden = true;
@@ -2524,7 +2584,10 @@ async function cargarPedido(fecha) {
   // del glosario y el de la columna: la pantalla no decide qué es descartado,
   // solo dónde se pinta.
   const repintar = () => {
-    const trabajables = datos.renglones.filter(r => r.estado !== DESCARTADO);
+    // Ni los descartados ni los pospuestos son trabajo de hoy: los dos bajan a
+    // su bloque, y el total y el reparto de hoy no los cuentan (ADR 0025).
+    const trabajables = datos.renglones.filter(
+      r => r.estado !== DESCARTADO && r.estado !== POSPUESTO);
     // Lo que se puede hacer sale del ESTADO DE LA LISTA, no de cada renglón:
     // "la cantidad se puede cambiar mientras la lista esté abierta" es literal
     // (ticket 11). Se calcula en cada repintado y no una sola vez al cargar,
@@ -2532,6 +2595,7 @@ async function cargarPedido(fecha) {
     const acciones = {
       editable: datos.estado === 'abierto',
       descartar: descartar,
+      posponer: posponer,
       ajustar: ajustar,
       elegirProveedor: elegirProveedor,
       consultarPrecio: consultarPrecio,
@@ -2558,9 +2622,11 @@ async function cargarPedido(fecha) {
         trabajables.length,
         vistas.find(v => v.clave !== vistaActiva.clave) || vistaActiva,
         datos.descartados,
-        acciones);
+        acciones,
+        datos.frase_de_los_pospuestos);
     } else {
-      pintarRenglones(visibles, trabajables.length, null, datos.descartados, acciones);
+      pintarRenglones(visibles, trabajables.length, null, datos.descartados, acciones,
+        datos.frase_de_los_pospuestos);
     }
     document.getElementById('barra-lista').hidden = false;
     aplicarElFiltro();
@@ -2574,6 +2640,13 @@ async function cargarPedido(fecha) {
       datos.renglones.filter(r => r.estado === DESCARTADO),
       datos.descartados,
       devolver);
+    // Los que pasan al día siguiente, aparte y con su botón para devolverlos.
+    // Tampoco se filtran por vista, por lo mismo que los descartados.
+    pintarPospuestos(
+      datos.renglones.filter(r => r.estado === POSPUESTO),
+      datos.pospuestos,
+      datos.titulo_de_los_pospuestos,
+      devolverPospuesto);
     // El conteo de huecos, arriba y en cada repintado: descartar, devolver y
     // consultar un precio lo cambian, y un número que envejece en la pantalla
     // se lee como verdad igual que uno al día.
@@ -2612,6 +2685,7 @@ async function cargarPedido(fecha) {
     pintarDetalle(datos.renglones.find(x => x.renglon_id === r.renglon_id), {
       editable: datos.estado === 'abierto',
       descartar: descartar,
+      posponer: posponer,
       ajustar: ajustar,
       elegirProveedor: elegirProveedor,
       consultarPrecio: consultarPrecio,
@@ -2648,6 +2722,11 @@ async function cargarPedido(fecha) {
       datos.renglones[i] = respuesta.renglon;
     }
     datos.descartados = respuesta.descartados;
+    // Los pospuestos también salen del servidor (ADR 0025), con sus dos frases
+    // ya hechas: este archivo no cuenta ni conjuga.
+    datos.pospuestos = respuesta.pospuestos;
+    datos.frase_de_los_pospuestos = respuesta.frase_de_los_pospuestos;
+    datos.titulo_de_los_pospuestos = respuesta.titulo_de_los_pospuestos;
     datos.tiene_renglones_sin_atender = respuesta.tiene_renglones_sin_atender;
     // El conteo viene recalculado porque descartar y devolver lo mueven: el
     // que se cuenta es el de los renglones DE TRABAJO. Va `null` cuando el
@@ -2694,6 +2773,16 @@ async function cargarPedido(fecha) {
 
   function devolver(r, boton) {
     moverRenglon(r.renglon_id, '/devolver', boton, aplicar);
+  }
+
+  // Pasar al día siguiente y devolverlo (ADR 0025): la misma petición pelada
+  // que descartar y devolver, con otro final de ruta.
+  function posponer(r, boton) {
+    moverRenglon(r.renglon_id, '/posponer', boton, aplicar);
+  }
+
+  function devolverPospuesto(r, boton) {
+    moverRenglon(r.renglon_id, '/devolver-pospuesto', boton, aplicar);
   }
 
   // Corregir la cantidad. Lo que se teclea se revisa aquí ANTES de mandarlo, y
@@ -3021,6 +3110,12 @@ async function cargarPedido(fecha) {
   // es lo mismo mientras haya una sola pestaña abierta.
   if (typeof datos.descartados !== 'number') {
     datos.descartados = datos.renglones.filter(r => r.estado === DESCARTADO).length;
+  }
+  // Y los pospuestos, igual: sin el número del servidor se cuentan aquí. El
+  // título con su concordancia solo lo trae Python, y sin él el bloque dice
+  // solo lo que no cambia.
+  if (typeof datos.pospuestos !== 'number') {
+    datos.pospuestos = datos.renglones.filter(r => r.estado === POSPUESTO).length;
   }
 
   // Ya hay tabla: cerrar la lista tiene que volver a pintarla con el estado
@@ -3684,7 +3779,7 @@ const confirmarLoteDeConciliacion = async (pedidoSugeridoId, marcadas, boton) =>
   exito(respuesta.frase);
 };
 
-const pintarRenglones = (visibles, total, otra, descartados, acciones) => {
+const pintarRenglones = (visibles, total, otra, descartados, acciones, fraseDePospuestos) => {
   pintarEncabezado();
   const escondidos = total - visibles.length;
   // LOS QUE YA SE PIDIERON NO SON "POR ATENDER" (ticket 21). Siguen en la
@@ -3721,6 +3816,9 @@ const pintarRenglones = (visibles, total, otra, descartados, acciones) => {
           'renglón descartado no aparece aquí y se puede devolver desde abajo. ',
           'renglones descartados no aparecen aquí y se pueden devolver desde abajo. ')
       : '') +
+    // Lo que pasa al día siguiente también bajó el número, y por lo mismo se
+    // dice aquí. La frase llega hecha de Python, con su concordancia.
+    (fraseDePospuestos ? fraseDePospuestos + ' ' : '') +
     // Y los que ya se pidieron, por lo mismo que los descartados: el número de
     // arriba bajó y la razón tiene que estar donde se lee el número, o
     // parecería que se vendió menos. Éstos SÍ siguen en la tabla, y eso se
@@ -4665,6 +4763,19 @@ const pintarDescartados = (renglones, cuantos, alDevolver) => {
     ' de esta lista. Queda guardado quién y cuándo.';
   document.getElementById('descartados-lista').replaceChildren(
     ...renglones.map(r => renglonDescartado(r, alDevolver)));
+  caja.hidden = !cuantos;
+};
+
+// Los que pasan al día siguiente (ADR 0025), aparte y con el mismo criterio que
+// los descartados: el bloque se esconde entero cuando no hay ninguno, y el
+// número sale del SERVIDOR. El título, con su concordancia, llega hecho de
+// Python; aquí solo se le pega lo que no cambia.
+const pintarPospuestos = (renglones, cuantos, titulo, alDevolver) => {
+  const caja = document.getElementById('pospuestos');
+  document.getElementById('pospuestos-resumen').textContent =
+    (titulo || 'Pasan al día siguiente') + ' de esta lista. Queda guardado quién y cuándo.';
+  document.getElementById('pospuestos-lista').replaceChildren(
+    ...renglones.map(r => renglonPospuesto(r, alDevolver)));
   caja.hidden = !cuantos;
 };
 

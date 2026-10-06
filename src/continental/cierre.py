@@ -97,7 +97,10 @@ def se_perderia(renglon: RenglonGuardado, ventana: Ventana) -> bool:
     """Si cerrar daría por atendido algo de este renglón que no es de esta lista.
 
     Solo lo `abierto` y lo `descartado`: lo que está en tránsito o llegó ya se
-    pidió, y lo cancelado vuelve por su cuenta (ADR 0013).
+    pidió, y lo cancelado vuelve por su cuenta (ADR 0013). **Y un `pospuesto`
+    tampoco** (ADR 0025): ya tiene adónde ir —la siguiente lista que se arme lo
+    trae, con sus piezas—, así que cerrar no lo pierde. Señalarlo mandaría a
+    "arreglar" justo lo que una persona decidió a propósito.
     """
     if renglon.estado not in (RENGLON_ABIERTO, RENGLON_DESCARTADO):
         return False
@@ -145,7 +148,12 @@ def frase_de_lo_que_se_perderia(renglon: RenglonGuardado, ventana: Ventana) -> s
 def _frase_de_lo_normal(lista: PedidoSugeridoGuardado, sin_pedir: int, en_borrador: int) -> str:
     """Lo que dice la confirmación siempre: cuánto queda sin pedir."""
     if sin_pedir == 0:
-        cabeza = "Todo lo de esta lista ya se pidió o se descartó."
+        cabeza = (
+            "Todo lo de esta lista ya se pidió, se descartó o pasa al día "
+            "siguiente."
+            if lista.pospuestos
+            else "Todo lo de esta lista ya se pidió o se descartó."
+        )
     elif sin_pedir == 1:
         cabeza = (
             "Queda 1 renglón sin pedir: al cerrarla se da por atendido y la "
@@ -165,6 +173,15 @@ def _frase_de_lo_normal(lista: PedidoSugeridoGuardado, sin_pedir: int, en_borrad
         cabeza += (
             f" {en_borrador} de ellos están en un pedido en borrador que no se "
             "ha marcado como enviado."
+        )
+    if lista.pospuestos:
+        # Lo que pasa a mañana NO se pierde al cerrar (ADR 0025): se dice, para
+        # que quien cierra sepa que esos renglones sí vuelven.
+        cabeza += (
+            " 1 renglón pasa al día siguiente y la siguiente lista lo trae."
+            if lista.pospuestos == 1
+            else f" {lista.pospuestos} renglones pasan al día siguiente y la "
+            "siguiente lista los trae."
         )
     siguiente = lista.ventana.hasta + dt.timedelta(days=1)
     return (

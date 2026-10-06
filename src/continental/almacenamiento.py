@@ -149,14 +149,25 @@ RENGLON_RECIBIDO_PARCIAL = "recibido parcial"
 #: ticket 24 lo lee de aquí (`LoYaPedido.retiene_desde`).
 RENGLON_CANCELADO = "cancelado"
 
-#: Los seis del glosario, con el acento de `en tránsito`. Desde el ticket 27
-#: se escriben los seis: `abierto` al nacer, `descartado` desde el 10, `en
-#: tránsito` desde el 21, `cancelado` desde el 25, `recibido` desde el 26 y
-#: `recibido parcial` desde el 27.
+#: **Una persona lo mandó a la siguiente lista** (ADR 0025, migración 0019): el
+#: producto sí se necesita, pero mañana —lo típico, un tope de dinero que el
+#: dueño le puso al pedido de hoy—. Lleva firma —`pospuesto_por`,
+#: `pospuesto_en`— y sale de la lista de trabajo igual que un descartado, pero
+#: dice lo contrario: "se pide mañana" y no "no se pide". Se deshace mientras
+#: la lista siga abierta (`devolver_pospuesto`), y sus piezas
+#: (`cantidad_a_pedir`) se suman en la siguiente lista que se arme, igual que
+#: lo que faltó de un parcial (`MemoriaDeLoPedido.pospuestos`).
+RENGLON_POSPUESTO = "pospuesto"
+
+#: Los siete del glosario, con el acento de `en tránsito`. Desde el ADR 0025
+#: se escriben los siete: `abierto` al nacer, `descartado` desde el 10, `en
+#: tránsito` desde el 21, `cancelado` desde el 25, `recibido` desde el 26,
+#: `recibido parcial` desde el 27 y `pospuesto` desde el ADR 0025.
 #:
 #: `cancelado` va AL FINAL y no junto a los de recepción, por la misma razón
 #: que las columnas nuevas van al final de la tabla: el orden de esta tupla es
-#: el del CHECK, y `test_sql_del_pedido.py` los compara como tuplas.
+#: el del CHECK, y `test_sql_del_pedido.py` los compara como tuplas. Y
+#: `pospuesto` (ADR 0025) va detrás de `cancelado`, por lo mismo.
 ESTADOS_DEL_RENGLON: tuple[str, ...] = (
     "abierto",
     RENGLON_EN_TRANSITO,
@@ -164,6 +175,7 @@ ESTADOS_DEL_RENGLON: tuple[str, ...] = (
     RENGLON_RECIBIDO_PARCIAL,
     "descartado",
     RENGLON_CANCELADO,
+    RENGLON_POSPUESTO,
 )
 
 #: **El enganche que el ticket 24 les deja a los tickets 26 y 27** (ADR 0012).
@@ -788,6 +800,24 @@ class RenglonGuardado:
     #: llama ya sabe de qué lista se trata (`PedidoSugeridoGuardado.
     #: pedido_sugerido_id`). `None` ahí, nunca un dato inventado.
     pedido_sugerido_id: int | None = None
+    #: **LA FIRMA DE PASAR AL DÍA SIGUIENTE** (ADR 0025, migración 0019): quién
+    #: lo mandó a la siguiente lista y cuándo. `None` las dos en todo renglón
+    #: que no esté `pospuesto` (`ck_renglon_pospuesto`), igual que
+    #: `descartado_por` / `descartado_en`. Firma y no permiso (regla 3 de
+    #: `CLAUDE.md`).
+    pospuesto_por: str | None = None
+    pospuesto_en: dt.datetime | None = None
+
+    @property
+    def esta_pospuesto(self) -> bool:
+        """Si una persona lo mandó a la siguiente lista (ADR 0025).
+
+        Vive aquí por la misma razón que `esta_descartado`: es la regla que
+        saca un renglón del total, del reparto y de lo que el cierre señala, y
+        una regla escrita dos veces se cambia una sola. **No es un descartado**:
+        dice lo contrario —"se pide mañana"—, y por eso no comparten estado.
+        """
+        return self.estado == RENGLON_POSPUESTO
 
     @property
     def esta_recibido_parcial(self) -> bool:
@@ -1366,6 +1396,17 @@ class PedidoSugeridoGuardado:
         return sum(1 for r in self.renglones if r.esta_descartado)
 
     @property
+    def pospuestos(self) -> int:
+        """Cuántos renglones de **esta lista** pasan al día siguiente (ADR 0025).
+
+        Contado sobre lo guardado y no por un reloj, por la misma razón que
+        `descartados`, y **aparte** de él: el día que alguien cuente descartes
+        para la condición de revisión del ADR 0002, los recortes por tope no
+        pueden sumar.
+        """
+        return sum(1 for r in self.renglones if r.esta_pospuesto)
+
+    @property
     def de_trabajo(self) -> tuple[RenglonGuardado, ...]:
         """Los renglones que siguen en la lista de trabajo.
 
@@ -1376,7 +1417,9 @@ class PedidoSugeridoGuardado:
         razón que las vistas de `vistas.py`: la regla que decide qué se ve no
         puede vivir en el único archivo que ninguna prueba mira.
         """
-        return tuple(r for r in self.renglones if not r.esta_descartado)
+        return tuple(
+            r for r in self.renglones if not (r.esta_descartado or r.esta_pospuesto)
+        )
 
     @property
     def en_transito(self) -> int:
@@ -1557,6 +1600,14 @@ def columnas_del_renglon(
         # dato del CÁLCULO —lo decide la memoria al armar— y viene en el
         # renglón propuesto.
         "piezas_que_faltaron": renglon.piezas_que_faltaron,
+        # Y SIN PASAR AL DÍA SIGUIENTE (ADR 0025, migración 0019): nace
+        # esperándose. Las dos firmas explícitas en `None` por lo mismo que las
+        # de arriba —`ck_renglon_pospuesto` las relaciona con el estado— y
+        # `piezas_pospuestas` sí viene del renglón propuesto: es un dato del
+        # CÁLCULO, lo decide la memoria al armar, igual que `piezas_que_faltaron`.
+        "pospuesto_por": None,
+        "pospuesto_en": None,
+        "piezas_pospuestas": renglon.piezas_pospuestas,
         # EL ANAQUEL CONGELADO (migración 0017), junto a la clasificación que
         # sale de él. `""` se guarda como `""` y no como NULL: NULL es "no se
         # sabe" —una fila de antes de la 0017— y no hay que confundirlos.
@@ -1598,6 +1649,9 @@ def renglon_desde_columnas(fila) -> Renglon:
         # La del ticket 27, con `.get` por lo mismo: sin la 0011 es "no trae
         # nada que faltó".
         piezas_que_faltaron=int(fila.get("piezas_que_faltaron") or 0),
+        # La de la 0019 (ADR 0025), con `.get` por lo mismo: sin la columna es
+        # "no trae nada que haya pasado del día anterior".
+        piezas_pospuestas=int(fila.get("piezas_pospuestas") or 0),
         # El de la 0017, con `.get` por lo mismo: sin la columna —o en una fila
         # vieja— es `None`, "no se sabe", y no una cadena vacía inventada.
         anaquel=fila.get("anaquel"),
@@ -1879,6 +1933,32 @@ def revisar_el_renglon(columnas: dict) -> None:
             "ck_renglon_piezas_que_faltaron: lo que faltó de un pedido anterior "
             "se SUMA a lo vendido para dar la propuesta, así que cabe en ella y "
             "nunca es negativo."
+        )
+    pospuestas = columnas.get("piezas_pospuestas", 0)
+    if pospuestas is None or pospuestas < 0 or pospuestas > columnas["cantidad_propuesta"]:
+        raise ValueError(
+            f"piezas_pospuestas de {pospuestas} con una propuesta de "
+            f"{columnas['cantidad_propuesta']}. Lo rechaza "
+            "ck_renglon_piezas_pospuestas: lo que pasó del día anterior se "
+            "SUMA a lo vendido para dar la propuesta, así que cabe en ella y "
+            "nunca es negativo."
+        )
+    # Pospuesto si y solo si hay firma Y hora (`ck_renglon_pospuesto`), el mismo
+    # par que el descarte y el ajuste.
+    if columnas.get("pospuesto_por") == "":
+        raise ValueError(
+            "Firma vacía. La columna tiene CHECK (pospuesto_por <> ''): o hay "
+            "correo o es NULL, igual que en el descarte."
+        )
+    if (columnas["estado"] == RENGLON_POSPUESTO) != (
+        columnas.get("pospuesto_por") is not None
+        and columnas.get("pospuesto_en") is not None
+    ):
+        raise ValueError(
+            "Pospuesto sin decir quién ni cuándo, o firma de pospuesto en un "
+            "renglón que no está pospuesto. Lo rechaza ck_renglon_pospuesto: "
+            "sin la firma, \"¿por qué pasó esto a mañana?\" no tendría a quién "
+            "preguntársele."
         )
 
 
@@ -2683,6 +2763,20 @@ class AlmacenamientoDelPedido(Protocol):
         """
         ...
 
+    def lo_pospuesto(
+        self, negocio: str, antes_de: dt.date
+    ) -> tuple[RenglonGuardado, ...]:
+        """Lo que la lista **inmediatamente anterior** mandó al día siguiente (ADR 0025).
+
+        **Solo lectura.** Los renglones `pospuesto` de la lista con la fecha
+        más reciente anterior a `antes_de`, y de ninguna otra: pasan **una
+        vez**. Es el cuarto dato con el que se abre el día, junto al corte, al
+        piso y a lo ya pedido, y como ellos sale de `pedidos` y nunca del
+        reloj. Con él la memoria suma `cantidad_a_pedir` de cada uno a lo que
+        se venda de su producto (`transito.memoria_de_lo_pedido`).
+        """
+        ...
+
     def cerrar(
         self, negocio: str, pedido_sugerido_id: int, quien: str | None = None
     ) -> PedidoSugeridoGuardado | None:
@@ -2841,6 +2935,34 @@ class AlmacenamientoDelPedido(Protocol):
         deshecho**. Un historial de cada clic sería otra tabla, y el dato que el
         ADR necesita es cuántos renglones quedaron descartados, no cuántas veces
         alguien dudó.
+        """
+        ...
+
+    def posponer(
+        self, negocio: str, renglon_id: int, quien: str
+    ) -> PedidoSugeridoGuardado | None:
+        """Pasa un renglón **abierto** al día siguiente: `pospuesto`, firmado (ADR 0025).
+
+        La misma forma que `descartar` y por las mismas razones: `None` es "no
+        había ningún renglón abierto con ese id, en una lista abierta, en este
+        negocio", y las dos condiciones viven en el `WHERE` y no en un `if` de
+        Python. Devuelve la lista entera, para que el conteo de pospuestos salga
+        de lo guardado y no de un número que el navegador vaya sumando.
+
+        **No cambia ninguna cantidad**: lo que pasa a la siguiente lista es lo
+        que `cantidad_a_pedir` valga cuando esa lista se arme
+        (`lo_pospuesto`). `quien` es una firma, no un permiso (regla 3).
+        """
+        ...
+
+    def devolver_pospuesto(
+        self, negocio: str, renglon_id: int
+    ) -> PedidoSugeridoGuardado | None:
+        """Deshace pasar al día siguiente: `pospuesto` → `abierto`, sin firma ni hora.
+
+        Lo que hace segura la operación de un clic (ADR 0025). Las dos columnas
+        de la firma se limpian juntas. `None` si el renglón no estaba
+        `pospuesto` o su lista ya no está abierta.
         """
         ...
 
@@ -3494,7 +3616,8 @@ _LEER_RENGLONES = text(
            cancelado_por, cancelado_en,
            recibido_por, recibido_en, recibido_con_compras,
            compras_rechazadas, recepcion_rechazada_por, recepcion_rechazada_en,
-           piezas_recibidas, piezas_que_faltaron, anaquel
+           piezas_recibidas, piezas_que_faltaron, anaquel,
+           pospuesto_por, pospuesto_en, piezas_pospuestas
     from pedidos.renglon
     where negocio = :negocio and pedido_sugerido_id = :pedido_sugerido_id
     order by renglon_id
@@ -3517,7 +3640,8 @@ _LEER_RENGLON_POR_ID = text(
            cancelado_por, cancelado_en,
            recibido_por, recibido_en, recibido_con_compras,
            compras_rechazadas, recepcion_rechazada_por, recepcion_rechazada_en,
-           piezas_recibidas, piezas_que_faltaron, anaquel
+           piezas_recibidas, piezas_que_faltaron, anaquel,
+           pospuesto_por, pospuesto_en, piezas_pospuestas
     from pedidos.renglon
     where negocio = :negocio and renglon_id = :renglon_id
     """
@@ -3791,12 +3915,12 @@ _INSERTAR_RENGLONES = text(
         (negocio, pedido_sugerido_id, producto_id, clave, descripcion,
          piezas_vendidas, cantidad_propuesta, esta_en_el_catalogo, existencia,
          dias_de_cobertura, clasificacion, estado, ventas_desde,
-         piezas_que_faltaron, anaquel)
+         piezas_que_faltaron, anaquel, piezas_pospuestas)
     values
         (:negocio, :pedido_sugerido_id, :producto_id, :clave, :descripcion,
          :piezas_vendidas, :cantidad_propuesta, :esta_en_el_catalogo,
          :existencia, :dias_de_cobertura, :clasificacion, :estado,
-         :ventas_desde, :piezas_que_faltaron, :anaquel)
+         :ventas_desde, :piezas_que_faltaron, :anaquel, :piezas_pospuestas)
     """
 )
 
@@ -3877,6 +4001,103 @@ _DEVOLVER_A_ABIERTO = text(
        and p.negocio = r.negocio
        and p.estado = 'abierto'
     returning r.renglon_id, r.pedido_sugerido_id
+    """
+)
+
+# PASAR UN RENGLÓN AL DÍA SIGUIENTE (ADR 0025, migración 0019). Es un UPDATE y
+# nunca un borrado, como `_DESCARTAR`, y con **las mismas dos condiciones en el
+# `WHERE`**: el renglón `abierto` y su lista `abierta`. Un renglón ya pedido, en
+# tránsito o recibido no se pospone, y una lista cerrada ya dijo "se pidió lo
+# que se iba a pedir": mandar algo a mañana desde ahí no cambiaría nada de lo
+# que se pide hoy y sí inventaría una promesa.
+#
+# Las dos columnas de la firma se escriben juntas porque `ck_renglon_pospuesto`
+# las exige juntas con el estado. `now()` y no una hora de Python, por lo mismo
+# que el descarte: la pone el servidor que guarda la fila.
+#
+# **No toca `cantidad_final` ni `cantidad_propuesta`**: lo que pasa a mañana es
+# `cantidad_a_pedir` tal como esté en el momento de la siguiente lista, y eso se
+# lee entonces (`_LO_POSPUESTO`), no se copia aquí. Devolverlo deja el renglón
+# exactamente como estaba.
+_POSPONER = text(
+    """
+    update pedidos.renglon as r
+       set estado = 'pospuesto',
+           pospuesto_por = :quien,
+           pospuesto_en = now()
+      from pedidos.pedido_sugerido as p
+     where r.negocio = :negocio
+       and r.renglon_id = :renglon_id
+       and r.estado = 'abierto'
+       and p.pedido_sugerido_id = r.pedido_sugerido_id
+       and p.negocio = r.negocio
+       and p.estado = 'abierto'
+    returning r.renglon_id, r.pedido_sugerido_id
+    """
+)
+
+# Deshacer pasar al día siguiente: `pospuesto` → `abierto`, sin firma ni hora.
+# La otra mitad de lo que hace segura la operación de un clic (ADR 0025). Las
+# dos columnas vuelven a NULL **juntas** —`ck_renglon_pospuesto` rechaza la
+# mitad— y la lista tiene que seguir abierta, igual que `_DEVOLVER_A_ABIERTO`:
+# deshacer también es modificar, y un renglón no puede quedar pospuesto dentro
+# de una lista cerrada sin manera de volver. Cuesta lo mismo que cuesta
+# deshacer un descarte: no queda rastro del clic deshecho.
+_DEVOLVER_DE_POSPUESTO = text(
+    """
+    update pedidos.renglon as r
+       set estado = 'abierto',
+           pospuesto_por = null,
+           pospuesto_en = null
+      from pedidos.pedido_sugerido as p
+     where r.negocio = :negocio
+       and r.renglon_id = :renglon_id
+       and r.estado = 'pospuesto'
+       and p.pedido_sugerido_id = r.pedido_sugerido_id
+       and p.negocio = r.negocio
+       and p.estado = 'abierto'
+    returning r.renglon_id, r.pedido_sugerido_id
+    """
+)
+
+# LO QUE LA LISTA ANTERIOR MANDÓ A MAÑANA (ADR 0025): los renglones `pospuesto`
+# de **la lista inmediatamente anterior** a `:antes_de`, y de ninguna otra.
+#
+# "El día siguiente" es la siguiente lista que se arme, no el siguiente día del
+# calendario —un sábado pasa al lunes, igual que las ventas (ADR 0020, regla
+# 4)—, y por eso la lista anterior se busca por `max(fecha_del_pedido)` y no
+# por `:antes_de - 1`. **Pasa una vez**: un pospuesto de hace dos listas no
+# vuelve; o se volvió a pasar —y entonces la lista intermedia lo trae sumado en
+# su propio renglón— o se quedó sin pedir y corre la regla del ADR 0020.
+#
+# Ninguna fecha sale del reloj: `:antes_de` es la fecha de la lista que se
+# arma, que sale de `max(fecha)` del almacén.
+_LO_POSPUESTO = text(
+    """
+    select r.renglon_id, r.pedido_sugerido_id, r.producto_id, r.clave,
+           r.descripcion, r.piezas_vendidas, r.cantidad_propuesta,
+           r.esta_en_el_catalogo, r.existencia, r.dias_de_cobertura,
+           r.clasificacion, r.estado, r.descartado_por, r.descartado_en,
+           r.cantidad_final, r.ajustada_por, r.ajustada_en,
+           r.pedido_id, r.proveedor_elegido, r.elegido_por, r.elegido_en,
+           r.capturado_por, r.capturado_en, r.ventas_desde,
+           r.cancelado_por, r.cancelado_en,
+           r.recibido_por, r.recibido_en, r.recibido_con_compras,
+           r.compras_rechazadas, r.recepcion_rechazada_por,
+           r.recepcion_rechazada_en, r.piezas_recibidas, r.piezas_que_faltaron,
+           r.anaquel, r.pospuesto_por, r.pospuesto_en, r.piezas_pospuestas
+    from pedidos.renglon as r
+    join pedidos.pedido_sugerido as s
+      on s.pedido_sugerido_id = r.pedido_sugerido_id
+     and s.negocio = r.negocio
+    where r.negocio = :negocio
+      and r.estado = 'pospuesto'
+      and s.fecha_del_pedido = (
+          select max(s2.fecha_del_pedido)
+          from pedidos.pedido_sugerido as s2
+          where s2.negocio = :negocio
+            and s2.fecha_del_pedido < :antes_de)
+    order by r.renglon_id
     """
 )
 
@@ -5537,6 +5758,35 @@ class AlmacenamientoPostgres:
             _DEVOLVER_A_ABIERTO, {"negocio": negocio, "renglon_id": renglon_id}
         )
 
+    def posponer(
+        self, negocio: str, renglon_id: int, quien: str
+    ) -> PedidoSugeridoGuardado | None:
+        return self._mover_el_renglon(
+            _POSPONER,
+            {"negocio": negocio, "renglon_id": renglon_id, "quien": quien},
+        )
+
+    def devolver_pospuesto(
+        self, negocio: str, renglon_id: int
+    ) -> PedidoSugeridoGuardado | None:
+        return self._mover_el_renglon(
+            _DEVOLVER_DE_POSPUESTO, {"negocio": negocio, "renglon_id": renglon_id}
+        )
+
+    def lo_pospuesto(
+        self, negocio: str, antes_de: dt.date
+    ) -> tuple[RenglonGuardado, ...]:
+        # `connect` y no `begin`: solo lee.
+        with self._motor().connect() as conexion:
+            filas = (
+                conexion.execute(
+                    _LO_POSPUESTO, {"negocio": negocio, "antes_de": antes_de}
+                )
+                .mappings()
+                .all()
+            )
+        return tuple(renglon_guardado_desde_columnas(f) for f in filas)
+
     def ajustar_la_cantidad(
         self, negocio: str, renglon_id: int, cantidad: int, quien: str
     ) -> PedidoSugeridoGuardado | None:
@@ -6216,6 +6466,10 @@ def renglon_guardado_desde_columnas(fila) -> RenglonGuardado:
         propuesto=renglon_desde_columnas(fila),
         descartado_por=fila["descartado_por"],
         descartado_en=fila["descartado_en"],
+        # La firma de pasar al día siguiente (0019, ADR 0025), con `.get`: sin
+        # la migración es "nadie lo pospuso", no un KeyError.
+        pospuesto_por=fila.get("pospuesto_por"),
+        pospuesto_en=fila.get("pospuesto_en"),
         # `int(...)` en el borde, igual que el resto: Postgres devuelve
         # `integer` como `int`, pero el día que la columna cambie de tipo esto
         # no se entera a medias.

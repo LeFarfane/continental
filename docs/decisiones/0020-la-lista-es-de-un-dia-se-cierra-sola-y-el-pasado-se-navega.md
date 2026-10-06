@@ -109,3 +109,12 @@ decisión, con su ADR.
 - **Condición de revisión:** si algún día la encargada empieza a pedir desde la
   lista, la 2 vuelve a la mesa — arrastrar lo no pedido tendría sentido otra
   vez, porque entonces sí habría quien descarte.
+
+> **Enmienda del 2026-10-05 (ADR 0025).** Esa condición se cumplió a medias, y
+> de un modo más preciso que "arrastrar todo": con un tope de dinero en el
+> pedido del día, hay renglones que **sí** se necesitan, pero mañana. Lo no
+> pedido **sigue sin arrastrarse solo** —la regla de este ADR no cambia—, pero
+> una persona puede mandar un renglón, a propósito y uno por uno, a la lista
+> siguiente: **pasar al día siguiente**, estado `pospuesto`. Sus piezas se
+> suman en la siguiente lista que se arme. Ver
+> `docs/decisiones/0025-pasar-un-renglon-al-dia-siguiente.md`.
