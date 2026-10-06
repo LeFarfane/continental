@@ -404,7 +404,10 @@ def test_la_pantalla_pinta_la_existencia_del_renglon_y_no_la_vuelve_a_buscar(cli
     # Las dos de Ajustes (2026-10-06, ticket 08 de lista-de-espera): leer los
     # mínimos (`GET /api/minimos`) y guardar el de un proveedor
     # (`PUT /api/minimos/{proveedor}`). Sube de 32 a 34.
-    assert portada.count("fetch('/api/") == 34
+    # «Mandar a espera» el pedido entero (lista de espera, ticket 06):
+    # `POST /api/pedido/{id}/posponer`. Ya existía, pero con la ruta en el
+    # renglón de abajo este conteo no lo veía. Sube de 34 a 35.
+    assert portada.count("fetch('/api/") == 35
 
 
 # ------------------------------------------------------- la función, directo

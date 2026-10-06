@@ -3010,8 +3010,8 @@ async function cargarPedido(fecha) {
     boton.disabled = true;
     nota('pedido-accion', '');
 
-    const respuesta = await respuestaDe(fetch(
-        '/api/pedido/' + pedidoId + '/posponer', { method: 'POST' }), 'al_guardar');
+    const respuesta = await respuestaDe(fetch('/api/pedido/' + pedidoId + '/posponer',
+        { method: 'POST' }), 'al_guardar');
 
     if (!respuesta.ok) {
       boton.disabled = false;

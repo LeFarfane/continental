@@ -340,7 +340,10 @@ def test_la_pantalla_trae_el_interruptor_con_los_dos_nombres(cliente):
     # Las dos de Ajustes (2026-10-06, ticket 08 de lista-de-espera): leer los
     # mínimos (`GET /api/minimos`) y guardar el de un proveedor
     # (`PUT /api/minimos/{proveedor}`). Sube de 32 a 34.
-    assert portada.count("fetch('/api/") == 34
+    # «Mandar a espera» el pedido entero (lista de espera, ticket 06):
+    # `POST /api/pedido/{id}/posponer`. Ya existía, pero con la ruta en el
+    # renglón de abajo este conteo no lo veía. Sube de 34 a 35.
+    assert portada.count("fetch('/api/") == 35
 
 
 def test_la_pantalla_recuerda_la_eleccion_y_aguanta_un_localStorage_roto(cliente):
