@@ -20,6 +20,7 @@ import datetime as dt
 from collections.abc import Callable, Sequence
 import dataclasses
 from dataclasses import dataclass, field
+from decimal import Decimal
 
 from continental.almacen import DiaCalendario, LineaDeCompra, LineaDeVenta, Producto
 from continental.almacenamiento import (
@@ -126,6 +127,9 @@ class AlmacenFalso:
     #: domingo por `weekday()`, nunca festivo—, igual que `dim_fecha` marca
     #: `es_cerrado` sin mirar el festivo (la trampa del 2026-09-27).
     dias_en_memoria: dict[dt.date, DiaCalendario] = field(default_factory=dict)
+    #: La tasa de impuestos por producto, para `tasas_de_impuestos`. Un
+    #: producto que no está aquí es uno cuya tasa no se sabe.
+    tasas_en_memoria: dict[int, Decimal] = field(default_factory=dict)
     falla: Exception | None = None
 
     def _revisar(self) -> None:
@@ -153,6 +157,10 @@ class AlmacenFalso:
         self._revisar()
         productos = set(productos)
         return frozenset(c.producto_id for c in self.compras_en_memoria if c.producto_id in productos)
+
+    def tasas_de_impuestos(self, productos) -> dict[int, Decimal]:
+        self._revisar()
+        return {p: self.tasas_en_memoria[p] for p in set(productos) if p in self.tasas_en_memoria}
 
     def ultima_fecha_con_ventas(self) -> dt.date | None:
         self._revisar()

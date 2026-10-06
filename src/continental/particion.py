@@ -99,6 +99,7 @@ from continental.comparacion import (
     Comparacion,
     Ganador,
 )
+from continental.minimos import SumaDelPedido
 from continental.precios import explicacion_del_motivo, nombre_del_proveedor
 from continental.proveedores import CON_PUENTE, SIN_PUENTE, id_en_sicar
 from continental.transiciones import MOTIVO_TACHADO_NO_SE_MANDA_A_ESPERA
@@ -914,6 +915,64 @@ def el_total_del_pedido(
         parcial=cuenta.parcial_sin_iva,
         renglones=cuenta.renglones,
         sin_precio=cuenta.sin_precio,
+    )
+
+
+def la_suma_del_pedido(
+    pedido: PedidoGuardado,
+    renglones: Sequence[RenglonGuardado],
+    precios: Mapping[int, Sequence[PrecioDeProveedor]],
+    tasas: Mapping[int, Decimal] | None,
+) -> SumaDelPedido:
+    """El pedido en las dos bases de IVA, para compararlo con su mínimo (ticket 09).
+
+    Los renglones que cuentan y su precio son **los mismos** que los de
+    `el_total_del_pedido` —descartados y en espera fuera, el precio de ese
+    proveedor—, y `sin_iva` es exactamente su total. Lo único que se agrega es
+    el paso a con-IVA, **renglón por renglón con la tasa de su producto**
+    (`tasas`: `producto_id` -> suma de tasas, 0.16, 0 para exento, 0.24 con IEPS,
+    como la deja `marts.dim_producto.tasa_impuestos`) y redondeado a centavos
+    por renglón. Multiplicar el total por 1.16 sería falso: lo exento no lleva
+    IVA.
+
+    `tasas=None` quiere decir que no se pudieron leer (se dice, no se supone
+    exento). Un producto sin tasa conocida se cuenta en `sin_tasa` y no suma al
+    parcial con IVA: jamás se le inventa un cero. Lee solo lo que recibe.
+    """
+    vivos = [
+        r
+        for r in renglones
+        if r.pedido_id == pedido.pedido_id
+        and not (r.esta_descartado or r.esta_pospuesto)
+    ]
+    lineas = [_linea(r, pedido.proveedor, precios.get(r.renglon_id, ())) for r in vivos]
+    cuenta = PedidoPorArmar(
+        proveedor=pedido.proveedor, proveedor_id=pedido.proveedor_id, lineas=tuple(lineas)
+    )
+    parcial_con_iva = Decimal("0")
+    sin_tasa = 0
+    for renglon, linea in zip(vivos, lineas):
+        if linea.importe is None:
+            continue
+        tasa = None if tasas is None else tasas.get(renglon.propuesto.producto_id)
+        if tasa is None:
+            sin_tasa += 1
+            continue
+        parcial_con_iva += (linea.importe * (1 + tasa)).quantize(_CENTAVOS)
+    con_iva = (
+        parcial_con_iva.quantize(_CENTAVOS)
+        if cuenta.total_sin_iva is not None and not sin_tasa
+        else None
+    )
+    return SumaDelPedido(
+        renglones=cuenta.renglones,
+        sin_precio=cuenta.sin_precio,
+        sin_iva=cuenta.total_sin_iva,
+        parcial_sin_iva=cuenta.parcial_sin_iva,
+        con_iva=con_iva,
+        parcial_con_iva=parcial_con_iva.quantize(_CENTAVOS),
+        sin_tasa=sin_tasa,
+        tasas_sin_leer=tasas is None,
     )
 
 

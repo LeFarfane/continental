@@ -26,6 +26,7 @@ from __future__ import annotations
 import datetime as dt
 from collections.abc import Callable, Collection
 from dataclasses import dataclass
+from decimal import Decimal
 from functools import lru_cache
 from typing import Protocol, runtime_checkable
 
@@ -267,14 +268,16 @@ class DiaCalendario:
 class LecturaDelAlmacen(Protocol):
     """El borde de lectura. Solo `SELECT`, y solo datos de salida.
 
-    Ocho lecturas y ninguna más: las tres que el módulo de Pedido necesitaba,
+    Nueve lecturas. Las ocho primeras: las tres que el módulo de Pedido necesitaba,
     el ancla temporal, desde el ticket 26 la quinta —qué productos han
     aparecido alguna vez en una compra—, desde el 2026-09-27 la sexta —si un
     día es domingo o festivo oficial, para no armar lista ese día— y su
     hermana de rango, la séptima, que la conciliación diaria del mismo día
     necesita para contar días hábiles. La octava, del 2026-09-28, es de la
-    pantalla de Buscar: qué productos nuestros llevan tal código de barras. Si
-    hace falta una novena, entra aquí y no por una conexión prestada.
+    pantalla de Buscar: qué productos nuestros llevan tal código de barras. La
+    novena, `tasas_de_impuestos`, es del ticket 09 de lista-de-espera: la tasa
+    de IVA de cada producto, para comparar un pedido con un mínimo con IVA. Si
+    hace falta una décima, entra aquí y no por una conexión prestada.
     """
 
     def ventas(self, desde: dt.date, hasta: dt.date) -> list[LineaDeVenta]:
@@ -317,6 +320,19 @@ class LecturaDelAlmacen(Protocol):
         producto nunca ha dejado rastro en `fct_compras` —606 de 3,429
         artículos, 17.7%—. Sobre la misma tabla que `compras_desde`, así que el
         rol no necesita ningún permiso nuevo.
+        """
+        ...
+
+    def tasas_de_impuestos(self, productos: Collection[int]) -> dict[int, Decimal]:
+        """La tasa de impuestos de cada producto: `{producto_id: 0.16}`.
+
+        La novena lectura, del ticket 09 de lista-de-espera: llevar el total de
+        un pedido a con-IVA para compararlo con un mínimo que lo incluye. Es
+        `marts.dim_producto.tasa_impuestos` (ADR 0022 de farmacia-data): la
+        **suma** de las tasas trasladadas —0.16 IVA, 0 exento, 0.24 IVA + IEPS—.
+        Un producto que no aparece en el diccionario es un producto cuya tasa
+        **no se sabe** y quien llama lo dice así; nunca se rellena con cero.
+        Misma tabla que `catalogo()`, así que el rol no necesita permiso nuevo.
         """
         ...
 
@@ -460,6 +476,17 @@ _PRODUCTOS_CON_COMPRAS = text(
     """
 )
 
+# La novena lectura: solo `producto_id` y la tasa, acotada a los productos de
+# los renglones que se preguntan. Un `NULL` no entra: no se sabe, no es cero.
+_TASAS_DE_IMPUESTOS = text(
+    """
+    select producto_id, tasa_impuestos
+    from marts.dim_producto
+    where producto_id = any(:productos)
+      and tasa_impuestos is not null
+    """
+)
+
 _ULTIMA_VENTA = text(
     """
     select max(f.fecha)
@@ -588,6 +615,14 @@ class AlmacenPostgres:
             int(f.producto_id)
             for f in self._filas(_PRODUCTOS_CON_COMPRAS, productos=sorted(productos))
         )
+
+    def tasas_de_impuestos(self, productos: Collection[int]) -> dict[int, Decimal]:
+        if not productos:
+            return {}
+        return {
+            int(f.producto_id): Decimal(str(f.tasa_impuestos))
+            for f in self._filas(_TASAS_DE_IMPUESTOS, productos=sorted(productos))
+        }
 
     def ultima_fecha_con_ventas(self) -> dt.date | None:
         filas = self._filas(_ULTIMA_VENTA)

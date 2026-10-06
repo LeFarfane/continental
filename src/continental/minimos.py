@@ -229,3 +229,207 @@ def minimos_como_json(minimos: Mapping[str, MinimoDelProveedor]) -> list[dict]:
     salieran los capturados, uno sin capturar se vería como un proveedor que no
     existe, y no se podría capturar."""
     return [un_minimo_como_json(p, minimos.get(p)) for p in PROVEEDORES_CONOCIDOS]
+
+
+# ------------------------------------------------ el aviso en la captura
+#
+# Ticket 09 de lista-de-espera. Lo único que este bloque decide es si el total
+# de un pedido llega al mínimo de su proveedor, y lo decide **en la base del
+# mínimo**.
+#
+# ## Por qué en la base del mínimo y no en la del total
+#
+# El total de un pedido es la suma de precios de compra de proveedor, **sin
+# IVA** (`particion.TotalDelPedido`). El mínimo lo dice el proveedor con o sin
+# IVA (`MinimoDelProveedor.incluye_iva`). Si el mínimo es «$2,000 con IVA» y se
+# compara contra un total sin IVA, un pedido de $1,900 sin IVA —que con IVA son
+# $2,204— se avisa como corto sin serlo: es la resta entre cifras de bases
+# distintas que ya volteó una flecha en Marlowe (CLAUDE.md, trampas heredadas).
+# Por eso lo que se lleva a la otra base es **el total** y no el mínimo, y se
+# lleva con la tasa **de cada producto**, renglón por renglón: la tasa no es
+# una sola —IVA 16%, IVA 0% de medicamentos, IEPS 8%— y multiplicar el total
+# por 1.16 inflaría lo exento. Los centavos se redondean por renglón, que es
+# como se factura.
+#
+# ## Los seis estados
+#
+# | estado | cuándo | se avisa |
+# |---|---|---|
+# | `llega` | el total (o lo que ya tiene precio) alcanza | no |
+# | `no_llega` | se sabe el total y no alcanza; dice cuánto falta | **sí** |
+# | `sin_capturar` | no hay fila: nadie capturó el mínimo | no, gris |
+# | `sin_minimo` | monto 0: el proveedor no tiene mínimo | no |
+# | `no_se_sabe` | faltan precios o tasas de IVA para sumar | sí, ámbar |
+# | `sin_leer` | la lectura de los mínimos falló | sí, ámbar |
+#
+# Un renglón sin precio **no suma cero** (regla 4): si lo que ya tiene precio
+# alcanza el mínimo, llega con seguridad —lo que falta solo puede sumar—; si no,
+# el estado es `no_se_sabe` y dice por qué.
+
+LLEGA = "llega"
+NO_LLEGA = "no_llega"
+NO_SE_SABE = "no_se_sabe"
+SIN_LEER = "sin_leer"
+
+FRASE_SIN_LEER = "no se pudo leer el mínimo"
+
+
+@dataclass(frozen=True, slots=True)
+class SumaDelPedido:
+    """Lo que cuesta un pedido, en las dos bases de IVA, y qué falta saber.
+
+    La arma `particion.la_suma_del_pedido`. `sin_iva` es el mismo total de
+    `TotalDelPedido`; `con_iva` es `None` en cuanto no se pueda llevar **todo**
+    a con-IVA (falta una tasa, o no se pudieron leer). Los parciales son lo que
+    sí se sabe y sirven de **piso**: lo que falte solo puede sumar.
+    """
+
+    renglones: int
+    sin_precio: int
+    sin_iva: Decimal | None
+    parcial_sin_iva: Decimal
+    con_iva: Decimal | None
+    parcial_con_iva: Decimal
+    #: Renglones con precio pero sin tasa de IVA conocida.
+    sin_tasa: int = 0
+    #: Si ni siquiera se pudieron leer las tasas (la lectura falló).
+    tasas_sin_leer: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class AvisoDelMinimo:
+    """Si un pedido llega al mínimo de su proveedor, ya dicho."""
+
+    estado: str
+    frase: str
+    proveedor: str
+    nombre: str
+    #: El mínimo tal como lo dijo el proveedor («$2,000.00 sin IVA»), o `None`.
+    minimo: str | None = None
+    #: En qué base se comparó: «sin IVA», «con IVA» o `None`.
+    base: str | None = None
+    #: Lo que falta, en esa base, como cadena. Solo en `no_llega`.
+    falta: str | None = None
+    #: Lo que se comparó contra el mínimo, en esa base (total o piso).
+    comparado: str | None = None
+
+    @property
+    def se_avisa(self) -> bool:
+        """Si la pantalla lo pinta como aviso. `sin_capturar`, `sin_minimo` y
+        `llega` no avisan; el aviso nunca bloquea nada."""
+        return self.estado in (NO_LLEGA, NO_SE_SABE, SIN_LEER)
+
+    def como_json(self) -> dict:
+        return {
+            "estado": self.estado,
+            "frase": self.frase,
+            "proveedor": self.proveedor,
+            "nombre": self.nombre,
+            "minimo": self.minimo,
+            "base": self.base,
+            "falta": self.falta,
+            "comparado": self.comparado,
+            "se_avisa": self.se_avisa,
+        }
+
+
+def aviso_de_que_no_se_pudo_leer(proveedor: str) -> AvisoDelMinimo:
+    """La lectura de los mínimos falló: se dice, no se pinta como «sin capturar»."""
+    return AvisoDelMinimo(
+        estado=SIN_LEER,
+        frase=FRASE_SIN_LEER,
+        proveedor=proveedor,
+        nombre=nombre_del_proveedor(proveedor),
+    )
+
+
+def _plural(n: int, uno: str, varios: str) -> str:
+    return f"{n} {uno if n == 1 else varios}"
+
+
+def avisar_el_minimo(
+    proveedor: str,
+    minimo: MinimoDelProveedor | None,
+    suma: SumaDelPedido | None,
+) -> AvisoDelMinimo:
+    """Si el pedido de `proveedor` llega a su mínimo. **Pura.**
+
+    `suma` es `None` cuando no se pudieron leer los precios del pedido: sin
+    ellos no se sabe, y no se pinta como «llega» ni como «no llega».
+    """
+    nombre = nombre_del_proveedor(proveedor)
+    estado = estado_del_minimo(minimo)
+    if estado == SIN_CAPTURAR:
+        return AvisoDelMinimo(SIN_CAPTURAR, FRASE_SIN_CAPTURAR, proveedor, nombre)
+    if estado == SIN_MINIMO:
+        return AvisoDelMinimo(SIN_MINIMO, FRASE_SIN_MINIMO, proveedor, nombre)
+    assert minimo is not None
+
+    base = "con IVA" if minimo.incluye_iva else "sin IVA"
+    frase_del_minimo_ = frase_del_minimo(minimo)  # «$2,000.00 con IVA»
+    ya = {"proveedor": proveedor, "nombre": nombre, "minimo": frase_del_minimo_, "base": base}
+
+    if suma is None:
+        return AvisoDelMinimo(
+            NO_SE_SABE,
+            f"no se sabe si llega al mínimo de {nombre} ({frase_del_minimo_}): "
+            "no se pudieron leer los precios del pedido",
+            **ya,
+        )
+    if suma.renglones == 0:
+        return AvisoDelMinimo(
+            NO_SE_SABE,
+            f"sin renglones: nada que comparar con el mínimo de {nombre}",
+            **ya,
+        )
+
+    if minimo.incluye_iva:
+        total, parcial = suma.con_iva, suma.parcial_con_iva
+    else:
+        total, parcial = suma.sin_iva, suma.parcial_sin_iva
+
+    if total is not None:
+        comparado = _pesos(total)
+        if total >= minimo.monto:
+            return AvisoDelMinimo(
+                LLEGA,
+                f"llega al mínimo de {nombre} ({frase_del_minimo_})",
+                comparado=comparado,
+                **ya,
+            )
+        falta = minimo.monto - total
+        return AvisoDelMinimo(
+            NO_LLEGA,
+            f"faltan {_pesos(falta)} para el mínimo de {nombre} ({frase_del_minimo_})",
+            falta=str(falta),
+            comparado=comparado,
+            **ya,
+        )
+
+    # El total no se puede saber. Lo que ya tiene precio y tasa es un piso: si
+    # ya alcanza, los renglones que faltan solo pueden sumar.
+    if parcial >= minimo.monto:
+        return AvisoDelMinimo(
+            LLEGA,
+            f"llega al mínimo de {nombre} ({frase_del_minimo_}) "
+            "aunque faltan datos de algunos renglones",
+            comparado=_pesos(parcial),
+            **ya,
+        )
+    motivos = []
+    if suma.sin_precio:
+        motivos.append(_plural(suma.sin_precio, "renglón sin precio", "renglones sin precio"))
+    if minimo.incluye_iva:
+        if suma.tasas_sin_leer:
+            motivos.append("no se pudo leer el IVA de los productos")
+        elif suma.sin_tasa:
+            motivos.append(
+                f"falta el IVA de {_plural(suma.sin_tasa, 'producto', 'productos')}"
+            )
+    return AvisoDelMinimo(
+        NO_SE_SABE,
+        f"no se sabe si llega al mínimo de {nombre} ({frase_del_minimo_}): "
+        f"van {_pesos(parcial)} {base} y {', '.join(motivos)}",
+        comparado=_pesos(parcial),
+        **ya,
+    )

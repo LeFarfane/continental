@@ -1087,6 +1087,12 @@ button.precio-detalle:hover { background: var(--relleno-suave); }
 .captura-pie .envio { font: var(--texto-nota) var(--letra); color: var(--tenue); text-wrap: pretty; }
 .captura-pie .envio.hecho { color: var(--ok); }
 .captura-pie .invitacion { font: var(--texto-nota) var(--letra); color: var(--tenue); }
+/* El aviso del mínimo del proveedor (ticket 09): aviso, no bloqueo. Gris cuando
+   nadie lo capturó; ámbar cuando no llega o no se sabe. */
+.captura-pie .aviso-minimo { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font: var(--texto-nota) var(--letra); color: var(--tenue); text-wrap: pretty; }
+.captura-pie .aviso-minimo.avisa { padding: 8px 12px; border-radius: var(--radio-lg); background: var(--aviso-fondo); color: var(--aviso); font-weight: 600; }
+.captura-pie .aviso-minimo.estado-llega { color: var(--ok); }
+.captura-pedidos .minimo-corto { font: var(--texto-leyenda) var(--letra); color: var(--aviso); text-wrap: pretty; }
 .captura-pie .invitacion.lista { color: var(--ok); font-weight: 600; }
 .captura-pie .marca { font: var(--texto-nota) var(--letra); color: var(--aviso); }
 /* El botón de enviar, cuando todo está tachado: es adonde lleva la captura.

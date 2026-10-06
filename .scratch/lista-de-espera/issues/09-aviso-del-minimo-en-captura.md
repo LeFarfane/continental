@@ -8,17 +8,31 @@ proveedor y Ajustes», historias 35–38.
 
 **Blocked by:** 03, 08
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] La comparación la hace el **servidor**, en la base del mínimo: si incluye
+- [x] La comparación la hace el **servidor**, en la base del mínimo: si incluye
       IVA, el total se lleva a con-IVA con la misma función que ya usa el
       puente. Nunca se restan dos cifras en bases distintas.
-- [ ] Viaja ya como estado y frase: `llega`, `no llega` (con lo que falta) o
+- [x] Viaja ya como estado y frase: `llega`, `no llega` (con lo que falta) o
       `sin mínimo capturado`. Un mínimo de cero siempre llega.
-- [ ] Con renglones sin precio, el aviso lo dice en vez de dar por buena una
+- [x] Con renglones sin precio, el aviso lo dice en vez de dar por buena una
       suma incompleta.
-- [ ] El aviso tiene «Mandar a espera» a la mano (el botón del ticket 06 si ya
+- [x] El aviso tiene «Mandar a espera» a la mano (el botón del ticket 06 si ya
       existe).
-- [ ] Pruebas: lo puro (con y sin IVA, sin mínimo, cero, sin precios), la ruta
+- [x] Pruebas: lo puro (con y sin IVA, sin mínimo, cero, sin precios), la ruta
       de punta a punta y la estática del JS (pinta la frase del servidor y no
       compara en el navegador).
+
+## Cómo quedó
+
+- `minimos.py`: `SumaDelPedido`, `AvisoDelMinimo`, `avisar_el_minimo` (puro).
+  Seis estados: `llega`, `no_llega`, `sin_capturar`, `sin_minimo`, `no_se_sabe`,
+  `sin_leer`.
+- La función de «con IVA» **no existía** en Continental (el puente no convierte;
+  solo resta precios de proveedor, los dos sin IVA). Se agregó
+  `particion.la_suma_del_pedido`, que lleva el total a con-IVA renglón por
+  renglón con `marts.dim_producto.tasa_impuestos` (novena lectura del almacén,
+  `tasas_de_impuestos`), redondeando por renglón. Tasa desconocida = «no se
+  sabe», nunca exento.
+- Cada pedido de la respuesta trae `minimo`; una lectura de mínimos por
+  respuesta (`app._los_avisos_del_minimo`).

@@ -136,6 +136,8 @@ from continental.fallas import (
 )
 from continental.minimos import (
     QUE_HACER_CON_EL_MINIMO,
+    aviso_de_que_no_se_pudo_leer,
+    avisar_el_minimo,
     frase_del_minimo,
     minimos_como_json,
     revisar_lo_que_llega,
@@ -162,6 +164,7 @@ from continental.particion import (
     elegir,
     frase_del_envio,
     frase_sin_nada_por_repartir,
+    la_suma_del_pedido,
     lo_que_hay_que_capturar,
     particion_como_json,
     partir,
@@ -848,6 +851,9 @@ def _respuesta_de_la_lista(
         precios,
         corrida,
         pedidos,
+        avisos_del_minimo=_los_avisos_del_minimo(
+            almacen, almacenamiento, negocio, guardado, pedidos, precios
+        ),
         en_camino=bloque,
         ya_en_camino=ya_en_camino,
         recepcion=recepcion,
@@ -1548,6 +1554,7 @@ def descartar_renglon(
     renglon_id: int,
     request: Request,
     almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+    almacen: LecturaDelAlmacen = Depends(obtener_almacen),
 ):
     """Un clic: el renglón pasa a `descartado` y sale de la lista de trabajo.
 
@@ -1609,6 +1616,7 @@ def descartar_renglon(
         ),
         accion="descartar",
         almacenamiento=almacenamiento,
+        almacen=almacen,
     )
 
 
@@ -1617,6 +1625,7 @@ def devolver_renglon(
     renglon_id: int,
     request: Request,
     almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+    almacen: LecturaDelAlmacen = Depends(obtener_almacen),
 ):
     """Deshacer el descarte: vuelve a `abierto` y se borra la firma.
 
@@ -1648,6 +1657,7 @@ def devolver_renglon(
         ),
         accion="devolver_a_abierto",
         almacenamiento=almacenamiento,
+        almacen=almacen,
     )
 
 
@@ -1656,6 +1666,7 @@ def posponer_renglon(
     renglon_id: int,
     request: Request,
     almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+    almacen: LecturaDelAlmacen = Depends(obtener_almacen),
 ):
     """Un clic: el renglón pasa al día siguiente y sale del total de hoy (ADR 0025).
 
@@ -1687,6 +1698,7 @@ def posponer_renglon(
         ),
         accion="posponer",
         almacenamiento=almacenamiento,
+        almacen=almacen,
     )
 
 
@@ -1695,6 +1707,7 @@ def devolver_renglon_pospuesto(
     renglon_id: int,
     request: Request,
     almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+    almacen: LecturaDelAlmacen = Depends(obtener_almacen),
 ):
     """Deshacer pasar al día siguiente: vuelve a `abierto` y se borra la firma (ADR 0025).
 
@@ -1714,6 +1727,7 @@ def devolver_renglon_pospuesto(
         ),
         accion="devolver_pospuesto",
         almacenamiento=almacenamiento,
+        almacen=almacen,
     )
 
 
@@ -1722,6 +1736,7 @@ def mandar_el_pedido_a_espera(
     pedido_id: int,
     request: Request,
     almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+    almacen: LecturaDelAlmacen = Depends(obtener_almacen),
 ):
     """Un clic: todo lo abierto y no tachado del pedido pasa a espera (ticket 06).
 
@@ -1808,13 +1823,18 @@ def mandar_el_pedido_a_espera(
     guardado = resultado.lista
     lista_id = guardado.pedido_sugerido_id
     corrida, corrida_fallo = _ultima_corrida(almacenamiento, negocio, lista_id)
+    precios = _precios_de_la_lista(almacenamiento, negocio, lista_id)
+    pedidos = almacenamiento.pedidos_de_la_lista(negocio, lista_id)
     cuerpo = _como_json(
         guardado,
-        _precios_de_la_lista(almacenamiento, negocio, lista_id),
+        precios,
         corrida,
-        almacenamiento.pedidos_de_la_lista(negocio, lista_id),
+        pedidos,
         corrida_fallo=corrida_fallo,
         atendidos_despues=_los_atendidos_despues(almacenamiento, negocio, guardado),
+        avisos_del_minimo=_los_avisos_del_minimo(
+            almacen, almacenamiento, negocio, guardado, pedidos, precios
+        ),
     )
     cuerpo["mandados"] = resultado.mandados
     cuerpo["tachados"] = resultado.tachados
@@ -1883,6 +1903,7 @@ def ajustar_la_cantidad_del_renglon(
     cuerpo: CantidadNueva,
     request: Request,
     almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+    almacen: LecturaDelAlmacen = Depends(obtener_almacen),
 ):
     """Corregir cuánto se va a pedir de un renglón, **sin tocar lo que se propuso**.
 
@@ -1964,6 +1985,7 @@ def ajustar_la_cantidad_del_renglon(
         accion="ajustar_la_cantidad",
         nota=f"La cantidad a pedir queda en {cuerpo.cantidad}.",
         almacenamiento=almacenamiento,
+        almacen=almacen,
     )
 
 
@@ -1973,6 +1995,7 @@ def elegir_el_proveedor_del_renglon(
     cuerpo: ProveedorElegido,
     request: Request,
     almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+    almacen: LecturaDelAlmacen = Depends(obtener_almacen),
 ):
     """Marcar a quién se le pide este renglón. **La persona decide.**
 
@@ -2039,6 +2062,7 @@ def elegir_el_proveedor_del_renglon(
         accion="elegir_proveedor",
         nota=f"Se le pide a {nombre_del_proveedor(cuerpo.proveedor)}.",
         almacenamiento=almacenamiento,
+        almacen=almacen,
     )
 
 
@@ -2047,6 +2071,7 @@ def partir_en_pedidos(
     pedido_sugerido_id: int,
     request: Request,
     almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+    almacen: LecturaDelAlmacen = Depends(obtener_almacen),
 ):
     """Convertir la lista del día en pedidos, uno por proveedor (ticket 20).
 
@@ -2158,13 +2183,17 @@ def partir_en_pedidos(
     # tipo de cuenta que el navegador no debe llevar.
     relectura = almacenamiento.leer_por_id(negocio, pedido_sugerido_id) or guardado
     corrida, corrida_fallo = _ultima_corrida(almacenamiento, negocio, pedido_sugerido_id)
+    precios = almacenamiento.precios_de_la_lista(negocio, pedido_sugerido_id)
     return _como_json(
         relectura,
-        almacenamiento.precios_de_la_lista(negocio, pedido_sugerido_id),
+        precios,
         corrida,
         pedidos,
         corrida_fallo=corrida_fallo,
         atendidos_despues=_los_atendidos_despues(almacenamiento, negocio, relectura),
+        avisos_del_minimo=_los_avisos_del_minimo(
+            almacen, almacenamiento, negocio, relectura, pedidos, precios
+        ),
     )
 
 
@@ -2173,6 +2202,7 @@ def enviar_el_pedido(
     pedido_id: int,
     request: Request,
     almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+    almacen: LecturaDelAlmacen = Depends(obtener_almacen),
 ):
     """Marcar un pedido como **enviado**: `borrador` -> `enviado` (ticket 21).
 
@@ -2280,13 +2310,18 @@ def enviar_el_pedido(
             },
         )
     corrida, corrida_fallo = _ultima_corrida(almacenamiento, negocio, lista_id)
+    precios = almacenamiento.precios_de_la_lista(negocio, lista_id)
+    pedidos = almacenamiento.pedidos_de_la_lista(negocio, lista_id)
     return _como_json(
         relectura,
-        almacenamiento.precios_de_la_lista(negocio, lista_id),
+        precios,
         corrida,
-        almacenamiento.pedidos_de_la_lista(negocio, lista_id),
+        pedidos,
         corrida_fallo=corrida_fallo,
         atendidos_despues=_los_atendidos_despues(almacenamiento, negocio, relectura),
+        avisos_del_minimo=_los_avisos_del_minimo(
+            almacen, almacenamiento, negocio, relectura, pedidos, precios
+        ),
     )
 
 
@@ -3341,6 +3376,7 @@ def marcar_el_renglon_como_capturado(
     marca: MarcaDeCaptura,
     request: Request,
     almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+    almacen: LecturaDelAlmacen = Depends(obtener_almacen),
 ):
     """Tachar —o destachar— un renglón en la pantalla de captura (ticket 22).
 
@@ -3427,13 +3463,18 @@ def marcar_el_renglon_como_capturado(
 
     lista_id = guardado.pedido_sugerido_id
     corrida, corrida_fallo = _ultima_corrida(almacenamiento, negocio, lista_id)
+    precios = _precios_de_la_lista(almacenamiento, negocio, lista_id)
+    pedidos = almacenamiento.pedidos_de_la_lista(negocio, lista_id)
     return _como_json(
         guardado,
-        _precios_de_la_lista(almacenamiento, negocio, lista_id),
+        precios,
         corrida,
-        almacenamiento.pedidos_de_la_lista(negocio, lista_id),
+        pedidos,
         corrida_fallo=corrida_fallo,
         atendidos_despues=_los_atendidos_despues(almacenamiento, negocio, guardado),
+        avisos_del_minimo=_los_avisos_del_minimo(
+            almacen, almacenamiento, negocio, guardado, pedidos, precios
+        ),
     )
 
 
@@ -5248,6 +5289,7 @@ def _mover_el_renglon(
     accion: str,
     nota: str = "",
     almacenamiento: AlmacenamientoDelPedido | None = None,
+    almacen: LecturaDelAlmacen | None = None,
 ):
     """Lo que las cuatro rutas que mueven un renglón comparten entero.
 
@@ -5468,7 +5510,7 @@ def _mover_el_renglon(
         # lista nunca se partió o no se pudo leer: la pantalla conserva los que
         # tenía, viejos pero verdaderos.
         "pedidos": _los_pedidos_a_la_vista(
-            almacenamiento, negocio, guardado, por_renglon
+            almacenamiento, negocio, guardado, por_renglon, almacen
         ),
         # LO QUE PASÓ AL SACAR DE LA ESPERA, dicho en Python: volvió al pedido de
         # su proveedor, o vuelve sin repartir y por qué. `null` en cualquier otra
@@ -5492,6 +5534,7 @@ def _los_pedidos_a_la_vista(
     negocio: str,
     guardado: PedidoSugeridoGuardado,
     por_renglon: dict | None,
+    almacen: LecturaDelAlmacen | None = None,
 ) -> list | None:
     """Los pedidos de la lista como la pantalla los lee, tras mover un renglón.
 
@@ -5515,13 +5558,25 @@ def _los_pedidos_a_la_vista(
         return None
     if not pedidos:
         return None
-    return _pedidos_en_json(guardado, pedidos, por_renglon)
+    return _pedidos_en_json(
+        guardado,
+        pedidos,
+        por_renglon,
+        _los_avisos_del_minimo(
+            almacen, almacenamiento, negocio, guardado, pedidos, por_renglon
+        ),
+    )
 
 
 def _pedidos_en_json(
-    guardado: PedidoSugeridoGuardado, pedidos: tuple, precios: dict | None
+    guardado: PedidoSugeridoGuardado,
+    pedidos: tuple,
+    precios: dict | None,
+    avisos_del_minimo: dict | None = None,
 ) -> list:
-    """Cada pedido guardado, con su captura y su total. **Puro**: no lee nada."""
+    """Cada pedido guardado, con su captura, su total y su aviso de mínimo.
+    **Puro**: no lee nada. `avisos_del_minimo` es `{pedido_id: aviso}` y lo arma
+    `_los_avisos_del_minimo`, que es la que lee (una vez por respuesta)."""
     return [
         _pedido_como_json(
             p,
@@ -5547,6 +5602,7 @@ def _pedidos_en_json(
             ),
             renglones_de_la_lista=guardado.renglones,
             estado_de_la_lista=guardado.estado,
+            minimo=(avisos_del_minimo or {}).get(p.pedido_id),
         )
         for p in pedidos
     ]
@@ -5581,6 +5637,65 @@ def _totales_de_los_pedidos(
         str(p.pedido_id): total_como_json(
             el_total_del_pedido(p, guardado.renglones, por_renglon)
         )
+        for p in pedidos
+    }
+
+
+def _los_avisos_del_minimo(
+    almacen: LecturaDelAlmacen | None,
+    almacenamiento: AlmacenamientoDelPedido | None,
+    negocio: str,
+    guardado: PedidoSugeridoGuardado,
+    pedidos: tuple | None,
+    precios: dict | None,
+) -> dict | None:
+    """`{pedido_id: aviso}` del mínimo de cada pedido. **Lee**, no escribe.
+
+    **Una lectura de mínimos por respuesta**, y solo si hay pedidos. Si falla,
+    cada pedido dice «no se pudo leer el mínimo»: pintarlo como «sin mínimo
+    capturado» afirmaría que nadie lo capturó sobre una base que sí lo tiene
+    (regla 4). La comparación y las frases son de `minimos.avisar_el_minimo`.
+
+    Las tasas de IVA se leen **solo si hace falta**: algún pedido cuyo proveedor
+    tiene un mínimo con IVA. Si esa lectura falla, esos pedidos dicen que no se
+    sabe, no «llega»: sin la tasa no hay forma honrada de llevar el total a
+    con-IVA, y comparar contra el total sin IVA es la resta de bases distintas.
+    """
+    if almacenamiento is None or not pedidos:
+        return None
+    try:
+        minimos = almacenamiento.minimos_de_los_proveedores(negocio)
+    except Exception:  # noqa: BLE001 — la base caída es un hueco con su frase
+        log.exception("No se pudieron leer los mínimos para avisar en la captura")
+        return {
+            p.pedido_id: aviso_de_que_no_se_pudo_leer(p.proveedor).como_json()
+            for p in pedidos
+        }
+
+    con_iva = set()
+    for p in pedidos:
+        minimo = minimos.get(p.proveedor)
+        if minimo is not None and minimo.monto > 0 and minimo.incluye_iva:
+            con_iva.add(p.pedido_id)
+    tasas: dict | None = {}
+    if con_iva and precios is not None:
+        productos = {
+            r.propuesto.producto_id for r in guardado.renglones if r.pedido_id in con_iva
+        }
+        try:
+            tasas = almacen.tasas_de_impuestos(productos) if almacen is not None else None
+        except Exception:  # noqa: BLE001 — sin tasas se dice que no se sabe
+            log.exception("No se pudieron leer las tasas de IVA para el mínimo")
+            tasas = None
+
+    return {
+        p.pedido_id: avisar_el_minimo(
+            p.proveedor,
+            minimos.get(p.proveedor),
+            None
+            if precios is None
+            else la_suma_del_pedido(p, guardado.renglones, precios, tasas),
+        ).como_json()
         for p in pedidos
     }
 
@@ -5621,6 +5736,7 @@ def _como_json(
     aun_faltan: frozenset[int] | None = None,
     reapertura: dict | None = None,
     corrida_fallo: bool = False,
+    avisos_del_minimo: dict | None = None,
     *,
     atendidos_despues: frozenset[int],
 ) -> dict:
@@ -5895,7 +6011,9 @@ def _como_json(
         # puede ya haber movido un renglón a otro proveedor. Lo que se captura
         # es lo que al enviar pasa a `en tránsito`, y eso lo decide `pedido_id`.
         "pedidos": (
-            None if pedidos is None else _pedidos_en_json(guardado, pedidos, precios)
+            None
+            if pedidos is None
+            else _pedidos_en_json(guardado, pedidos, precios, avisos_del_minimo)
         ),
         "puente": puente_como_json(puente_configurado()),
         "vistas": _vistas(),
@@ -5949,6 +6067,7 @@ def _pedido_como_json(
     renglones_de_la_lista=(),
     total=None,
     estado_de_la_lista: str = ABIERTO,
+    minimo: dict | None = None,
 ) -> dict:
     """Un pedido ya guardado, como la pantalla lo lee.
 
@@ -6021,6 +6140,11 @@ def _pedido_como_json(
         ),
         "hay_total": pedido.total_sin_iva is not None,
         "total": None if total is None else total_como_json(total),
+        # EL AVISO DEL MÍNIMO DEL PROVEEDOR (ticket 09 de lista-de-espera), ya
+        # comparado en la base del mínimo y ya dicho: estado + frase. `null`
+        # solo cuando esta respuesta no lo calculó (cancelar): la pantalla no
+        # pinta nada, que no es lo mismo que «sin mínimo capturado».
+        "minimo": minimo,
         "renglones": renglones_dentro,
         # LA FIRMA DEL ENVÍO. En ISO **con zona**, por la misma razón que
         # `armado_en`: sin ella el navegador la leería como hora local y el

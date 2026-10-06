@@ -4949,6 +4949,15 @@ const pintarPasoCaptura = (pedidos, alTachar, alEnviar, alPosponer, alMandarElPe
       ? g.frase_del_pedido_vacio
       : (g.total ? g.total.frase + ' · ' + avanceDicho : avanceDicho);
     fila.append(nombre, avance);
+    // EL MÍNIMO (ticket 09): solo cuando avisa. La frase ya viene hecha y
+    // comparada en la base del mínimo; aquí no se compara nada. El detalle
+    // completo, con el botón, va en el pie del pedido.
+    if (!g.fue_enviado && g.minimo && g.minimo.se_avisa) {
+      const minimo = document.createElement('span');
+      minimo.className = 'minimo-corto estado-' + g.minimo.estado;
+      minimo.textContent = g.minimo.frase;
+      fila.append(minimo);
+    }
     // Cuánto lleva tachado, en una barra: las dos cifras vienen del servidor
     // y aquí solo se dibujan. Lo enviado se ve lleno.
     const barra = document.createElement('span');
@@ -4980,7 +4989,11 @@ const pintarPasoCaptura = (pedidos, alTachar, alEnviar, alPosponer, alMandarElPe
   // sale a la espera con su proveedor, en una sola operación del servidor. El
   // motivo de apagarlo viene del servidor; con el pedido vacío no hay nada que
   // mandar y no se ofrece.
-  if (guardado.es_borrador && guardado.captura && guardado.captura.cuantos && alMandarElPedido) {
+  const hayQueMandarAEspera = guardado.es_borrador && guardado.captura
+    && guardado.captura.cuantos && alMandarElPedido;
+  // Se arma una vez por sitio: un mismo nodo no puede estar en la cabeza y en
+  // el aviso del mínimo a la vez.
+  const botonDeEspera = () => {
     const aEspera = botonDeAccion('Mandar a espera',
       (b) => alMandarElPedido(guardado.pedido_id, guardado.nombre, b), 'tenida');
     aEspera.disabled = !guardado.se_puede_mandar_a_espera;
@@ -4988,8 +5001,9 @@ const pintarPasoCaptura = (pedidos, alTachar, alEnviar, alPosponer, alMandarElPe
       ? 'Manda a espera todo lo que no está tachado. Lo tachado ya está en el carrito del portal y se queda.'
       : 'No se puede mandar a espera: ' + guardado.motivo_para_no_mandar_a_espera;
     aEspera.setAttribute('aria-label', 'Mandar a espera el pedido de ' + guardado.nombre);
-    cabeza.append(aEspera);
-  }
+    return aEspera;
+  };
+  if (hayQueMandarAEspera) cabeza.append(botonDeEspera());
   trabajo.append(cabeza);
 
   if (guardado.captura && guardado.captura.cuantos) trabajo.append(pintarCaptura(guardado, alTachar, alPosponer));
@@ -5043,6 +5057,22 @@ const pintarPasoCaptura = (pedidos, alTachar, alEnviar, alPosponer, alMandarElPe
   pie.append(fila);
 
   const sinRenglones = guardado.es_borrador && !!guardado.frase_del_pedido_vacio;
+  // EL MÍNIMO DEL PROVEEDOR, junto al total (ticket 09). La frase y el estado
+  // los decide el servidor, en la base del mínimo —con o sin IVA—: aquí solo se
+  // pinta. Es un AVISO, no un bloqueo: «Enviar» no mira esto. Sin mínimo
+  // capturado se ve en gris y sin botón; cuando no llega, trae «Mandar a
+  // espera» a la mano.
+  if (guardado.es_borrador && !sinRenglones && guardado.minimo) {
+    const aviso = document.createElement('div');
+    aviso.className = 'aviso-minimo estado-' + guardado.minimo.estado
+      + (guardado.minimo.se_avisa ? ' avisa' : '');
+    aviso.setAttribute('role', guardado.minimo.se_avisa ? 'alert' : 'note');
+    const frase = document.createElement('span');
+    frase.textContent = guardado.minimo.frase;
+    aviso.append(frase);
+    if (guardado.minimo.estado === 'no_llega' && hayQueMandarAEspera) aviso.append(botonDeEspera());
+    pie.append(aviso);
+  }
   if (guardado.es_borrador && !sinRenglones && guardado.motivo_para_no_enviar) {
     const porque = document.createElement('span');
     porque.className = 'marca';
