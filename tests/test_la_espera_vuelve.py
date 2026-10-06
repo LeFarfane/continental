@@ -171,6 +171,33 @@ def test_la_memoria_arrastra_el_proveedor_la_fecha_y_la_firma_y_suma_una_lista()
     }
 
 
+def test_si_alguien_eligio_el_proveedor_a_mano_la_firma_es_la_suya():
+    """La tarjeta «Sin proveedor» (ticket 11) o una elección en Revisar: quien
+    decidió a quién pedírselo firma la elección de mañana, no quien lo mandó a
+    espera."""
+    import dataclasses
+
+    eligio_en = MANDADO_EN + dt.timedelta(hours=1)
+    pospuesto = dataclasses.replace(
+        _pospuesto(listas=1),
+        proveedor_elegido="nadro", elegido_por="otra@farmacia.mx", elegido_en=eligio_en,
+    )
+    espera = memoria_de_lo_pedido([], [pospuesto]).esperas[1]
+    assert (espera.mandada_por, espera.mandada_en) == ("otra@farmacia.mx", eligio_en)
+
+
+def test_una_eleccion_de_otro_proveedor_no_firma_la_espera():
+    import dataclasses
+
+    pospuesto = dataclasses.replace(
+        _pospuesto(listas=1),
+        proveedor_elegido="levic", elegido_por="otra@farmacia.mx",
+        elegido_en=MANDADO_EN,
+    )
+    espera = memoria_de_lo_pedido([], [pospuesto]).esperas[1]
+    assert espera.mandada_por == CORREO
+
+
 def test_el_contador_de_una_espera_larga_sigue_sumando():
     memoria = memoria_de_lo_pedido([], [_pospuesto(listas=4)])
     assert memoria.esperas[1].listas == 5

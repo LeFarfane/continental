@@ -283,13 +283,26 @@ def memoria_de_lo_pedido(
             de_ayer[producto_id] = piezas
             esperas.pop(producto_id, None)
             if renglon.espera_desde is not None:
+                # La firma es la del ÚLTIMO acto humano que fijó el proveedor. Si
+                # alguien eligió ese mismo proveedor DESPUÉS de mandarlo a espera
+                # —la tarjeta «Sin proveedor» de la lista de espera, ticket 11—,
+                # esa elección; si no, quien lo mandó a espera, que con eso
+                # confirmó el del pedido donde estaba.
+                eligio = (
+                    renglon.proveedor_elegido is not None
+                    and renglon.proveedor_elegido == renglon.proveedor_de_la_espera
+                    and renglon.elegido_por
+                    and renglon.elegido_en is not None
+                    and (renglon.pospuesto_en is None
+                         or renglon.elegido_en > renglon.pospuesto_en)
+                )
                 esperas[producto_id] = LaEspera(
                     desde=renglon.espera_desde,
                     # La lista que lo recibe es una más (ticket 05).
                     listas=(renglon.listas_en_espera or 1) + 1,
                     proveedor=renglon.proveedor_de_la_espera,
-                    mandada_por=renglon.pospuesto_por,
-                    mandada_en=renglon.pospuesto_en,
+                    mandada_por=renglon.elegido_por if eligio else renglon.pospuesto_por,
+                    mandada_en=renglon.elegido_en if eligio else renglon.pospuesto_en,
                 )
 
     return MemoriaDeLoPedido(
