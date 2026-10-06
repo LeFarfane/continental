@@ -101,6 +101,7 @@ from continental.comparacion import (
 )
 from continental.precios import explicacion_del_motivo, nombre_del_proveedor
 from continental.proveedores import CON_PUENTE, SIN_PUENTE, id_en_sicar
+from continental.transiciones import MOTIVO_TACHADO_NO_SE_MANDA_A_ESPERA
 
 #: Una comparación de un renglón al que nadie le consultó el precio. Se arma
 #: una sola vez y se reusa: es inmutable (`frozen=True`) y aparece una vez por
@@ -819,7 +820,11 @@ def lo_que_hay_que_capturar(
         lineas=tuple(
             _linea(r, pedido.proveedor, precios.get(r.renglon_id, ()))
             for r in dentro
-            if not r.esta_descartado
+            # Ni lo descartado ni lo que espera se teclea hoy. Mandar a espera
+            # SACA el renglón de su pedido (lista de espera, ticket 04), así que
+            # esto solo atrapa a un pospuesto de antes de ese cambio, que sigue
+            # colgado de su pedido: sin esta guarda contaría en el «0 de 9».
+            if not (r.esta_descartado or r.esta_pospuesto)
         ),
         descartados_dentro=sum(1 for r in dentro if r.esta_descartado),
     )
@@ -1103,6 +1108,14 @@ def captura_como_json(captura: Captura, se_puede_enviar: bool) -> dict:
                 "tiene_precio": linea.tiene_precio,
                 "motivo": linea.motivo,
                 "esta_capturado": linea.esta_capturado,
+                # MANDAR A ESPERA este renglón (lista de espera, ticket 04): un
+                # renglón tachado ya está en el carrito del portal y no se
+                # manda, y el botón lo dice con la frase que daría el 409
+                # (`transiciones.motivo_para_no_editar`, una sola vez).
+                "se_puede_mandar_a_espera": not linea.esta_capturado,
+                "motivo_para_no_mandar_a_espera": (
+                    MOTIVO_TACHADO_NO_SE_MANDA_A_ESPERA if linea.esta_capturado else None
+                ),
                 # La firma viaja para el `title` de la casilla: quién la tachó y
                 # cuándo. Es una firma, nunca un permiso (regla 3).
                 "capturado_por": linea.capturado_por,

@@ -187,6 +187,7 @@ from continental.sesiones import (
 )
 from continental.sugerido import armar_la_lista
 from continental.transiciones import (
+    frase_de_sacar_de_la_espera,
     motivo_para_no_cancelar,
     motivo_para_no_corregir,
     motivo_para_no_editar,
@@ -5233,7 +5234,95 @@ def _mover_el_renglon(
         "totales_de_los_pedidos": _totales_de_los_pedidos(
             almacenamiento, negocio, guardado, por_renglon
         ),
+        # LOS PEDIDOS, RECALCULADOS (lista de espera, ticket 04). Mandar a espera
+        # saca el renglón de su pedido, y sacar de la espera lo regresa: la
+        # captura de cada pedido —lo que hay que teclear y el «0 de 9»— cambia,
+        # y esta respuesta es la única que la pantalla ve sin recargar. Con la
+        # misma función que la carga, así que no pueden diferir. `null` si la
+        # lista nunca se partió o no se pudo leer: la pantalla conserva los que
+        # tenía, viejos pero verdaderos.
+        "pedidos": _los_pedidos_a_la_vista(
+            almacenamiento, negocio, guardado, por_renglon
+        ),
+        # LO QUE PASÓ AL SACAR DE LA ESPERA, dicho en Python: volvió al pedido de
+        # su proveedor, o vuelve sin repartir y por qué. `null` en cualquier otra
+        # operación.
+        "frase_de_sacar_de_la_espera": (
+            frase_de_sacar_de_la_espera(
+                antes,
+                movido,
+                None
+                if antes is None or antes.proveedor_de_la_espera is None
+                else nombre_del_proveedor(antes.proveedor_de_la_espera),
+            )
+            if accion == "devolver_pospuesto"
+            else None
+        ),
     }
+
+
+def _los_pedidos_a_la_vista(
+    almacenamiento: AlmacenamientoDelPedido | None,
+    negocio: str,
+    guardado: PedidoSugeridoGuardado,
+    por_renglon: dict | None,
+) -> list | None:
+    """Los pedidos de la lista como la pantalla los lee, tras mover un renglón.
+
+    **Lee**, no escribe. La misma construcción que la carga (`_pedidos_en_json`),
+    para que la columna de la captura no tenga dos maneras de saber qué hay
+    dentro de un pedido. `None` cuando no se pudieron leer los precios o los
+    pedidos, o cuando la lista no tiene ninguno: sin pedidos no hay nada que
+    sustituir y la pantalla se queda con lo suyo.
+    """
+    if almacenamiento is None or por_renglon is None:
+        return None
+    try:
+        pedidos = almacenamiento.pedidos_de_la_lista(
+            negocio, guardado.pedido_sugerido_id
+        )
+    except Exception:  # noqa: BLE001 — sin los pedidos, los viejos siguen valiendo
+        log.exception(
+            "No se pudieron leer los pedidos de la lista %s.",
+            guardado.pedido_sugerido_id,
+        )
+        return None
+    if not pedidos:
+        return None
+    return _pedidos_en_json(guardado, pedidos, por_renglon)
+
+
+def _pedidos_en_json(
+    guardado: PedidoSugeridoGuardado, pedidos: tuple, precios: dict | None
+) -> list:
+    """Cada pedido guardado, con su captura y su total. **Puro**: no lee nada."""
+    return [
+        _pedido_como_json(
+            p,
+            *_lo_que_hay_dentro(guardado, p),
+            captura=lo_que_hay_que_capturar(p, guardado.renglones, precios or {}),
+            # `None` cuando no se pudieron leer los precios: sin ellos
+            # todo renglón saldría «sin precio», y eso afirmaría algo
+            # que no se sabe. La pantalla dice «total sin saber».
+            total=(
+                None
+                if precios is None
+                else el_total_del_pedido(p, guardado.renglones, precios)
+            ),
+            en_camino_dentro=sum(
+                1
+                for r in guardado.renglones
+                if r.pedido_id == p.pedido_id and r.esta_en_transito
+            ),
+            recibidos_dentro=sum(
+                1
+                for r in guardado.renglones
+                if r.pedido_id == p.pedido_id and r.esta_recibido
+            ),
+            renglones_de_la_lista=guardado.renglones,
+        )
+        for p in pedidos
+    ]
 
 
 def _totales_de_los_pedidos(
@@ -5579,35 +5668,7 @@ def _como_json(
         # puede ya haber movido un renglón a otro proveedor. Lo que se captura
         # es lo que al enviar pasa a `en tránsito`, y eso lo decide `pedido_id`.
         "pedidos": (
-            None
-            if pedidos is None
-            else [
-                _pedido_como_json(
-                    p,
-                    *_lo_que_hay_dentro(guardado, p),
-                    captura=lo_que_hay_que_capturar(p, guardado.renglones, precios or {}),
-                    # `None` cuando no se pudieron leer los precios: sin ellos
-                    # todo renglón saldría «sin precio», y eso afirmaría algo
-                    # que no se sabe. La pantalla dice «total sin saber».
-                    total=(
-                        None
-                        if precios is None
-                        else el_total_del_pedido(p, guardado.renglones, precios)
-                    ),
-                    en_camino_dentro=sum(
-                        1
-                        for r in guardado.renglones
-                        if r.pedido_id == p.pedido_id and r.esta_en_transito
-                    ),
-                    recibidos_dentro=sum(
-                        1
-                        for r in guardado.renglones
-                        if r.pedido_id == p.pedido_id and r.esta_recibido
-                    ),
-                    renglones_de_la_lista=guardado.renglones,
-                )
-                for p in pedidos
-            ]
+            None if pedidos is None else _pedidos_en_json(guardado, pedidos, precios)
         ),
         "puente": puente_como_json(puente_configurado()),
         "vistas": _vistas(),
@@ -5934,6 +5995,19 @@ def _renglon_como_json(
         "se_puede_devolver_pospuesto": (
             motivo_para_no_editar(renglon, lista, "devolver_pospuesto") is None
         ),
+        # POR QUÉ NO SE PUEDE MANDAR A ESPERA, con la misma función que la
+        # bandera de arriba: el botón de la captura se apaga y lo dice (un
+        # renglón tachado ya está en el carrito del portal). `null` si sí se
+        # puede.
+        "motivo_para_no_posponer": motivo_para_no_editar(renglon, lista, "posponer"),
+        # LA ESPERA CON DUEÑO Y CON EDAD (lista de espera, ticket 04): a quién se
+        # le iba a pedir, desde qué fecha y cuántas listas lleva. `null` en un
+        # renglón que nunca ha esperado.
+        "proveedor_de_la_espera": renglon.proveedor_de_la_espera,
+        "espera_desde": (
+            renglon.espera_desde.isoformat() if renglon.espera_desde else None
+        ),
+        "listas_en_espera": renglon.listas_en_espera,
         "esta_pospuesto": renglon.esta_pospuesto,
         "pospuesto_por": renglon.pospuesto_por,
         "pospuesto_en": (

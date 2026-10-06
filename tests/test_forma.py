@@ -127,9 +127,10 @@ def test_el_conteo_de_columnas_es_el_del_ddl():
     tiene que mirar."""
     esperadas = _esperadas()
 
-    # 39 desde la migración 0019 (`pospuesto_por`, `pospuesto_en` y
+    # 42 desde la migración 0020 (`proveedor_de_la_espera`, `espera_desde` y
+    # `listas_en_espera`); 39 desde la 0019 (`pospuesto_por`, `pospuesto_en` y
     # `piezas_pospuestas`); 36 desde la 0017 (`anaquel`).
-    assert len(esperadas["renglon"]) == 39
+    assert len(esperadas["renglon"]) == 42
     assert len(esperadas["pedido"]) == 12
     # 11 desde la migración 0013 (`cerrado_por`, decisión del dueño
     # 2026-09-27: la lista de ayer se cierra sola al abrirse la de hoy).

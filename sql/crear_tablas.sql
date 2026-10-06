@@ -143,6 +143,10 @@
 --      piezas que el renglón de mañana trae de ayer. NO crea tabla, y NO rompe
 --      el código de antes: las firmas admiten nulos y las piezas tienen
 --      DEFAULT 0.
+--  20. `sql/migraciones/0020-la-espera-con-proveedor-y-edad.sql` (2026-10-05,
+--      lista de espera, ticket 04), que le da a `renglon` el proveedor de la
+--      espera, desde cuándo espera y cuántas listas lleva, con sus CHECK. NO
+--      crea tabla, y NO rompe el código de antes: las tres admiten nulos.
 --
 -- Las trece son idempotentes, así que correrlas sobre una base que ya las
 -- tiene -o sobre una recién creada con este archivo- no rompe nada.
@@ -689,6 +693,13 @@ CREATE TABLE IF NOT EXISTS pedidos.renglon (
     pospuesto_por           text,
     pospuesto_en            timestamptz,
     piezas_pospuestas       integer NOT NULL DEFAULT 0,
+    -- LA ESPERA CON DUEÑO Y CON EDAD (lista de espera, migración 0020). A quién
+    -- se le iba a pedir cuando se mandó a espera (NULL si no tenía a nadie),
+    -- la fecha de la lista donde se mandó por primera vez —la que se arrastra—
+    -- y cuántas listas lleva. NULL los tres en un renglón que nunca ha esperado.
+    proveedor_de_la_espera  text,
+    espera_desde            date,
+    listas_en_espera        integer,
 
     CONSTRAINT pk_renglon
         PRIMARY KEY (renglon_id),
@@ -945,6 +956,18 @@ CREATE TABLE IF NOT EXISTS pedidos.renglon (
         CHECK ((estado = 'pospuesto')
                = (pospuesto_por IS NOT NULL AND pospuesto_en IS NOT NULL)),
 
+    -- LA ESPERA (migración 0020): clave no vacía, contador desde 1, la fecha y
+    -- el contador juntos, y todo pospuesto trae fecha. Al revés no: un abierto
+    -- que viene de una espera anterior también los trae (ticket 05).
+    CONSTRAINT ck_renglon_espera_proveedor
+        CHECK (proveedor_de_la_espera <> ''),
+    CONSTRAINT ck_renglon_espera_listas
+        CHECK (listas_en_espera >= 1),
+    CONSTRAINT ck_renglon_espera
+        CHECK ((espera_desde IS NULL) = (listas_en_espera IS NULL)),
+    CONSTRAINT ck_renglon_espera_pospuesto
+        CHECK (estado <> 'pospuesto' OR espera_desde IS NOT NULL),
+
     CONSTRAINT fk_renglon_sugerido
         FOREIGN KEY (pedido_sugerido_id, negocio)
         REFERENCES pedidos.pedido_sugerido (pedido_sugerido_id, negocio),
@@ -1166,6 +1189,20 @@ COMMENT ON COLUMN pedidos.renglon.piezas_pospuestas IS
     'Piezas que la lista anterior pasó al día siguiente y que este renglón trae, '
     'ya sumadas a cantidad_propuesta. Son piezas, no ventas (ADR 0025). Casi '
     'siempre 0.';
+
+COMMENT ON COLUMN pedidos.renglon.proveedor_de_la_espera IS
+    'A quién se le iba a pedir cuando el renglón se mandó a espera: el del '
+    'pedido al que estaba repartido, y si no, el elegido a mano (clave de '
+    'Doyle). NULL = no tenía ninguno y la lista siguiente lo reparte.';
+
+COMMENT ON COLUMN pedidos.renglon.espera_desde IS
+    'Fecha de la lista donde el renglón se mandó a espera POR PRIMERA VEZ; se '
+    'arrastra al volver a mandarlo. NULL si nunca ha esperado.';
+
+COMMENT ON COLUMN pedidos.renglon.listas_en_espera IS
+    'Cuántas listas lleva esperando (>= 1), junto con espera_desde. Sin tope: '
+    'está a la vista para que alguien decida cuando algo lleva demasiado. NULL '
+    'si nunca ha esperado.';
 
 
 -- --------------------------------------------------------------------------

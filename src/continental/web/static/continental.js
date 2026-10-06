@@ -1324,7 +1324,9 @@ const renglon = (r, acciones) => {
   posponer.disabled = !r.se_puede_posponer || !acciones.posponer;
   posponer.title = r.se_puede_posponer
     ? 'Mandar a espera: no se pide hoy, y entra a la siguiente lista. Se puede sacar de la espera.'
-    : 'Ya no se puede mandar a espera: la lista ya no está abierta, o el renglón ya se atendió.';
+    : (r.motivo_para_no_posponer
+      ? 'No se puede mandar a espera: ' + r.motivo_para_no_posponer
+      : 'Ya no se puede mandar a espera: la lista ya no está abierta, o el renglón ya se atendió.');
   // El nombre del producto va en el nombre accesible, por lo mismo que la cruz.
   posponer.setAttribute('aria-label', 'Mandar a espera ' + r.descripcion);
   celdaAcciones.append(posponer, quitar);
@@ -2739,7 +2741,7 @@ async function cargarPedido(fecha) {
     // números que ya no son.
     pintarParticion(datos.particion, datos.pedidos, acciones.editable, partir, enviarPedido, tacharRenglon);
     // EL PASO TRES: la captura de un pedido a la vez, con su botón de enviar.
-    pintarPasoCaptura(datos.pedidos, tacharRenglon, enviarPedido);
+    pintarPasoCaptura(datos.pedidos, tacharRenglon, enviarPedido, posponer);
     pintarPasos(datos);
     pintarResumenDeAvisos();
     tabla.hidden = false;
@@ -2824,6 +2826,12 @@ async function cargarPedido(fecha) {
     // corregir una cantidad mueven. Llega por `pedido_id` y ya dicho: aquí solo
     // se sustituye. `null` cuando el servidor no pudo releerlo, y entonces se
     // conserva el de la carga, viejo pero verdadero.
+    // Los pedidos enteros, cuando el servidor los trae: mandar a espera SACA el
+    // renglón de su pedido y sacarlo de la espera lo regresa, así que lo que hay
+    // que capturar —y el «0 de 9»— cambia. Llegan hechos con la misma función
+    // que la carga y aquí solo se sustituyen. `null` si la lista no se ha
+    // partido o no se pudieron leer, y entonces se conservan los de la carga.
+    if (respuesta.pedidos) datos.pedidos = respuesta.pedidos;
     if (respuesta.totales_de_los_pedidos && datos.pedidos) {
       datos.pedidos.forEach(p => {
         const nuevo = respuesta.totales_de_los_pedidos[String(p.pedido_id)];
@@ -2868,8 +2876,15 @@ async function cargarPedido(fecha) {
     moverRenglon(r.renglon_id, '/posponer', boton, aplicar);
   }
 
+  // Sacar de la espera dice, con la frase que ya viene hecha del servidor, si
+  // el renglón volvió al pedido de su proveedor o quedó sin repartir y por qué.
   function devolverPospuesto(r, boton) {
-    moverRenglon(r.renglon_id, '/devolver-pospuesto', boton, aplicar);
+    moverRenglon(r.renglon_id, '/devolver-pospuesto', boton, (respuesta) => {
+      aplicar(respuesta);
+      if (respuesta.frase_de_sacar_de_la_espera) {
+        nota('pedido-accion', respuesta.frase_de_sacar_de_la_espera, 'aviso');
+      }
+    });
   }
 
   // Corregir la cantidad. Lo que se teclea se revisa aquí ANTES de mandarlo, y
@@ -4416,7 +4431,7 @@ const enlaceCsv = (pedido, texto) => {
 // Desde el diseño del 2026-09-30 ya no es un `<details>` debajo de su pedido:
 // es la pantalla del paso tres, un pedido a la vez, y el avance y el botón de
 // enviar van en el pie (`pintarPasoCaptura`).
-const pintarCaptura = (pedido, alTachar) => {
+const pintarCaptura = (pedido, alTachar, alPosponer) => {
   const captura = pedido.captura;
   const caja = document.createElement('div');
   caja.className = 'captura' + (captura.todo_capturado ? ' completa' : '');
@@ -4477,7 +4492,21 @@ const pintarCaptura = (pedido, alTachar) => {
       ? 'Por pieza, sin IVA, como lo dio ' + captura.nombre + '. El que manda es el del portal.'
       : 'El precio lo vas a ver en el portal mientras lo capturas.';
 
-    li.append(casilla, clave, que, cuantas, costo);
+    // MANDAR A ESPERA ESTE RENGLÓN (lista de espera, ticket 04): el mismo botón
+    // y la misma ruta que en Revisar. Un renglón tachado ya está en el carrito
+    // del portal, así que el botón se apaga y DICE por qué: el motivo lo trae el
+    // servidor (`motivo_para_no_posponer`), la misma frase que daría el 409.
+    const aEspera = botonDeAccion('Mandar a espera', (b) => alPosponer({ renglon_id: linea.renglon_id }, b), 'tenida');
+    aEspera.classList.add('a-espera');
+    aEspera.disabled = !pedido.es_borrador || !linea.se_puede_mandar_a_espera;
+    aEspera.title = linea.se_puede_mandar_a_espera
+      ? 'Mandar a espera: sale de este pedido y de su total, y entra a la lista siguiente con ' + captura.nombre + '. Se puede sacar de la espera.'
+      : (linea.motivo_para_no_mandar_a_espera
+        ? 'No se puede mandar a espera: ' + linea.motivo_para_no_mandar_a_espera
+        : 'Ya no se puede mandar a espera: el pedido ya no es un borrador.');
+    aEspera.setAttribute('aria-label', 'Mandar a espera ' + linea.descripcion);
+
+    li.append(casilla, clave, que, cuantas, costo, aEspera);
     lista.append(li);
   });
   caja.append(lista);
@@ -4828,7 +4857,7 @@ const pintarParticion = (particion, pedidos, editable, alPartir, alEnviar, alTac
 // CAPTURAR Y ENVIAR (tickets 21 y 22): EL PASO TRES. A la izquierda los
 // pedidos de esta lista, cada uno con cuánto lleva tachado; a la derecha el
 // elegido, renglón por renglón, y al pie su botón de enviar.
-const pintarPasoCaptura = (pedidos, alTachar, alEnviar) => {
+const pintarPasoCaptura = (pedidos, alTachar, alEnviar, alPosponer) => {
   const caja = document.getElementById('captura-panel');
   caja.replaceChildren();
   // Los que se capturan —borradores con algo dentro— y los que ya se
@@ -4909,7 +4938,7 @@ const pintarPasoCaptura = (pedidos, alTachar, alEnviar) => {
   if (archivo) cabeza.append(archivo);
   trabajo.append(cabeza);
 
-  if (guardado.captura && guardado.captura.cuantos) trabajo.append(pintarCaptura(guardado, alTachar));
+  if (guardado.captura && guardado.captura.cuantos) trabajo.append(pintarCaptura(guardado, alTachar, alPosponer));
 
   // EL PIE: cuánto va, el botón de enviar y qué significa enviar.
   const pie = document.createElement('div');

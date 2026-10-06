@@ -709,12 +709,24 @@ def test_el_doble_rechaza_la_firma_de_pospuesto_en_un_renglon_abierto():
 
 
 def test_el_doble_acepta_un_pospuesto_firmado_y_rechaza_la_firma_vacia():
+    # Desde la lista de espera (0020) un pospuesto trae también su espera.
+    espera = {"espera_desde": MARTES, "listas_en_espera": 1}
     revisar_el_renglon(
-        _columnas(estado=RENGLON_POSPUESTO, pospuesto_por=CORREO, pospuesto_en=_local(MARTES))
+        _columnas(
+            estado=RENGLON_POSPUESTO,
+            pospuesto_por=CORREO,
+            pospuesto_en=_local(MARTES),
+            **espera,
+        )
     )
     with pytest.raises(ValueError, match="pospuesto_por"):
         revisar_el_renglon(
-            _columnas(estado=RENGLON_POSPUESTO, pospuesto_por="", pospuesto_en=_local(MARTES))
+            _columnas(
+                estado=RENGLON_POSPUESTO,
+                pospuesto_por="",
+                pospuesto_en=_local(MARTES),
+                **espera,
+            )
         )
 
 

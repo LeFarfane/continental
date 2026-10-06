@@ -103,6 +103,7 @@ from continental.transiciones import (
     motivo_para_no_corregir,
     motivo_para_no_editar,
     motivo_para_no_enviar,
+    proveedor_de_la_espera,
 )
 
 
@@ -526,6 +527,12 @@ def respuesta_en_reconocimiento(proveedor: str) -> RespuestaDeProveedor:
         estado="reconocimiento",
         mensaje="Doyle todavía no sabe leer esta página",
     )
+
+
+#: «No tocar esta columna» en `poner_estado_del_renglon`: `None` es un valor
+#: legítimo de `pedido_id` y de las columnas de la espera (lo sacan del pedido o
+#: lo dejan sin dueño), así que no sirve para decir «igual que antes».
+_IGUAL = object()
 
 
 @dataclass
@@ -1128,6 +1135,10 @@ class AlmacenamientoFalso:
         piezas_recibidas: float | None = None,
         pospuesto_por: str | None = None,
         pospuesto_en: dt.datetime | None = None,
+        proveedor_de_la_espera=_IGUAL,
+        espera_desde=_IGUAL,
+        listas_en_espera=_IGUAL,
+        pedido_id=_IGUAL,
     ) -> PedidoSugeridoGuardado | None:
         """El `UPDATE` pelado de un renglón, revisado contra los CHECK.
 
@@ -1146,7 +1157,14 @@ class AlmacenamientoFalso:
         `piezas_recibidas` entra por argumento, y un `recibido` sin ella rebota.
         **Desde el ADR 0025 un `pospuesto` también va firmado**
         (`ck_renglon_pospuesto`): `pospuesto_por` y `pospuesto_en` entran por
-        argumento, y sin ellos esto rebota igual que Postgres.
+        argumento, y sin ellos esto rebota igual que Postgres. **Y desde la
+        lista de espera (migración 0020) un `pospuesto` trae además desde
+        cuándo espera y cuántas listas lleva** (`ck_renglon_espera_pospuesto`).
+
+        `proveedor_de_la_espera`, `espera_desde`, `listas_en_espera` y
+        `pedido_id` valen «no tocar» si no se pasan: son columnas que otras
+        transiciones dejan como estaban, y `None` es un valor de verdad en las
+        cuatro.
         """
         self._revisar()
         encontrado = self._renglon_por_id(renglon_id)
@@ -1154,8 +1172,19 @@ class AlmacenamientoFalso:
             return None
         fila, lista = encontrado
 
+        espera = {
+            columna: valor
+            for columna, valor in (
+                ("proveedor_de_la_espera", proveedor_de_la_espera),
+                ("espera_desde", espera_desde),
+                ("listas_en_espera", listas_en_espera),
+                ("pedido_id", pedido_id),
+            )
+            if valor is not _IGUAL
+        }
         propuesta = {
             **fila,
+            **espera,
             "estado": estado,
             "descartado_por": descartado_por,
             "descartado_en": descartado_en,
@@ -1187,6 +1216,7 @@ class AlmacenamientoFalso:
             piezas_recibidas=propuesta["piezas_recibidas"],
             pospuesto_por=pospuesto_por,
             pospuesto_en=pospuesto_en,
+            **espera,
         )
         return armar_guardado(lista, lista["renglones"])
 
@@ -1260,11 +1290,24 @@ class AlmacenamientoFalso:
             is not None
         ):
             return None
+        # Lo que hace el `SET` de `_POSPONER`: el proveedor de la espera (el del
+        # pedido, si no el elegido), la fecha de la lista y el contador la
+        # primera vez —lo que el renglón ya traía de una espera anterior se
+        # conserva—, y el renglón SALE de su pedido, todo de una vez.
+        pedido = self._pedido_del_renglon(fila)
         return self.poner_estado_del_renglon(
             renglon_id,
             RENGLON_POSPUESTO,
             pospuesto_por=quien,
             pospuesto_en=dt.datetime.now(dt.UTC),
+            proveedor_de_la_espera=proveedor_de_la_espera(
+                None if pedido is None else pedido["proveedor"],
+                fila.get("proveedor_elegido"),
+                fila.get("proveedor_de_la_espera"),
+            ),
+            espera_desde=fila.get("espera_desde") or lista["fecha_del_pedido"],
+            listas_en_espera=fila.get("listas_en_espera") or 1,
+            pedido_id=None,
         )
 
     def devolver_pospuesto(
@@ -1288,7 +1331,32 @@ class AlmacenamientoFalso:
         ):
             return None
         # Las dos columnas se van a `None` juntas: lo exige ck_renglon_pospuesto.
-        return self.poner_estado_del_renglon(renglon_id, RENGLON_ABIERTO)
+        #
+        # Y lo de la espera, como el `SET` de `_DEVOLVER_DE_POSPUESTO`: regresa
+        # al pedido de su proveedor **de la misma lista y si sigue en
+        # borrador** (`ux_pedido_proveedor`: a lo sumo uno), y si no, sin
+        # repartir. Los datos de la espera se borran salvo que el renglón
+        # venga de una espera anterior (`piezas_pospuestas > 0`).
+        destino = next(
+            (
+                p
+                for p in self.pedidos
+                if p["negocio"] == fila["negocio"]
+                and p["pedido_sugerido_id"] == fila["pedido_sugerido_id"]
+                and p["proveedor"] == fila.get("proveedor_de_la_espera")
+                and p["estado"] == BORRADOR
+            ),
+            None,
+        )
+        hereda = fila.get("piezas_pospuestas", 0) > 0
+        return self.poner_estado_del_renglon(
+            renglon_id,
+            RENGLON_ABIERTO,
+            pedido_id=None if destino is None else destino["pedido_id"],
+            proveedor_de_la_espera=fila.get("proveedor_de_la_espera") if hereda else None,
+            espera_desde=fila.get("espera_desde") if hereda else None,
+            listas_en_espera=fila.get("listas_en_espera") if hereda else None,
+        )
 
     def poner_la_cantidad(
         self,

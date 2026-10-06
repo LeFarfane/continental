@@ -807,6 +807,19 @@ class RenglonGuardado:
     #: `CLAUDE.md`).
     pospuesto_por: str | None = None
     pospuesto_en: dt.datetime | None = None
+    #: **LA ESPERA TIENE DUEÑO Y TIENE EDAD** (lista de espera, ticket 04,
+    #: migración 0020). `proveedor_de_la_espera`: a quién se le iba a pedir
+    #: cuando se mandó a espera —el del pedido al que estaba repartido, y si no,
+    #: el elegido a mano; `None` si no había ninguno—. `espera_desde`: la fecha
+    #: de la lista donde se mandó **por primera vez**, la que se arrastra
+    #: aunque se vuelva a mandar. `listas_en_espera`: cuántas listas lleva
+    #: (≥ 1), junto con la fecha o ninguna de las dos (`ck_renglon_espera`).
+    #: Un `pospuesto` siempre trae fecha y contador
+    #: (`ck_renglon_espera_pospuesto`); un `abierto` que vuelve de una espera
+    #: anterior también los trae —los copia la lista siguiente, ticket 05—.
+    proveedor_de_la_espera: str | None = None
+    espera_desde: dt.date | None = None
+    listas_en_espera: int | None = None
 
     @property
     def esta_pospuesto(self) -> bool:
@@ -1960,6 +1973,29 @@ def revisar_el_renglon(columnas: dict) -> None:
             "sin la firma, \"¿por qué pasó esto a mañana?\" no tendría a quién "
             "preguntársele."
         )
+    # La espera con dueño y con edad (migración 0020, lista de espera ticket 04).
+    if columnas.get("proveedor_de_la_espera") == "":
+        raise ValueError(
+            "Proveedor de la espera vacío. Lo rechaza "
+            "ck_renglon_espera_proveedor: o hay clave de proveedor o es NULL."
+        )
+    listas = columnas.get("listas_en_espera")
+    if listas is not None and listas < 1:
+        raise ValueError(
+            f"listas_en_espera de {listas}. Lo rechaza ck_renglon_espera_listas: "
+            "un renglón que espera lleva al menos una lista."
+        )
+    if (columnas.get("espera_desde") is None) != (listas is None):
+        raise ValueError(
+            "espera_desde y listas_en_espera van juntas o ninguna. Lo rechaza "
+            "ck_renglon_espera: una fecha sin contador, o un contador sin "
+            "fecha, no dice desde cuándo espera ni cuántas listas lleva."
+        )
+    if columnas["estado"] == RENGLON_POSPUESTO and listas is None:
+        raise ValueError(
+            "Pospuesto sin decir desde cuándo espera ni cuántas listas lleva. "
+            "Lo rechaza ck_renglon_espera_pospuesto."
+        )
 
 
 
@@ -2952,6 +2988,14 @@ class AlmacenamientoDelPedido(Protocol):
         **No cambia ninguna cantidad**: lo que pasa a la siguiente lista es lo
         que `cantidad_a_pedir` valga cuando esa lista se arme
         (`lo_pospuesto`). `quien` es una firma, no un permiso (regla 3).
+
+        **Lista de espera (ticket 04):** en la misma operación guarda a quién se
+        le iba a pedir (`proveedor_de_la_espera`: el del pedido, si no el
+        elegido, si no `None`), desde cuándo espera y cuántas listas lleva (la
+        fecha de la lista y 1 la primera vez; lo que el renglón ya traía se
+        conserva) y **lo saca de su pedido** (`pedido_id` a `None`). **Un
+        renglón tachado no se manda** (`None`, y
+        `transiciones.motivo_para_no_editar` dice por qué).
         """
         ...
 
@@ -2963,6 +3007,11 @@ class AlmacenamientoDelPedido(Protocol):
         Lo que hace segura la operación de un clic (ADR 0025). Las dos columnas
         de la firma se limpian juntas. `None` si el renglón no estaba
         `pospuesto` o su lista ya no está abierta.
+
+        **Lista de espera (ticket 04):** regresa al pedido de su proveedor de la
+        misma lista si ese pedido sigue en `borrador`; si no, vuelve sin
+        repartir (`pedido_id` `None`). Los datos de la espera se borran salvo
+        que el renglón venga de una espera anterior (`piezas_pospuestas > 0`).
         """
         ...
 
@@ -3617,7 +3666,8 @@ _LEER_RENGLONES = text(
            recibido_por, recibido_en, recibido_con_compras,
            compras_rechazadas, recepcion_rechazada_por, recepcion_rechazada_en,
            piezas_recibidas, piezas_que_faltaron, anaquel,
-           pospuesto_por, pospuesto_en, piezas_pospuestas
+           pospuesto_por, pospuesto_en, piezas_pospuestas,
+           proveedor_de_la_espera, espera_desde, listas_en_espera
     from pedidos.renglon
     where negocio = :negocio and pedido_sugerido_id = :pedido_sugerido_id
     order by renglon_id
@@ -3641,7 +3691,8 @@ _LEER_RENGLON_POR_ID = text(
            recibido_por, recibido_en, recibido_con_compras,
            compras_rechazadas, recepcion_rechazada_por, recepcion_rechazada_en,
            piezas_recibidas, piezas_que_faltaron, anaquel,
-           pospuesto_por, pospuesto_en, piezas_pospuestas
+           pospuesto_por, pospuesto_en, piezas_pospuestas,
+           proveedor_de_la_espera, espera_desde, listas_en_espera
     from pedidos.renglon
     where negocio = :negocio and renglon_id = :renglon_id
     """
@@ -4017,18 +4068,50 @@ _DEVOLVER_A_ABIERTO = text(
 #
 # **No toca `cantidad_final` ni `cantidad_propuesta`**: lo que pasa a mañana es
 # `cantidad_a_pedir` tal como esté en el momento de la siguiente lista, y eso se
-# lee entonces (`_LO_POSPUESTO`), no se copia aquí. Devolverlo deja el renglón
-# exactamente como estaba.
+# lee entonces (`_LO_POSPUESTO`), no se copia aquí.
+#
+# MANDAR A ESPERA CON SU PROVEEDOR (lista de espera, ticket 04, migración 0020).
+# En la MISMA sentencia —una transacción, un solo `UPDATE`—:
+#
+#   - `proveedor_de_la_espera` es el proveedor del pedido al que el renglón
+#     estaba repartido; si no estaba repartido, el elegido a mano; si no hay
+#     ninguno, el que el renglón ya traía de una espera anterior (ticket 05), y
+#     si tampoco, NULL y la lista siguiente lo reparte como hoy. En el `SET` de un
+#     `UPDATE`, `r.pedido_id` y `r.proveedor_elegido` son los valores de ANTES.
+#     `transiciones.proveedor_de_la_espera` es la misma regla en Python y la
+#     usa el doble.
+#   - `pedido_id = null`: el renglón SALE de su pedido. Es lo que lo quita de
+#     la captura, del «0 de 9» y del total, y lo que deja de contar un renglón
+#     en espera como parte de lo que se va a pedir hoy.
+#   - `espera_desde` y `listas_en_espera`: la primera vez, la fecha de la lista
+#     y 1; si el renglón ya traía los de una espera anterior —los copia la
+#     lista siguiente, ticket 05— se CONSERVAN: `coalesce` sobre lo que ya
+#     había.
+#
+# **Y un renglón tachado no se manda a espera** (`r.capturado_por is null`): ya
+# está en el carrito del portal de su proveedor. Es la misma condición que
+# `transiciones.motivo_para_no_editar` dice con palabras.
 _POSPONER = text(
     """
     update pedidos.renglon as r
        set estado = 'pospuesto',
            pospuesto_por = :quien,
-           pospuesto_en = now()
+           pospuesto_en = now(),
+           proveedor_de_la_espera = coalesce(
+               (select pe.proveedor
+                  from pedidos.pedido as pe
+                 where pe.pedido_id = r.pedido_id
+                   and pe.negocio = r.negocio),
+               r.proveedor_elegido,
+               r.proveedor_de_la_espera),
+           espera_desde = coalesce(r.espera_desde, p.fecha_del_pedido),
+           listas_en_espera = coalesce(r.listas_en_espera, 1),
+           pedido_id = null
       from pedidos.pedido_sugerido as p
      where r.negocio = :negocio
        and r.renglon_id = :renglon_id
        and r.estado = 'abierto'
+       and r.capturado_por is null
        and p.pedido_sugerido_id = r.pedido_sugerido_id
        and p.negocio = r.negocio
        and p.estado = 'abierto'
@@ -4043,12 +4126,39 @@ _POSPONER = text(
 # deshacer también es modificar, y un renglón no puede quedar pospuesto dentro
 # de una lista cerrada sin manera de volver. Cuesta lo mismo que cuesta
 # deshacer un descarte: no queda rastro del clic deshecho.
+#
+# SACAR DE LA ESPERA REGRESA AL PEDIDO DE SU PROVEEDOR (lista de espera, ticket
+# 04): `pedido_id` es el del pedido de la MISMA lista y de `proveedor_de_la_
+# espera` **si sigue en `borrador`**; si no hay tal pedido —se envió, se
+# canceló, nunca se partió o el renglón no tenía proveedor— la subconsulta da
+# NULL y el renglón vuelve SIN REPARTIR, que es "como si nunca lo hubieran
+# repartido": la partición lo vuelve a repartir. `ux_pedido_proveedor` garantiza
+# que la subconsulta devuelve a lo sumo una fila. Y la respuesta lo dice con una
+# frase (`transiciones.frase_de_sacar_de_la_espera`).
+#
+# Lo que la espera dejó escrito se borra **salvo que el renglón venga de una
+# espera anterior** (`piezas_pospuestas > 0`: lo trajo la lista siguiente, y
+# esos datos —desde cuándo, cuántas listas— siguen siendo verdad aunque este
+# clic se deshaga). Sin eso, un renglón de hoy devuelto diría que "espera desde
+# hoy" sin haber esperado nunca.
 _DEVOLVER_DE_POSPUESTO = text(
     """
     update pedidos.renglon as r
        set estado = 'abierto',
            pospuesto_por = null,
-           pospuesto_en = null
+           pospuesto_en = null,
+           pedido_id = (select pe.pedido_id
+                          from pedidos.pedido as pe
+                         where pe.negocio = r.negocio
+                           and pe.pedido_sugerido_id = r.pedido_sugerido_id
+                           and pe.proveedor = r.proveedor_de_la_espera
+                           and pe.estado = 'borrador'),
+           proveedor_de_la_espera = case when r.piezas_pospuestas > 0
+                                         then r.proveedor_de_la_espera end,
+           espera_desde = case when r.piezas_pospuestas > 0
+                               then r.espera_desde end,
+           listas_en_espera = case when r.piezas_pospuestas > 0
+                                   then r.listas_en_espera end
       from pedidos.pedido_sugerido as p
      where r.negocio = :negocio
        and r.renglon_id = :renglon_id
@@ -4085,7 +4195,8 @@ _LO_POSPUESTO = text(
            r.recibido_por, r.recibido_en, r.recibido_con_compras,
            r.compras_rechazadas, r.recepcion_rechazada_por,
            r.recepcion_rechazada_en, r.piezas_recibidas, r.piezas_que_faltaron,
-           r.anaquel, r.pospuesto_por, r.pospuesto_en, r.piezas_pospuestas
+           r.anaquel, r.pospuesto_por, r.pospuesto_en, r.piezas_pospuestas,
+           r.proveedor_de_la_espera, r.espera_desde, r.listas_en_espera
     from pedidos.renglon as r
     join pedidos.pedido_sugerido as s
       on s.pedido_sugerido_id = r.pedido_sugerido_id
@@ -6470,6 +6581,14 @@ def renglon_guardado_desde_columnas(fila) -> RenglonGuardado:
         # la migración es "nadie lo pospuso", no un KeyError.
         pospuesto_por=fila.get("pospuesto_por"),
         pospuesto_en=fila.get("pospuesto_en"),
+        # La espera con dueño y con edad (0020), con `.get` por lo mismo.
+        proveedor_de_la_espera=fila.get("proveedor_de_la_espera"),
+        espera_desde=fila.get("espera_desde"),
+        listas_en_espera=(
+            None
+            if fila.get("listas_en_espera") is None
+            else int(fila["listas_en_espera"])
+        ),
         # `int(...)` en el borde, igual que el resto: Postgres devuelve
         # `integer` como `int`, pero el día que la columna cambie de tipo esto
         # no se entera a medias.

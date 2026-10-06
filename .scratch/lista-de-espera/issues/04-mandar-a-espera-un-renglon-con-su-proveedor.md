@@ -11,19 +11,19 @@ también guarda el proveedor si ya lo hay. Ver la enmienda 2026-10-05 al ADR
 
 **Status:** ready-for-agent
 
-- [ ] Migración nueva (después de la 0019) en el renglón: proveedor de la
+- [x] Migración nueva (después de la 0019) en el renglón: proveedor de la
       espera, desde cuándo espera, cuántas listas lleva. Con sus CHECK, y los
       mismos CHECK repetidos en Python.
-- [ ] Al mandar a espera se guarda el proveedor: el del pedido al que estaba
+- [x] Al mandar a espera se guarda el proveedor: el del pedido al que estaba
       repartido; si no estaba repartido, el elegido a mano; si no hay ninguno,
       vacío. El renglón deja de pertenecer a su pedido, en la misma
       transacción.
-- [ ] La primera vez, «desde cuándo» es la fecha de la lista y el contador vale 1.
-- [ ] Un renglón tachado (capturado) no se manda a espera: el servidor lo
+- [x] La primera vez, «desde cuándo» es la fecha de la lista y el contador vale 1.
+- [x] Un renglón tachado (capturado) no se manda a espera: el servidor lo
       rechaza con su motivo (en `transiciones`), y el botón lo dice.
-- [ ] Sacar de la espera lo regresa al pedido de su proveedor si ese pedido
+- [x] Sacar de la espera lo regresa al pedido de su proveedor si ese pedido
       sigue en `borrador`; si no, vuelve sin repartir y se dice por qué.
-- [ ] El total del pedido (ticket 03, si ya está) baja al mandar a espera.
-- [ ] Pruebas en los cuatro niveles: lo puro (de qué proveedor hereda), el doble
+- [x] El total del pedido (ticket 03, si ya está) baja al mandar a espera.
+- [x] Pruebas en los cuatro niveles: lo puro (de qué proveedor hereda), el doble
       y el SQL como texto (sale del pedido, respeta lo tachado), las rutas de
       punta a punta y la estática del JS para el botón de Captura.

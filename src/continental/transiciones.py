@@ -386,6 +386,71 @@ ACCIONES_DE_EDICION = ACCIONES_QUE_EXIGEN_RENGLON_ABIERTO + (
 )
 
 
+#: Por qué un renglón tachado no se manda a espera (lista de espera, ticket
+#: 04). La misma frase en el 409, en el `title` del botón y en la respuesta: una
+#: sola vez aquí. Tachado quiere decir «ya lo tecleé en el portal de su
+#: proveedor»: el renglón está en un carrito que Continental no ve, y
+#: mandarlo a espera lo sacaría del pedido sin sacarlo del carrito.
+MOTIVO_TACHADO_NO_SE_MANDA_A_ESPERA = (
+    "ese renglón está tachado: ya está en el carrito del portal de su "
+    "proveedor. Primero destáchalo —y bórralo del carrito si ya lo "
+    "capturaste— y luego mándalo a espera."
+)
+
+
+def proveedor_de_la_espera(
+    proveedor_del_pedido: str | None,
+    proveedor_elegido: str | None,
+    proveedor_que_ya_traia: str | None = None,
+) -> str | None:
+    """A quién se le iba a pedir un renglón que se manda a espera.
+
+    El del pedido al que estaba repartido; si no estaba repartido, el que una
+    persona eligió a mano; si no, el que el renglón ya traía de una espera
+    anterior (lo copia la lista siguiente, ticket 05); si no hay ninguno, `None`
+    y la lista siguiente lo reparte como hoy. **El pedido manda sobre la elección**: es donde de verdad
+    iba a salir. La misma regla que el `coalesce` de `_POSPONER`, escrita en
+    Python para el doble y para las pruebas, porque la sentencia no se corre
+    desde la torre. Una cadena vacía cuenta como «ninguno»: la columna no admite
+    vacíos (`ck_renglon_espera_proveedor`).
+    """
+    return (
+        proveedor_del_pedido or proveedor_elegido or proveedor_que_ya_traia or None
+    )
+
+
+def frase_de_sacar_de_la_espera(
+    antes: "RenglonGuardado | None",
+    despues: "RenglonGuardado",
+    nombre_del_proveedor: str | None = None,
+) -> str | None:
+    """Qué pasó con el renglón que se sacó de la espera, o `None` si no hay nada que decir.
+
+    `antes` es el renglón tal como estaba en espera (trae `proveedor_de_la_
+    espera`); `despues`, ya devuelto. Regresó a su pedido si `pedido_id` quedó
+    puesto; si no, vuelve **sin repartir** y se dice por qué —un renglón que
+    cambia de lugar sin decirlo es un renglón que alguien busca donde no está—.
+    `None` si `antes` no estaba en espera o no se pudo leer: sin saber de dónde
+    venía, no se afirma nada.
+    """
+    if antes is None or antes.estado != RENGLON_POSPUESTO:
+        return None
+    proveedor = antes.proveedor_de_la_espera
+    nombre = nombre_del_proveedor or proveedor
+    if despues.pedido_id is not None:
+        return f"Volvió al pedido de {nombre}."
+    if proveedor is None:
+        return (
+            "Volvió a la lista sin repartir: cuando se mandó a espera no tenía "
+            "proveedor. Se reparte de nuevo en el paso de repartir."
+        )
+    return (
+        f"Volvió a la lista sin repartir: el pedido de {nombre} de esta lista "
+        "ya no está en borrador (se envió, se canceló o nunca se armó). Se "
+        "reparte de nuevo en el paso de repartir."
+    )
+
+
 def _motivo_por_estado_del_renglon(renglon: "RenglonGuardado", accion: str) -> str:
     """La frase de por qué el renglón mismo ya no califica para `accion`.
 
@@ -463,6 +528,8 @@ def motivo_para_no_editar(
             )
     elif renglon.estado != RENGLON_ABIERTO:
         return _motivo_por_estado_del_renglon(renglon, accion)
+    elif accion == "posponer" and renglon.esta_capturado:
+        return MOTIVO_TACHADO_NO_SE_MANDA_A_ESPERA
 
     if lista is None or lista.estado != ABIERTO:
         return (

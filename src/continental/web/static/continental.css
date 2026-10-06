@@ -1046,7 +1046,7 @@ button.precio-detalle:hover { background: var(--relleno-suave); }
    clic, la descripción, las piezas y el precio. */
 .captura { background: var(--superficie); border-radius: var(--radio-lg); overflow: hidden; box-shadow: inset 0 0 0 var(--pelo) var(--linea); }
 .captura li {
-  display: grid; grid-template-columns: 1.75rem auto minmax(0, 1fr) auto auto; gap: 4px 12px; align-items: center;
+  display: grid; grid-template-columns: 1.75rem auto minmax(0, 1fr) auto auto auto; gap: 4px 12px; align-items: center;
   padding: 10px 16px; border-bottom: var(--pelo) solid var(--linea);
 }
 .captura li:last-child { border-bottom: 0; }
@@ -1057,6 +1057,8 @@ button.precio-detalle:hover { background: var(--relleno-suave); }
 .captura li .cuantas { font: 600 var(--texto-subtitulo) var(--letra); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 .captura li .costo { font: var(--texto-nota) var(--letra); color: var(--tenue); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 .captura li .costo.nose { color: var(--tercero); font-style: italic; }
+/* MANDAR A ESPERA, por renglón (lista de espera, ticket 04). */
+.captura li .a-espera { min-height: 1.75rem; padding: 0 10px; font-size: .8125rem; white-space: nowrap; }
 /* LA CLAVE SE COPIA DE UN CLIC: un botón de verdad, en monoespaciada. */
 .captura .clave, .resultados .clave {
   justify-self: start; min-height: 1.6rem; padding: 2px 8px; border: 0; border-radius: var(--radio-xs); cursor: copy;
@@ -1421,6 +1423,7 @@ li.transito.atrasado { opacity: 1; box-shadow: inset 4px 0 0 var(--aviso-vivo); 
   .captura li label { grid-column: 1 / -1; order: 3; }
   .captura li .cuantas { order: 4; text-align: left; grid-column: 1 / 3; }
   .captura li .costo { order: 5; }
+  .captura li .a-espera { order: 6; grid-column: 1 / -1; justify-self: end; }
   .vistas { width: 100%; }
   .vistas label { flex: 1; padding: 0 8px; }
   .detalle { display: block; }
