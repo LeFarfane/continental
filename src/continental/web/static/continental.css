@@ -878,6 +878,7 @@ tr.transito.atrasado > td:first-child { border-left: 4px double var(--aviso-vivo
 .inspector-bloque h4, .inspector-titulo h4 { font: 600 var(--texto-nota) var(--letra); color: var(--tenue); }
 .inspector-titulo { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 #inspector-leido { font: var(--texto-leyenda) var(--letra); color: var(--tenue); text-align: right; }
+.inspector-abcxyz { margin: 0; font: var(--texto-leyenda) var(--letra); color: var(--tenue); }
 .inspector-ayuda { font: var(--texto-leyenda) var(--letra); color: var(--tenue); }
 .inspector-marcas { display: flex; flex-direction: column; gap: 10px; }
 .inspector-marcas li { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px 10px; }

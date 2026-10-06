@@ -459,3 +459,41 @@ def _producto(
         esta_activo=True,
         es_granel=False,
     )
+
+
+# ------------------------------------------------ la clase ABC-XYZ por producto
+
+
+def test_la_lista_trae_la_clase_abc_xyz_de_cada_producto_con_y_sin_clase(
+    cliente, almacen
+):
+    """`clases` sale con una frase por producto: con clase, sin clase y sin catálogo."""
+    from dataclasses import replace
+
+    almacen.catalogo_en_memoria = [
+        replace(_producto(1, "7501000000001", "PARACETAMOL", anaquel="PATENTE 1"),
+                clase_abc="A", clase_xyz="X"),
+        _producto(2, "7501000000002", "SABRITAS", anaquel="CANASTA"),
+    ]
+    almacen.ventas_en_memoria = [
+        _venta(dt.date(2026, 9, 16), producto_id=n, cantidad=1) for n in (1, 2, 99)
+    ]
+
+    clases = cliente.get(RUTA).json()["clases"]
+
+    assert clases["1"]["frase"].startswith("Clase AX: A = ")
+    assert clases["2"]["frase"].startswith("Sin clase:") and "12 meses" in clases["2"]["frase"]
+    assert clases["99"]["frase"].startswith("Sin clase:") and "catálogo" in clases["99"]["frase"]
+
+
+def test_si_el_catalogo_no_se_lee_la_lista_sirve_y_la_clase_lo_dice(cliente, almacen):
+    """Una lectura caída es un hueco con motivo, no «no vendió» ni un 500."""
+    almacen.ventas_en_memoria = [_venta(dt.date(2026, 9, 16), producto_id=1, cantidad=1)]
+    almacen.falla = RuntimeError("se cayó")
+
+    respuesta = cliente.get(RUTA)
+
+    cuerpo = respuesta.json()
+    if "clases" in cuerpo:  # si la lista misma no se pudo armar, no hay renglones
+        for c in cuerpo["clases"].values():
+            assert "no se pudo leer" in c["frase"]

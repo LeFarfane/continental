@@ -82,6 +82,19 @@ CLASES_ABC: tuple[str, ...] = ("A", "B", "C")
 #: afirmaba algo que nadie midió.
 SIN_CLASE_ABC = ""
 
+#: Los tres valores que toma `marts.dim_producto.clase_xyz` (ADR 0018 de
+#: farmacia-data): coeficiente de variación de las piezas mensuales, X menor a
+#: 0.5, Y menor a 1.0, Z el resto —y `meses_con_venta <= 1` fuerza Z—. De
+#: más a menos predecible. Se escriben aquí por la misma razón que
+#: `CLASES_ABC`: son el vocabulario de otro repo y una tupla tiene dónde
+#: ponerle la comparación.
+CLASES_XYZ: tuple[str, ...] = ("X", "Y", "Z")
+
+#: Que la predictibilidad del producto no se sabe. Igual que `SIN_CLASE_ABC`:
+#: **no es una cuarta clase**, y dbt la deja en NULL en los mismos productos
+#: (los que no vendieron nada en 365 días).
+SIN_CLASE_XYZ = ""
+
 #: **El interruptor del bloqueo externo. Se movió el 2026-09-20.**
 #:
 #: `marts.dim_producto` ya trae `clase_abc`: el ADR 0018 de farmacia-data se
@@ -118,6 +131,16 @@ def clase_abc_normalizada(crudo) -> str:
     """
     texto = ("" if crudo is None else str(crudo)).strip().upper()
     return texto if texto in CLASES_ABC else SIN_CLASE_ABC
+
+
+def clase_xyz_normalizada(crudo) -> str:
+    """Lo que venga en la columna → `"X"`, `"Y"`, `"Z"` o `SIN_CLASE_XYZ`.
+
+    Misma regla que `clase_abc_normalizada` y por la misma razón: un valor que
+    no sea una de las tres letras es "no se sabe", nunca una clase inventada.
+    """
+    texto = ("" if crudo is None else str(crudo)).strip().upper()
+    return texto if texto in CLASES_XYZ else SIN_CLASE_XYZ
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,6 +185,11 @@ class Producto:
     esta_activo: bool
     es_granel: bool
     clase_abc: str = SIN_CLASE_ABC
+    #: La otra mitad de la misma clasificación (ADR 0018): qué tan estable es
+    #: la venta. Sale de la misma consulta, con el mismo interruptor, y vale
+    #: `SIN_CLASE_XYZ` en los mismos productos que `clase_abc`. Solo la pinta el
+    #: detalle del renglón; nada ordena por ella.
+    clase_xyz: str = SIN_CLASE_XYZ
 
     @property
     def tiene_clase_abc(self) -> bool:
@@ -369,6 +397,10 @@ _COLUMNAS_DEL_CATALOGO = (
 #: Lo único que se le agrega a la consulta cuando el interruptor está encendido.
 COLUMNA_DE_LA_CLASE_ABC = "clase_abc"
 
+#: Su pareja, que viaja con ella: dbt las materializa juntas (ADR 0018) y las
+#: enciende el mismo interruptor.
+COLUMNA_DE_LA_CLASE_XYZ = "clase_xyz"
+
 
 def _sql_del_catalogo(con_la_clase: bool, por_clave: bool = False) -> str:
     """El `select` del catálogo, con o sin la columna de la clase.
@@ -392,6 +424,7 @@ def _sql_del_catalogo(con_la_clase: bool, por_clave: bool = False) -> str:
     columnas = list(_COLUMNAS_DEL_CATALOGO)
     if con_la_clase:
         columnas.append(COLUMNA_DE_LA_CLASE_ABC)
+        columnas.append(COLUMNA_DE_LA_CLASE_XYZ)
     return (
         f"select {', '.join(columnas)}\n"
         "from marts.dim_producto\n"
@@ -481,6 +514,7 @@ def _producto_de(f) -> Producto:
         # `getattr` y no `f.clase_abc` para que, si el interruptor se
         # apaga y la fila no la trae, esto siga valiendo "no se sabe".
         clase_abc=clase_abc_normalizada(getattr(f, COLUMNA_DE_LA_CLASE_ABC, None)),
+        clase_xyz=clase_xyz_normalizada(getattr(f, COLUMNA_DE_LA_CLASE_XYZ, None)),
     )
 
 

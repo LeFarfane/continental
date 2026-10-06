@@ -28,6 +28,7 @@ from pydantic import BaseModel
 
 from continental import __version__
 from continental.almacen import DiaCalendario, LecturaDelAlmacen
+from continental.clase_abc_xyz import clase_del_renglon
 from continental.almacenamiento import (
     ABIERTO,
     CANTIDAD_FINAL_MINIMA,
@@ -839,6 +840,8 @@ def _respuesta_de_la_lista(
     # enviar y tachar no lo cambian y la pantalla lo pinta una vez.
     respuesta["ventas"] = ventas
     respuesta["avisos"] = avisos
+    # LA CLASE ABC-XYZ DE CADA PRODUCTO, para el detalle del renglón.
+    respuesta["clases"] = _las_clases_de_la_lista(almacen, guardado)
     # LOS VECINOS (bitácora navegable, 2026-09-27). Ver `Vecinos` para el
     # porqué de traerlos aquí y no por un endpoint de navegación aparte.
     respuesta["vecinos"] = _vecinos_como_json(
@@ -866,6 +869,37 @@ def _respuesta_de_la_lista(
             renglon.pop("porque_no_hay_lectura", None)
             renglon["huecos_reintentables"] = []
     return respuesta
+
+
+def _las_clases_de_la_lista(
+    almacen: LecturaDelAlmacen, guardado: PedidoSugeridoGuardado
+) -> dict[str, dict]:
+    """`{producto_id: {abc, xyz, frase}}` de los productos de la lista. Lee.
+
+    Va a nivel de la lista y no dentro de cada renglón por dos razones: la clase
+    es un dato del catálogo de hoy, no del renglón congelado (guardarla con él
+    la dejaría diciendo "A" el día que el producto deje de venderse, el error
+    silencioso que descartó el ADR 0018 de farmacia-data), y las rutas que
+    devuelven **un** renglón no tienen el catálogo a la mano y sustituyen la fila
+    sin tocar este mapa. Una lectura del catálogo por carga, no una por renglón.
+
+    **Su falla es un hueco con motivo, no una lista vacía ni un 500** (regla 4):
+    cada producto sale con la frase «Sin clase: no se pudo leer…». La clave es
+    texto porque así viaja una clave de objeto en JSON.
+    """
+    try:
+        catalogo = {p.producto_id: p for p in almacen.catalogo()}
+        se_pudo_leer = True
+    except Exception:  # noqa: BLE001 — sin catálogo la lista sigue sirviendo
+        log.exception("No se pudo leer el catálogo para las clases ABC-XYZ")
+        catalogo = {}
+        se_pudo_leer = False
+    return {
+        str(r.propuesto.producto_id): clase_del_renglon(
+            catalogo.get(r.propuesto.producto_id), se_pudo_leer=se_pudo_leer
+        )
+        for r in guardado.renglones
+    }
 
 
 @app.get("/api/pedido-sugerido/dia/{fecha}")

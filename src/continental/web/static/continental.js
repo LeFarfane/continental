@@ -2087,6 +2087,14 @@ const pintarDetalle = (r, acciones) => {
   }));
   parte('marcas-bloque').hidden = !marcas.length;
 
+  // DÓNDE CAE EN LA CLASIFICACIÓN ABC-XYZ. La frase la compone el servidor
+  // (`clase_abc_xyz.py`), también cuando no hay clase —«Sin clase: …»—. Si ni
+  // el mapa ni el producto llegaron, se dice, no se deja el hueco.
+  const clase = acciones.clases && acciones.clases[String(r.producto_id)];
+  parte('abcxyz').textContent = clase
+    ? clase.frase
+    : 'Clase ABC-XYZ: la respuesta del servidor no la trajo.';
+
   const precios = preciosDelDetalle(r, acciones);
   parte('precios').replaceChildren(precios.cuerpo);
   parte('leido').textContent = precios.leido;
@@ -2651,6 +2659,7 @@ async function cargarPedido(fecha) {
       abrirSesion: abrirSesion,
       confirmarSesion: confirmarSesion,
       elegir: elegirRenglon,
+      clases: datos.clases,
     };
     // Los renglones que se ven con la vista de ahora. El elegido —el que
     // enseña el detalle— tiene que estar entre ellos: si la vista lo escondió
@@ -2740,6 +2749,7 @@ async function cargarPedido(fecha) {
       verEnElPortal: verEnElPortal,
       cerrarVista: cerrarVista,
       elegir: elegirRenglon,
+      clases: datos.clases,
     });
     if (abrir) document.getElementById('inspector-cerrar').focus();
   }

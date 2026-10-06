@@ -394,3 +394,12 @@ de medicamentos.
 de 3,429 al 2026-09). **Siempre se muestra, marcado como tal.** Un producto que
 desaparece de la lista por no tener anaquel es mercancía que va a faltar sin que
 nadie se entere.
+
+**Clase ABC-XYZ** — dónde cae un producto según lo que se vendió en 12 meses,
+calculada por dbt en `marts.dim_producto` (ADR 0018 de farmacia-data). La letra
+**ABC** dice cuánto pesa en la utilidad: A es el 80% de la utilidad entre todas
+las A, B hasta el 95%, C el resto. La letra **XYZ** dice qué tan estable es su
+venta mes a mes: X estable, Y variable, Z errática (o vendió en un solo mes).
+El detalle del renglón la enseña como «Clase AX: A = … · X = …». **Sin clase**
+es el producto que no vendió en 365 días: no es una C, es «no se sabe», y se
+dice con su motivo, nunca como un hueco.
