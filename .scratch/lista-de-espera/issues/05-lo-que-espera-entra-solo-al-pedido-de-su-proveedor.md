@@ -26,4 +26,5 @@ aritmética y desde cuándo espera. Ver la enmienda 2026-10-05 al ADR 0025
 - [x] El renglón muestra «en espera desde el lunes 5 · 3 listas».
 - [x] Pruebas: lo puro (suma, contador, herencia de proveedor), el doble, y una
       ruta de punta a punta de varios días (lunes manda, martes aparece
-      repartido, martes vuelve a mandar, miércoles cuenta 2).
+      repartido, martes vuelve a mandar, miércoles cuenta 3: lunes, martes y
+      miércoles).
