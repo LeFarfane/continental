@@ -252,8 +252,10 @@ const respuestaDe = async (peticion, cuando = 'al_leer') => {
 // un "eso ya no se puede" del servidor, que ya dice qué hacer en su `detalle`.
 // `comoAviso` la rotula "Ojo:" aunque traiga qué hacer: lo que no es una falla
 // de lectura —las ventas que no han llegado— no se pinta como una.
+// `id` puede ser el elemento mismo: un párrafo recién creado todavía no está
+// en la página, y buscarlo por id daría `null` (la conciliación, 2026-10-05).
 const notaDeFalla = (id, falla, comoAviso) => {
-  const p = document.getElementById(id);
+  const p = typeof id === 'string' ? document.getElementById(id) : id;
   const esFalla = !!falla.que_hacer && !comoAviso;
   p.className = 'nota falla ' + (esFalla ? 'mal' : 'aviso');
   const rotulo = document.createElement('b');
@@ -3653,7 +3655,7 @@ const pintarConciliacion = (datos) => {
     const p = document.createElement('p');
     p.id = 'conciliacion-aviso-' + i;
     piezas.push(p);
-    notaDeFalla(p.id, aviso);
+    notaDeFalla(p, aviso);
   });
 
   // LO PROPUESTO QUE SÍ SE COMPRÓ (bloque 1): con a quién, cuánto y a qué

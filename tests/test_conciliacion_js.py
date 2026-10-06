@@ -182,3 +182,16 @@ def test_el_css_reusa_las_variables_de_siempre_y_no_estrena_color():
     assert "rgb" not in bloque
     for variable in ("--tenue", "--aviso", "--mal"):
         assert variable in bloque
+
+
+def test_los_avisos_de_la_conciliacion_se_pintan_sin_buscarlos_por_id():
+    """Bug del 2026-09-27, visto el 2026-10-05: los avisos de la conciliación
+    se pintaban con `notaDeFalla(p.id, ...)` ANTES de que el párrafo estuviera
+    en la página. `getElementById` daba `null`, el bloque entero tronaba y la
+    falla que tenía que verse en «En camino» no se veía. Se pasa el elemento."""
+    script = pantalla_completa().split("<script>", 1)[1]
+    cuerpo = cuerpo_de_funcion(script, "const pintarConciliacion =")
+    assert "notaDeFalla(p.id" not in cuerpo
+    assert "notaDeFalla(p," in cuerpo
+    acepta = cuerpo_de_funcion(script, "const notaDeFalla =")
+    assert "typeof id === 'string'" in acepta
