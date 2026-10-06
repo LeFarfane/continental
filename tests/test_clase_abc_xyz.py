@@ -53,10 +53,9 @@ def test_un_producto_sin_xyz_por_omision_vale_no_se_sabe():
 
 
 def test_la_frase_con_clase_dice_las_dos_letras_y_su_significado():
-    frase = frase_de_la_clase("A", "X")
-    assert frase.startswith("Clase AX: ")
-    assert "A = " in frase and "80%" in frase
-    assert "X = venta estable" in frase
+    assert frase_de_la_clase("A", "X") == (
+        "Clase AX: A = 80% de la utilidad · X = venta estable"
+    )
 
 
 @pytest.mark.parametrize("abc", ["A", "B", "C"])

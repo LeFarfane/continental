@@ -25,18 +25,19 @@ from __future__ import annotations
 
 from continental.almacen import CLASES_ABC, CLASES_XYZ
 
-#: Qué quiere decir cada letra ABC, tal cual lo define dbt.
+#: Qué quiere decir cada letra ABC, tal cual lo define dbt. Corto a propósito
+#: (decisión del 2026-10-05): el panel se lee de un vistazo, no se estudia.
 SIGNIFICADO_ABC = {
-    "A": "es de los que juntos dan el 80% de la utilidad de los últimos 12 meses",
-    "B": "es de los que juntos dan el siguiente 15% de la utilidad (del 80% al 95%)",
-    "C": "es de los que juntos dan el último 5% de la utilidad",
+    "A": "80% de la utilidad",
+    "B": "siguiente 15% de la utilidad",
+    "C": "último 5% de la utilidad",
 }
 
 #: Qué quiere decir cada letra XYZ, tal cual lo define dbt.
 SIGNIFICADO_XYZ = {
-    "X": "venta estable (de un mes a otro casi no cambia)",
-    "Y": "venta variable (cambia bastante de un mes a otro)",
-    "Z": "venta errática (impredecible, o vendió en un solo mes)",
+    "X": "venta estable",
+    "Y": "venta variable",
+    "Z": "venta errática",
 }
 
 SIN_CLASE_POR_NO_VENDER = (
