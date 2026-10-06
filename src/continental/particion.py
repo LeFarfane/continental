@@ -99,6 +99,8 @@ from continental.comparacion import (
     Comparacion,
     Ganador,
 )
+from continental.doyle import PortalDeBusqueda
+from continental.enlace_del_portal import armar_el_enlace
 from continental.minimos import SumaDelPedido
 from continental.precios import explicacion_del_motivo, nombre_del_proveedor
 from continental.proveedores import CON_PUENTE, SIN_PUENTE, id_en_sicar
@@ -1135,8 +1137,19 @@ def pedido_por_armar_como_json(pedido: PedidoPorArmar) -> dict:
     }
 
 
-def captura_como_json(captura: Captura, se_puede_enviar: bool) -> dict:
+def captura_como_json(
+    captura: Captura,
+    se_puede_enviar: bool,
+    portales: Mapping[str, PortalDeBusqueda] | None = None,
+) -> dict:
     """La captura de un pedido como la pantalla la lee (ticket 22).
+
+    `portales` es lo que Doyle contestó en `/api/portales`, **leído una sola
+    vez por respuesta** por quien llama; `None` es que Doyle no contestó (o que
+    nadie preguntó) y cada línea lo dice en el título de su clic. De ahí sale,
+    por línea, `enlace_del_portal` / `modo_del_enlace` / `titulo_del_clic`
+    (`enlace_del_portal.armar_el_enlace`): el navegador abre lo que llega y no
+    arma nada.
 
     Los conteos y las dos frases viajan **hechos**: el JavaScript ni filtra ni
     suma. Es la misma razón por la que los conteos de descartados salen del
@@ -1167,6 +1180,12 @@ def captura_como_json(captura: Captura, se_puede_enviar: bool) -> dict:
                 "tiene_precio": linea.tiene_precio,
                 "motivo": linea.motivo,
                 "esta_capturado": linea.esta_capturado,
+                # EL EAN QUE ABRE EL PORTAL (lista de espera, ticket 10): la
+                # dirección ya armada con este EAN, si es «ya buscado» o «para
+                # pegar», y el título del clic (qué abre, o por qué solo copia).
+                **armar_el_enlace(
+                    captura.proveedor, linea.clave, portales
+                ).como_json(),
                 # MANDAR A ESPERA este renglón (lista de espera, ticket 04): un
                 # renglón tachado ya está en el carrito del portal y no se
                 # manda, y el botón lo dice con la frase que daría el 409

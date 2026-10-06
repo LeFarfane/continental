@@ -14,7 +14,7 @@ import dataclasses
 import datetime as dt
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -103,6 +103,7 @@ from continental.consultas import (
 from continental.doyle import (
     BusquedaDesconocida,
     ClienteDeDoyle,
+    PortalDeBusqueda,
     VigiladoDesconocido,
     VisorOcupado,
     VistaDesconocida,
@@ -5575,8 +5576,18 @@ def _pedidos_en_json(
     avisos_del_minimo: dict | None = None,
 ) -> list:
     """Cada pedido guardado, con su captura, su total y su aviso de mínimo.
-    **Puro**: no lee nada. `avisos_del_minimo` es `{pedido_id: aviso}` y lo arma
-    `_los_avisos_del_minimo`, que es la que lee (una vez por respuesta)."""
+    `avisos_del_minimo` es `{pedido_id: aviso}` y lo arma `_los_avisos_del_minimo`,
+    que es la que lee (una vez por respuesta).
+
+    **Lee una cosa: las direcciones de búsqueda de Doyle**, una sola vez por
+    respuesta y solo si algún pedido tiene qué capturar (`_los_portales_de_doyle`).
+    Está aquí y no en cada ruta porque todas las rutas que devuelven pedidos
+    pasan por esta función; ver el porqué en `_los_portales_de_doyle`."""
+    portales = (
+        _los_portales_de_doyle()
+        if any(p.es_borrador for p in pedidos)
+        else None
+    )
     return [
         _pedido_como_json(
             p,
@@ -5603,9 +5614,35 @@ def _pedidos_en_json(
             renglones_de_la_lista=guardado.renglones,
             estado_de_la_lista=guardado.estado,
             minimo=(avisos_del_minimo or {}).get(p.pedido_id),
+            portales=portales,
         )
         for p in pedidos
     ]
+
+
+def _los_portales_de_doyle() -> dict[str, PortalDeBusqueda] | None:
+    """`GET /api/portales` de Doyle: dónde se busca en cada portal. **Lee**, no
+    escribe. `None` si Doyle no contesta: la captura sigue y el título del clic
+    en cada EAN dice «Doyle no respondió: solo se copia el código».
+
+    **Una lectura por respuesta y sin caché**: una caché con vida propia sería
+    un segundo lugar donde una dirección puede quedar vieja, y la lectura es de
+    la configuración de Doyle, sin abrir ningún portal. El tope de la llamada
+    es corto (`TOPE_DE_PORTALES_SEG`) para que un Doyle colgado no retrase la
+    captura.
+
+    **El cliente se resuelve aquí con `dependency_overrides`** y no con un
+    `Depends` en cada ruta: son catorce rutas las que devuelven pedidos, y
+    meter un parámetro nuevo por todas habría sido la mayor parte del cambio.
+    Respeta el mismo override que usan las pruebas, así que sigue siendo una
+    sola costura. Alternativa descartada: pasar `doyle` por catorce firmas.
+    """
+    try:
+        fabrica = app.dependency_overrides.get(obtener_doyle, obtener_doyle)
+        return fabrica().portales()
+    except Exception:  # noqa: BLE001 — Doyle caído no tumba la captura (regla 4)
+        log.exception("Doyle no contestó las direcciones de búsqueda de los portales")
+        return None
 
 
 def _totales_de_los_pedidos(
@@ -6068,8 +6105,12 @@ def _pedido_como_json(
     total=None,
     estado_de_la_lista: str = ABIERTO,
     minimo: dict | None = None,
+    portales: Mapping[str, PortalDeBusqueda] | None = None,
 ) -> dict:
     """Un pedido ya guardado, como la pantalla lo lee.
+
+    `portales` son las direcciones de búsqueda que Doyle contestó (leídas una
+    vez por respuesta en `_pedidos_en_json`); `None` es que Doyle no contestó.
 
     `total` es el `TotalDelPedido` de lo que el pedido tiene dentro **ahora**
     (`particion.el_total_del_pedido`): la cifra del botón «Enviar» y la de la
@@ -6166,7 +6207,7 @@ def _pedido_como_json(
         # entera: la captura puede INVITAR a enviar, pero el envío no mira la
         # captura. `null` cuando quien llama no la calculó.
         "captura": (
-            None if captura is None else captura_como_json(captura, motivo is None)
+            None if captura is None else captura_como_json(captura, motivo is None, portales)
         ),
         # MANDAR A ESPERA EL PEDIDO ENTERO (lista de espera, ticket 06). El
         # botón se apaga con el motivo del servidor —la misma función que decide

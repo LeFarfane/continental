@@ -211,6 +211,22 @@ class VisorOcupado:
     detalle: str
 
 
+@dataclass(frozen=True, slots=True)
+class PortalDeBusqueda:
+    """A dónde mandar a una persona para buscar en el portal de un proveedor
+    (`GET /api/portales` de Doyle, ticket 10 de la lista de espera).
+
+    `url_busqueda` es la dirección tal como Doyle la tiene: con `{termino}`
+    donde va lo buscado (puede aparecer más de una vez) cuando
+    `busqueda_por_url` es verdadero, o la página de búsqueda sola cuando no. Es
+    `None` si Doyle no sabe a dónde ir. **Es texto sin validar**: quien arma el
+    enlace (`enlace_del_portal`) decide si se puede usar.
+    """
+
+    url_busqueda: str | None = None
+    busqueda_por_url: bool = False
+
+
 class ProveedorDesconocido(LookupError):
     """Doyle contestó 404 a «ver»: esa clave no es de un proveedor suyo."""
 
@@ -285,6 +301,11 @@ TOPE_DE_LA_REVISION_SEG = 30 * 60
 #: y en LEVIC y QuePharma espera la caja de búsqueda hasta 20 s. Los 10 s del
 #: YAML no alcanzan. «Ya vi» sí se queda con el corto.
 TOPE_DE_VER_EN_PORTAL_SEG = 60.0
+#: Cuánto espera la lectura de `/api/portales`. Es una ruta de solo lectura que
+#: Doyle contesta de su configuración, sin abrir nada, y se pide dentro de la
+#: carga de la captura: un Doyle colgado no debe hacer esperar a la pantalla lo
+#: que dura el tope largo del YAML.
+TOPE_DE_PORTALES_SEG = 3.0
 
 
 # --------------------------------------------------------------- interfaz
@@ -292,8 +313,10 @@ TOPE_DE_VER_EN_PORTAL_SEG = 60.0
 
 @runtime_checkable
 class ClienteDeDoyle(Protocol):
-    """El borde hacia Doyle. Trece verbos y ninguno más.
+    """El borde hacia Doyle. Catorce verbos y ninguno más.
 
+    Eran trece hasta el 2026-10-06, cuando se sumó `portales` (las direcciones
+    de búsqueda, para que el EAN abra el portal).
     Eran once hasta el 2026-10-05, cuando se sumó «Ver en el portal»
     (`ver_en_portal` y `cerrar_vista`, ADR 0026).
 
@@ -382,6 +405,15 @@ class ClienteDeDoyle(Protocol):
         """Le dice a Doyle que cierre la vista de ese proveedor. Levanta
         `VistaDesconocida` si no había ninguna (Doyle la cierra sola por
         tope): quien llama lo trata como ya cerrada."""
+        ...
+
+    def portales(self) -> dict[str, PortalDeBusqueda]:
+        """Las direcciones de búsqueda de cada portal, por clave de proveedor
+        (`GET /api/portales` de Doyle). Solo lectura: no abre ningún portal.
+
+        Levanta si Doyle no contesta o contesta algo ilegible; quien llama lo
+        convierte en «solo se copia el código» y la captura sigue.
+        """
         ...
 
     # -------------------------------------------- la vigilancia (2026-09-28)
@@ -539,6 +571,30 @@ class DoylePorHttp:
         if respuesta.status_code == 404:
             raise VistaDesconocida(proveedor)
         respuesta.raise_for_status()
+
+    def portales(self) -> dict[str, PortalDeBusqueda]:
+        with httpx.Client(
+            base_url=self._url,
+            timeout=min(self._timeout, TOPE_DE_PORTALES_SEG),
+            transport=self._transporte,
+        ) as cliente:
+            respuesta = cliente.get("/api/portales")
+        respuesta.raise_for_status()
+        crudo = respuesta.json()
+        if not isinstance(crudo, dict):
+            raise ValueError("`/api/portales` no devolvió un objeto")
+        return {
+            str(clave): PortalDeBusqueda(
+                url_busqueda=(
+                    datos.get("url_busqueda")
+                    if isinstance(datos.get("url_busqueda"), str)
+                    else None
+                ),
+                busqueda_por_url=datos.get("busqueda_por_url") is True,
+            )
+            for clave, datos in crudo.items()
+            if isinstance(datos, dict)
+        }
 
     def vigilados(self) -> list[ArticuloVigilado]:
         with self._cliente() as cliente:

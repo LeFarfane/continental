@@ -8,21 +8,21 @@ spec, «El EAN que abre el portal», historias 42–49.
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Continental pide a Doyle las direcciones de búsqueda (ruta del ticket 01)
+- [x] Continental pide a Doyle las direcciones de búsqueda (ruta del ticket 01)
       por su cliente de Doyle, y **el servidor arma el enlace** con el EAN del
       renglón. El navegador no manda ningún término (ADR 0026, punto 4).
-- [ ] La respuesta de la captura trae, por renglón, el enlace y si es «ya
+- [x] La respuesta de la captura trae, por renglón, el enlace y si es «ya
       buscado» o «para pegar».
-- [ ] El título del botón dice qué va a pasar: «Copiar y abrir la búsqueda en
+- [x] El título del botón dice qué va a pasar: «Copiar y abrir la búsqueda en
       NADRO» o «Copiar y abrir LEVIC para pegar».
-- [ ] El clic copia y abre en una ventana nombrada por proveedor (una pestaña
+- [x] El clic copia y abre en una ventana nombrada por proveedor (una pestaña
       por portal, no una por clic), con un enlace de respaldo si el navegador la
       bloquea.
-- [ ] Si Doyle no contesta o no tiene la dirección, el EAN se sigue copiando y
+- [x] Si Doyle no contesta o no tiene la dirección, el EAN se sigue copiando y
       la frase dice que no se pudo abrir el portal. Nunca un error crudo
       (reglas 4 y 5).
-- [ ] Pruebas: lo puro (armar el enlace en los dos modos), la ruta de punta a
+- [x] Pruebas: lo puro (armar el enlace en los dos modos), la ruta de punta a
       punta con el doble de Doyle (con y sin respuesta) y la estática del JS
       (copia y abre, ventana nombrada, respaldo).

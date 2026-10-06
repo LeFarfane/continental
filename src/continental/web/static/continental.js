@@ -4434,6 +4434,43 @@ const copiarClave = async (clave, boton) => {
   }, copiada ? 1200 : 6000);
 };
 
+// EL EAN QUE COPIA Y ABRE EL PORTAL (lista de espera, ticket 10). El clic copia
+// como siempre y, si el servidor mandó `enlace_del_portal`, abre esa dirección
+// en una ventana NOMBRADA por proveedor: una pestaña por portal y no una por
+// clic. **La dirección llega hecha**: el servidor la armó con el EAN del renglón
+// (`enlace_del_portal.armar_el_enlace`) y aquí no se construye ni se concatena
+// nada, ni se manda ningún término (ADR 0026, punto 4).
+//
+// El orden importa, y no es estético: `copiarClave` lanza la escritura al
+// portapapeles de inmediato (antes de su primer `await`) y la ventana se abre
+// justo después, dentro del mismo clic. Abrirla primero le quita el foco a esta
+// página y el portapapeles lo rechaza; esperar la copia antes de abrirla hace
+// que el navegador deje de ver un clic de la persona y bloquee la ventana.
+//
+// Si el navegador la bloquea (`window.open` devuelve `null`) se pone un enlace
+// en la fila para abrirla a mano, igual que «Abrir sesión».
+const copiarYAbrir = async (linea, proveedor, nombre, boton) => {
+  const copia = copiarClave(linea.clave, boton);
+  if (linea.enlace_del_portal) {
+    const ventana = window.open(linea.enlace_del_portal, 'portal-' + proveedor);
+    const fila = boton.closest('li');
+    const viejo = fila.querySelector('a.abrir-a-mano');
+    if (viejo) viejo.remove();
+    if (!ventana) {
+      const a = document.createElement('a');
+      a.className = 'abrir-a-mano';
+      a.href = linea.enlace_del_portal;
+      a.target = 'portal-' + proveedor;
+      a.rel = 'noopener';
+      a.textContent = 'El navegador bloqueó la pestaña: abrir ' + nombre;
+      // Al final de la fila y en su propio renglón de la rejilla: puesto entre
+      // la clave y la descripción movería todas las columnas.
+      fila.append(a);
+    }
+  }
+  await copia;
+};
+
 // EL ARCHIVO DEL PEDIDO (ticket 23). La URL viene HECHA del servidor
 // (`pedido.csv`): aquí no se arma nada, y `null` quiere decir que no hay qué
 // exportar —un pedido vacío contestaría 409—. Un enlace y no un `fetch`: la
@@ -4497,8 +4534,10 @@ const pintarCaptura = (pedido, alTachar, alPosponer) => {
       clave.type = 'button';
       clave.className = 'clave';
       clave.textContent = linea.clave;
-      clave.title = 'Copiar la clave para pegarla en el buscador de ' + captura.nombre;
-      clave.onclick = () => copiarClave(linea.clave, clave);
+      // Lo que va a pasar con el clic lo dice el servidor: qué abre, si hay que
+      // pegar, o por qué solo copia.
+      clave.title = linea.titulo_del_clic;
+      clave.onclick = () => copiarYAbrir(linea, captura.proveedor, captura.nombre, clave);
     } else {
       clave = document.createElement('span');
       clave.className = 'clave sin';

@@ -1057,6 +1057,8 @@ button.precio-detalle:hover { background: var(--relleno-suave); }
 .captura li .cuantas { font: 600 var(--texto-subtitulo) var(--letra); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 .captura li .costo { font: var(--texto-nota) var(--letra); color: var(--tenue); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 .captura li .costo.nose { color: var(--tercero); font-style: italic; }
+/* EL ENLACE DE RESPALDO del EAN (ticket 10): su propio renglón de la rejilla, bajo la clave. */
+.captura li .abrir-a-mano { grid-column: 2 / -1; font: var(--texto-nota) var(--letra); }
 /* MANDAR A ESPERA, por renglón (lista de espera, ticket 04). */
 .captura li .a-espera { min-height: 1.75rem; padding: 0 10px; font-size: .8125rem; white-space: nowrap; }
 /* LA CLAVE SE COPIA DE UN CLIC: un botón de verdad, en monoespaciada. */

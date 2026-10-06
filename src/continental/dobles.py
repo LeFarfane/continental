@@ -88,6 +88,7 @@ from continental.doyle import (
     RespuestaDeProveedor,
     SesionAbriendose,
     SesionConfirmada,
+    PortalDeBusqueda,
     ProveedorDesconocido,
     SesionDeProveedor,
     VigiladoDesconocido,
@@ -243,6 +244,23 @@ class DoyleFalso:
     vistas_que_parecen_login: list[str] = field(default_factory=list)
     #: Los proveedores que Doyle está consultando ahora: ver ese portal rebota.
     proveedores_consultando: list[str] = field(default_factory=list)
+    #: Lo que contesta `GET /api/portales`: la misma forma que el Doyle real
+    #: (medido en su repo, commit 9c72f5e). NADRO busca por dirección, LEVIC
+    #: tiene la página de búsqueda sola y QuePharma no tiene dirección.
+    portales_en_memoria: dict[str, PortalDeBusqueda] = field(
+        default_factory=lambda: {
+            "nadro": PortalDeBusqueda(
+                "https://i22.nadro.mx/{termino}?_q={termino}&map=ft", True
+            ),
+            "levic": PortalDeBusqueda(
+                "https://www.levicventas.mx/frm_Catalogo_Levic.aspx", False
+            ),
+            "quepharma": PortalDeBusqueda(None, False),
+        }
+    )
+    #: Cuántas veces se leyó `/api/portales`. Sirve para afirmar «una lectura
+    #: por respuesta» sin mirar dentro de la ruta.
+    lecturas_de_portales: int = 0
     falla: Exception | None = None
     #: Términos que se pidieron, en orden. Sirve para comprobar el ORDEN de
     #: importancia del lote nocturno sin mirar dentro de la implementación.
@@ -417,6 +435,11 @@ class DoyleFalso:
             raise VistaDesconocida(proveedor)
         del self.vistas_abiertas[proveedor]
         self.vistas_cerradas.append(proveedor)
+
+    def portales(self) -> dict[str, PortalDeBusqueda]:
+        self._revisar()
+        self.lecturas_de_portales += 1
+        return dict(self.portales_en_memoria)
 
     # ----------------------------------------- la vigilancia (2026-09-28)
     #
