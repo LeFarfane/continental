@@ -3344,6 +3344,32 @@ class AlmacenamientoDelPedido(Protocol):
         """
         ...
 
+    def elegir_proveedor_de_la_espera(
+        self, negocio: str, renglon_id: int, proveedor: str, quien: str
+    ) -> PedidoSugeridoGuardado | None:
+        """Le pone proveedor a un renglón **en espera que no lo tenía** (ticket 11).
+
+        La tarjeta «Sin proveedor» de la lista de espera: un renglón mandado a
+        espera sin pedido ni elección no sabe a quién se le iba a pedir, y una
+        persona se lo dice. **El renglón sigue `pospuesto`**: lo que cambia es
+        de qué tarjeta cuelga, y la lista siguiente lo trae al pedido de ese
+        proveedor (`eleccion_de_la_espera`).
+
+        Se guardan juntas, en una sola sentencia, `proveedor_de_la_espera` y la
+        elección de siempre —`proveedor_elegido` con su `elegido_por` y
+        `elegido_en`—: **la firma es la de la elección** y no una columna
+        nueva, porque lo que una persona hizo aquí es exactamente eso, elegir a
+        quién se le pide. Si el renglón vuelve a `abierto`
+        (`devolver_pospuesto`) llega con su elección puesta, y la partición lo
+        respeta como a cualquier decisión de una persona.
+
+        `None` es «no había ningún renglón al que elegírsele»: son **tres**
+        condiciones y las tres viven en el `WHERE` —el renglón `pospuesto`, sin
+        proveedor de espera, y su lista `abierta`—. `quien` es una firma, no un
+        permiso (regla 3). Devuelve la lista entera, como el resto.
+        """
+        ...
+
     def pedidos_de_la_lista(
         self, negocio: str, pedido_sugerido_id: int
     ) -> tuple[PedidoGuardado, ...]:
@@ -4641,6 +4667,37 @@ _ELEGIR_PROVEEDOR = text(
      where r.negocio = :negocio
        and r.renglon_id = :renglon_id
        and r.estado = 'abierto'
+       and p.pedido_sugerido_id = r.pedido_sugerido_id
+       and p.negocio = r.negocio
+       and p.estado = 'abierto'
+    returning r.renglon_id, r.pedido_sugerido_id
+    """
+)
+
+# Elegir a quién se le pide un renglón QUE YA ESPERA y no tenía proveedor
+# (lista de espera, ticket 11: la tarjeta «Sin proveedor»).
+#
+# Tres condiciones en el `WHERE`, y son la garantía: el renglón `pospuesto`, **sin
+# proveedor de espera todavía** —una carrera con otra pestaña que ya se lo puso
+# deja cero filas en vez de pisarlo—, y su lista `abierta`. Escribe juntas la
+# espera y la elección de siempre (`ck_renglon_eleccion` exige las tres columnas
+# de la elección juntas): la firma es la de elegir proveedor, no una columna
+# nueva —no hay migración—. `proveedor_de_la_espera` es lo que ve la tarjeta del
+# proveedor y lo que `eleccion_de_la_espera` copia a la lista siguiente;
+# `proveedor_elegido` es lo que respeta la partición si el renglón se saca de la
+# espera. El renglón sigue `pospuesto`, firmado por quien lo mandó a espera.
+_ELEGIR_PROVEEDOR_DE_LA_ESPERA = text(
+    """
+    update pedidos.renglon as r
+       set proveedor_de_la_espera = :proveedor,
+           proveedor_elegido = :proveedor,
+           elegido_por = :quien,
+           elegido_en = now()
+      from pedidos.pedido_sugerido as p
+     where r.negocio = :negocio
+       and r.renglon_id = :renglon_id
+       and r.estado = 'pospuesto'
+       and r.proveedor_de_la_espera is null
        and p.pedido_sugerido_id = r.pedido_sugerido_id
        and p.negocio = r.negocio
        and p.estado = 'abierto'
@@ -6265,6 +6322,20 @@ class AlmacenamientoPostgres:
     ) -> PedidoSugeridoGuardado | None:
         return self._mover_el_renglon(
             _ELEGIR_PROVEEDOR,
+            {
+                "negocio": negocio,
+                "renglon_id": renglon_id,
+                "proveedor": proveedor,
+                "quien": quien,
+            },
+        )
+
+    def elegir_proveedor_de_la_espera(
+        self, negocio: str, renglon_id: int, proveedor: str, quien: str
+    ) -> PedidoSugeridoGuardado | None:
+        """**Escribe.** `_ELEGIR_PROVEEDOR_DE_LA_ESPERA` y la relectura de la lista."""
+        return self._mover_el_renglon(
+            _ELEGIR_PROVEEDOR_DE_LA_ESPERA,
             {
                 "negocio": negocio,
                 "renglon_id": renglon_id,

@@ -135,6 +135,12 @@ from continental.fallas import (
     frase_del_hueco,
     que_hacer,
 )
+from continental.lista_de_espera import (
+    MOTIVO_SIN_LISTA,
+    MOTIVO_SIN_VENTAS,
+    la_lista_de_espera,
+    lista_que_no_hay,
+)
 from continental.minimos import (
     QUE_HACER_CON_EL_MINIMO,
     aviso_de_que_no_se_pudo_leer,
@@ -2062,6 +2068,74 @@ def elegir_el_proveedor_del_renglon(
         ),
         accion="elegir_proveedor",
         nota=f"Se le pide a {nombre_del_proveedor(cuerpo.proveedor)}.",
+        almacenamiento=almacenamiento,
+        almacen=almacen,
+    )
+
+
+@app.post("/api/renglon/{renglon_id}/proveedor-de-la-espera")
+def elegir_el_proveedor_de_la_espera(
+    renglon_id: int,
+    cuerpo: ProveedorElegido,
+    request: Request,
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+    almacen: LecturaDelAlmacen = Depends(obtener_almacen),
+):
+    """Le dice a un renglón **que espera sin proveedor** a quién se le iba a pedir.
+
+    Es la tarjeta «Sin proveedor» de la lista de espera (ticket 11): un renglón
+    mandado a espera sin pedido ni elección no sabe a quién se le iba a pedir, y
+    una persona se lo dice. **El renglón sigue en espera**: lo que cambia es de
+    qué tarjeta cuelga, y la lista siguiente lo trae al pedido de ese proveedor
+    (`eleccion_de_la_espera`).
+
+    Es otra ruta y no `/proveedor` por una razón de fondo: `/proveedor` exige el
+    renglón **abierto** (elegir a quién se le pide hoy) y ésta exige **pospuesto
+    y sin proveedor de espera** —tres condiciones en el `WHERE` de
+    `_ELEGIR_PROVEEDOR_DE_LA_ESPERA—. Mezclarlas en una sola ruta con un `if`
+    sobre el estado habría sido una sentencia que hace dos cosas. Se firma con
+    la firma de la elección de siempre (`elegido_por`): no hay columna nueva ni
+    migración.
+
+    Se acepta cualquiera de los cuatro, también el que no dio precio, por la
+    misma razón que al elegir hoy: hay razones que el sistema no ve. Un 409 con
+    el motivo real si el renglón no está en espera, ya tiene proveedor o su
+    lista ya no está abierta. Devuelve lo mismo que las demás rutas de mover un
+    renglón (`pedidos` incluidos).
+    """
+    if cuerpo.proveedor not in NOMBRES_DE_PROVEEDOR:
+        log.info(
+            "%s intentó elegir el proveedor %r de la espera del renglón %s. Se "
+            "rechazó: no es uno de los que Doyle consulta.",
+            quien(request),
+            cuerpo.proveedor,
+            renglon_id,
+        )
+        return JSONResponse(
+            status_code=422,
+            content={
+                "ok": False,
+                "detalle": (
+                    "Ese proveedor no es ninguno de los cuatro que se consultan: "
+                    + ", ".join(NOMBRES_DE_PROVEEDOR.values())
+                    + "."
+                ),
+            },
+        )
+
+    return _mover_el_renglon(
+        renglon_id,
+        request,
+        lambda negocio, firma: almacenamiento.elegir_proveedor_de_la_espera(
+            negocio, renglon_id, cuerpo.proveedor, firma
+        ),
+        verbo="elegir el proveedor de la espera del renglón",
+        choque=(
+            "Ese renglón ya no está en espera sin proveedor, o su lista dejó de "
+            "estar abierta. Vuelve a cargar la página para ver cómo quedó."
+        ),
+        accion="elegir_proveedor_de_la_espera",
+        nota=f"Se le pedirá a {nombre_del_proveedor(cuerpo.proveedor)}.",
         almacenamiento=almacenamiento,
         almacen=almacen,
     )
@@ -4837,6 +4911,64 @@ def los_minimos(
             "que_hacer": _que_hacer(AL_LEER),
         }
     return {"ok": True, "minimos": minimos_como_json(minimos)}
+
+
+# ------------------------------------------------------ La lista de espera
+#
+# Una pantalla del menú (ticket 11 de lista-de-espera): una tarjeta por
+# proveedor con el pedido de hoy arriba y lo que espera abajo. Todo llega
+# armado por `lista_de_espera.py`; aquí solo se lee y se atiende el HTTP.
+
+
+@app.get("/api/lista-de-espera")
+def la_lista_de_espera_de_hoy(
+    almacen: LecturaDelAlmacen = Depends(obtener_almacen),
+    almacenamiento: AlmacenamientoDelPedido = Depends(obtener_almacenamiento),
+):
+    """La lista de espera de la lista de hoy, armada. **Solo lee.**
+
+    Es la lista del día —la del último día con ventas, la misma que abre
+    `/api/pedido-sugerido`— **leída, nunca abierta**: a diferencia de aquélla,
+    esta ruta no escribe, así que abrir la pantalla de la espera antes que la
+    lista del día no crea nada. Sin lista todavía, o sin repartir, contesta con
+    `ok: true` y el motivo (`motivo`, `ir_a_repartir`): no es una falla.
+
+    Las lecturas que fallan son un hueco con su motivo y qué hacer, y el error
+    no viaja al navegador (regla 5). Los precios y los mínimos que no se
+    pudieron leer no tumban la pantalla: cada renglón dice «precio sin leer» y
+    cada tarjeta «no se pudo leer el mínimo» —jamás «sin precio» ni «sin mínimo
+    capturado», que afirmarían lo contrario—.
+    """
+    negocio = cargar().negocio
+    try:
+        ultima = almacen.ultima_fecha_con_ventas()
+    except Exception as exc:  # noqa: BLE001 — el almacén caído es un hueco, no un 500
+        log.exception("El almacén no contestó al armar la lista de espera")
+        return _falla_de_la_espera(type(exc))
+    if ultima is None:
+        return lista_que_no_hay(MOTIVO_SIN_VENTAS)
+
+    try:
+        guardado = almacenamiento.leer(negocio, ultima)
+        if guardado is None:
+            return lista_que_no_hay(MOTIVO_SIN_LISTA)
+        pedidos = almacenamiento.pedidos_de_la_lista(negocio, guardado.pedido_sugerido_id)
+    except Exception as exc:  # noqa: BLE001 — el almacenamiento caído es un hueco
+        log.exception("No se pudo leer la lista de hoy para la lista de espera")
+        return _falla_de_la_espera(type(exc))
+
+    precios = _precios_de_la_lista(almacenamiento, negocio, guardado.pedido_sugerido_id)
+    avisos = _los_avisos_del_minimo(almacen, almacenamiento, negocio, guardado, pedidos, precios)
+    return la_lista_de_espera(guardado, pedidos, precios, avisos)
+
+
+def _falla_de_la_espera(tipo: type) -> dict:
+    """Lo único que viaja de una lectura caída: el tipo, y qué hacer (regla 5)."""
+    return {
+        "ok": False,
+        "detalle": f"no se pudo leer la lista de espera ({tipo.__name__})",
+        "que_hacer": _que_hacer(AL_LEER),
+    }
 
 
 class MinimoNuevo(BaseModel):

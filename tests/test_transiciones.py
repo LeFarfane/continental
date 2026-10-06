@@ -45,6 +45,7 @@ from continental.transiciones import (
     ACCIONES_QUE_EXIGEN_RENGLON_ABIERTO,
     DEVOLVER_A_ABIERTO,
     DEVOLVER_POSPUESTO,
+    ELEGIR_PROVEEDOR_DE_LA_ESPERA,
     motivo_para_no_corregir,
     motivo_para_no_editar,
     motivo_para_no_recibir_a_mano,
@@ -267,6 +268,7 @@ def _estado_que_exige(accion: str) -> str:
     return {
         DEVOLVER_A_ABIERTO: RENGLON_DESCARTADO,
         DEVOLVER_POSPUESTO: RENGLON_POSPUESTO,
+        ELEGIR_PROVEEDOR_DE_LA_ESPERA: RENGLON_POSPUESTO,
     }.get(accion, RENGLON_ABIERTO)
 
 

@@ -1459,3 +1459,49 @@ li.transito.atrasado { opacity: 1; box-shadow: inset 4px 0 0 var(--aviso-vivo); 
   .vistas label { flex: 1; padding: 0 8px; }
   .detalle { display: block; }
 }
+
+/* ------------------------------------------------------- Lista de espera
+
+   Una tarjeta por proveedor: arriba la cabecera —el nombre, cómo va su pedido,
+   solo el total y la barra hacia el mínimo—, luego el pedido de hoy y, abajo, lo
+   que espera. La barra y todos los colores son los de siempre, en claro y en
+   oscuro; el ámbar de «no llega» va con su frase, no solo con el color. Un botón
+   apagado sigue siendo botón (`aria-disabled`) para que su `title` diga por qué. */
+.espera-tarjetas { display: flex; flex-direction: column; gap: 16px; }
+.espera-sin-repartir {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 14px 18px;
+  border-radius: var(--radio-lg); background: var(--superficie);
+}
+.espera-sin-repartir .nota { flex: 1 1 16rem; }
+.espera-tarjeta { background: var(--superficie); border-radius: var(--radio-xl); overflow: hidden; }
+.espera-cabeza { display: flex; flex-direction: column; gap: 8px; padding: 18px 20px; border-bottom: var(--pelo) solid var(--linea); }
+.espera-cabeza .fila-nombre { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.espera-cabeza h3 { font: 600 var(--texto-titulo-dos) var(--letra); letter-spacing: -0.022em; }
+.espera-total { font: 700 var(--texto-titulo-uno) var(--letra); letter-spacing: -0.022em; font-variant-numeric: tabular-nums; }
+.espera-total.nose { color: var(--tercero); font-style: italic; font-weight: 600; font-size: var(--texto-titulo-tres); }
+.barra-minimo { height: 6px; border-radius: 3px; background: var(--relleno-suave); overflow: hidden; }
+.barra-minimo span { display: block; height: 100%; background: var(--acento); }
+.barra-minimo.completa span { background: var(--ok-vivo); }
+.espera-minimo { font: var(--texto-nota) var(--letra); color: var(--tenue); text-wrap: pretty; }
+.espera-minimo.avisa { align-self: flex-start; padding: 6px 12px; border-radius: var(--radio-lg); background: var(--aviso-fondo); color: var(--aviso); font-weight: 600; }
+.espera-minimo.estado-llega { color: var(--ok); }
+.espera-bloque { padding: 14px 20px; border-bottom: var(--pelo) solid var(--linea); }
+.espera-bloque:last-child { border-bottom: 0; }
+.espera-bloque h4 { font: 600 var(--texto-leyenda) var(--letra); color: var(--tercero); margin-bottom: 8px; }
+.espera-bloque .vacio { font: var(--texto-nota) var(--letra); color: var(--tenue); }
+.espera-renglones li {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto auto; gap: 4px 12px; align-items: center;
+  padding: 8px 0; border-bottom: var(--pelo) solid var(--linea);
+}
+.espera-renglones li:last-child { border-bottom: 0; }
+.espera-renglones .descripcion { font: var(--texto-subtitulo) var(--letra); overflow-wrap: anywhere; }
+.espera-renglones .clave { font: var(--texto-leyenda) var(--letra); color: var(--tenue); font-variant-numeric: tabular-nums; }
+.espera-renglones .cuantas { font: 600 var(--texto-subtitulo) var(--letra); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.espera-renglones .costo { font: var(--texto-nota) var(--letra); color: var(--tenue); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.espera-renglones .costo.nose { color: var(--tercero); font-style: italic; }
+.espera-renglones .accion.apagado { opacity: .4; cursor: not-allowed; }
+.espera-renglones .espera-opciones { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
+@media (max-width: 40rem) {
+  .espera-renglones li { grid-template-columns: minmax(0, 1fr) auto; }
+  .espera-renglones .clave, .espera-renglones .costo { text-align: left; }
+}

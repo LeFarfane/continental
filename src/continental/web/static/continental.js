@@ -2275,6 +2275,14 @@ const pintarCuenta = (nombre, cuantos, tono) => {
   cuenta.className = 'cuenta-pestana' + (tono ? ' ' + tono : '');
 };
 
+// EL GLOBO DE «LISTA DE ESPERA»: cuántos renglones de la lista abierta de hoy
+// están en espera. El número lo contó el servidor (`pospuestos`), no se cuenta
+// aquí; con la lista cerrada la espera ya es de la siguiente lista y no cuenta.
+const pintarCuentaDeLaEspera = (pospuestos, estado) => {
+  if (!FECHA_DE_HOY || FECHA_ACTUAL !== FECHA_DE_HOY) return;
+  pintarCuenta('espera', estado === 'abierto' ? pospuestos : 0, 'gris');
+};
+
 // Cuántos renglones de la lista de HOY quedan por atender. Un día de la
 // bitácora no cambia el número de la barra: la barra dice cómo está hoy.
 const pintarCuentaDeLaLista = (trabajables) => {
@@ -2620,6 +2628,7 @@ async function cargarPedido(fecha) {
     });
     pintarPasos(null);
     pintarCuentaDeLaLista([]);
+    pintarCuentaDeLaEspera(0, datos.estado);
     pintarResumenDeAvisos();
     return;
   }
@@ -2714,6 +2723,7 @@ async function cargarPedido(fecha) {
     aplicarElFiltro();
     pintarDetalle(datos.renglones.find(r => r.renglon_id === RENGLON_ELEGIDO), acciones);
     pintarCuentaDeLaLista(trabajables);
+    pintarCuentaDeLaEspera(datos.pospuestos, datos.estado);
     // El bloque de descartados NO se filtra por vista, y es a propósito: la
     // vista de medicamentos esconde abarrotes de lo que falta por pedir, pero
     // un abarrote que alguien descartó por error tiene que poder devolverse sin
@@ -5317,7 +5327,9 @@ async function confirmarSesion(sesion, boton, idNota = 'pedido-accion', alTermin
 // del día y lo que viene en camino (el grupo "Pedido"), las tres de Doyle, y
 // el estado. `#pedido` sigue siendo la lista del día: un enlace viejo no se
 // rompe.
-const PESTANAS = ['pedido', 'camino', 'buscar', 'vigilancia', 'sesiones', 'ajustes', 'estado'];
+// Desde el ticket 11 de lista-de-espera hay una más, «espera», justo debajo de
+// la lista del día.
+const PESTANAS = ['pedido', 'espera', 'camino', 'buscar', 'vigilancia', 'sesiones', 'ajustes', 'estado'];
 
 // Un nombre que no es de ninguna pestaña —un `#loquesea` pegado a mano— cae
 // en el pedido, que es la pantalla de siempre: nunca una página en blanco.
@@ -5336,6 +5348,15 @@ const mostrarPestana = (nombre, enfocar) => {
   if (elegida === 'sesiones') cargarSesiones();
   // Los mínimos también se leen al abrir la pestaña: nadie los mira hasta entonces.
   if (elegida === 'ajustes') cargarAjustes();
+  // La lista de espera se lee cada vez que se abre: es lo que dice el servidor
+  // ahora, y otra computadora pudo moverla.
+  if (elegida === 'espera') cargarListaDeEspera();
+  // Si desde la lista de espera se movió algo, la lista del día que está en la
+  // pantalla quedó vieja: se vuelve a leer, en el mismo día que se estaba viendo.
+  if (elegida === 'pedido' && LISTA_DEL_DIA_VIEJA) {
+    LISTA_DEL_DIA_VIEJA = false;
+    cargarPedido(FECHA_ACTUAL && FECHA_ACTUAL !== FECHA_DE_HOY ? FECHA_ACTUAL : undefined);
+  }
   return elegida;
 };
 
@@ -5769,6 +5790,243 @@ const cargarAjustes = async () => {
   nota('ajustes-falla', '');
   document.getElementById('ajustes-lista').replaceChildren(...datos.minimos.map(filaDeMinimo));
 };
+
+// ------------------------------------------------------- Lista de espera
+
+// LA LISTA DE ESPERA (ticket 11 de lista-de-espera): una tarjeta por proveedor,
+// con el pedido de hoy arriba y lo que espera abajo. **Todo llega armado del
+// servidor** (`lista_de_espera.py`): qué renglón va en qué tarjeta, el precio de
+// hoy de ese proveedor («sin precio» cuando no hay, jamás un cero), el total, el
+// llenado de la barra hacia el mínimo y qué botón va apagado y por qué. Aquí
+// solo se pinta: no se suma, no se compara y no se agrupa.
+//
+// Cada acción usa las rutas que ya existen (`/posponer`, `/devolver-pospuesto`)
+// o la nueva de elegir proveedor, y al volver **se vuelve a leer la pantalla
+// entera**: lo que se movió cambia de tarjeta, el total y la barra cambian, y
+// ninguno de los tres lo deduce este archivo.
+
+// La lista del día que está en la pantalla ya no es la que el servidor tiene si
+// aquí se movió un renglón: se vuelve a leer al volver a ella (`mostrarPestana`).
+let LISTA_DEL_DIA_VIEJA = false;
+
+// Un botón apagado sigue siendo botón —`aria-disabled` y no `disabled`—: así su
+// `title` dice por qué está apagado, que es lo que el servidor mandó.
+const apagarBoton = (boton, motivo) => {
+  boton.setAttribute('aria-disabled', 'true');
+  boton.classList.add('apagado');
+  boton.title = motivo || '';
+};
+
+async function moverDesdeLaEspera(renglonId, ruta, cuerpo, boton) {
+  if (boton.getAttribute('aria-disabled') === 'true') return;
+  boton.setAttribute('aria-disabled', 'true');
+  nota('espera-accion', '');
+  const peticion = { method: 'POST' };
+  if (cuerpo) {
+    peticion.headers = { 'Content-Type': 'application/json' };
+    peticion.body = JSON.stringify(cuerpo);
+  }
+  const respuesta = await respuestaDe(fetch('/api/renglon/' + renglonId + ruta, peticion), 'al_guardar');
+  if (!respuesta.ok) {
+    notaDeFalla('espera-accion', respuesta);
+  } else {
+    LISTA_DEL_DIA_VIEJA = true;
+    // Lo que pasó al sacar de la espera ya viene dicho del servidor.
+    if (respuesta.frase_de_sacar_de_la_espera) {
+      nota('espera-accion', respuesta.frase_de_sacar_de_la_espera, 'aviso');
+    }
+  }
+  // Salga como salga, la pantalla vuelve a decir lo que hay: un 409 es que
+  // alguien más la movió, y lo que se ve tiene que ser lo que el servidor tiene.
+  await cargarListaDeEspera();
+}
+
+const botonDeUnRenglonDeEspera = (r) => {
+  const rutas = { mandar: '/posponer', sacar: '/devolver-pospuesto' };
+  const boton = botonDeAccion(r.etiqueta,
+    (b) => moverDesdeLaEspera(r.renglon_id, rutas[r.accion], null, b),
+    r.accion === 'sacar' ? 'tenida' : '');
+  boton.setAttribute('aria-label', r.etiqueta + ': ' + r.descripcion);
+  if (!r.se_puede) apagarBoton(boton, r.motivo_para_no);
+  return boton;
+};
+
+// El selector de siempre, para lo que espera sin proveedor: un botón por
+// proveedor con su precio de hoy, y tocarlo es elegirlo. El renglón se queda en
+// espera y pasa a la tarjeta de ese proveedor.
+const selectorDeProveedorDeLaEspera = (r) => {
+  const opciones = document.createElement('div');
+  opciones.className = 'espera-opciones';
+  opciones.setAttribute('role', 'group');
+  opciones.setAttribute('aria-label', 'Proveedor de ' + r.descripcion);
+  r.opciones.forEach((o) => {
+    const boton = botonDeAccion(o.nombre + ' · ' + o.frase_del_precio,
+      (b) => moverDesdeLaEspera(r.renglon_id, '/proveedor-de-la-espera', { proveedor: o.proveedor }, b),
+      'tenida');
+    boton.setAttribute('aria-label', 'Pedirle ' + r.descripcion + ' a ' + o.nombre);
+    if (!r.se_puede) apagarBoton(boton, r.motivo_para_no);
+    opciones.append(boton);
+  });
+  return opciones;
+};
+
+const filaDeEspera = (r) => {
+  const li = document.createElement('li');
+  li.dataset.renglon = r.renglon_id;
+  const descripcion = document.createElement('span');
+  descripcion.className = 'descripcion';
+  descripcion.textContent = r.descripcion;
+  const clave = document.createElement('span');
+  clave.className = 'clave';
+  clave.textContent = r.clave;
+  const piezas = document.createElement('span');
+  piezas.className = 'cuantas';
+  piezas.textContent = '× ' + r.piezas;
+  li.append(descripcion, clave, piezas);
+  if (r.accion === 'elegir') {
+    li.append(selectorDeProveedorDeLaEspera(r));
+    return li;
+  }
+  // El precio de hoy ya viene dicho; sin precio se ve en gris y con la palabra.
+  const costo = document.createElement('span');
+  costo.className = 'costo' + (r.precio === null ? ' nose' : '');
+  costo.textContent = r.frase_del_precio;
+  li.append(costo, botonDeUnRenglonDeEspera(r));
+  return li;
+};
+
+const bloqueDeEspera = (titulo, renglones, vacio) => {
+  const bloque = document.createElement('section');
+  bloque.className = 'espera-bloque';
+  const h = document.createElement('h4');
+  h.textContent = titulo;
+  bloque.append(h);
+  if (!renglones.length) {
+    const p = document.createElement('p');
+    p.className = 'vacio';
+    p.textContent = vacio;
+    bloque.append(p);
+    return bloque;
+  }
+  const ul = document.createElement('ul');
+  ul.className = 'espera-renglones';
+  ul.append(...renglones.map(filaDeEspera));
+  bloque.append(ul);
+  return bloque;
+};
+
+// La cabecera: el nombre, cómo va el pedido de hoy, **solo el total** y la barra
+// hacia el mínimo. El llenado (`progreso`) y la frase los calculó el servidor en
+// la base del mínimo; sin mínimo capturado no hay barra y la frase lo dice.
+const cabezaDeLaTarjeta = (t) => {
+  const cabeza = document.createElement('header');
+  cabeza.className = 'espera-cabeza';
+  const fila = document.createElement('div');
+  fila.className = 'fila-nombre';
+  const nombre = document.createElement('h3');
+  nombre.textContent = t.nombre;
+  fila.append(nombre, insignia(t.frase_del_pedido, TONOS_DEL_PEDIDO[t.estado_del_pedido] || 'gris'));
+  const total = document.createElement('p');
+  total.className = 'espera-total' + (t.total && t.total.hay ? '' : ' nose');
+  total.textContent = t.frase_del_total;
+  cabeza.append(fila, total);
+  if (t.minimo) {
+    if (t.minimo.progreso !== null) {
+      const barra = document.createElement('div');
+      barra.className = 'barra-minimo' + (t.minimo.estado === 'llega' ? ' completa' : '');
+      barra.setAttribute('role', 'progressbar');
+      barra.setAttribute('aria-label', 'Hacia el mínimo de ' + t.nombre);
+      barra.setAttribute('aria-valuemin', '0');
+      barra.setAttribute('aria-valuemax', '100');
+      barra.setAttribute('aria-valuenow', String(t.minimo.progreso));
+      const relleno = document.createElement('span');
+      relleno.style.width = t.minimo.progreso + '%';
+      barra.append(relleno);
+      cabeza.append(barra);
+    }
+    const frase = document.createElement('p');
+    frase.className = 'espera-minimo estado-' + t.minimo.estado + (t.minimo.se_avisa ? ' avisa' : '');
+    frase.textContent = t.minimo.frase;
+    cabeza.append(frase);
+  }
+  return cabeza;
+};
+
+const tarjetaDeEspera = (t) => {
+  const tarjeta = document.createElement('article');
+  tarjeta.className = 'espera-tarjeta';
+  tarjeta.dataset.proveedor = t.proveedor;
+  tarjeta.append(
+    cabezaDeLaTarjeta(t),
+    bloqueDeEspera('Pedido de hoy', t.hoy,
+      t.pedido_id === null ? 'Hoy no hay pedido de este proveedor.' : 'El pedido de hoy no tiene renglones.'),
+    bloqueDeEspera('En espera', t.en_espera, 'Nada espera para este proveedor.'));
+  return tarjeta;
+};
+
+const tarjetaSinProveedor = (renglones) => {
+  const tarjeta = document.createElement('article');
+  tarjeta.className = 'espera-tarjeta sin-proveedor';
+  const cabeza = document.createElement('header');
+  cabeza.className = 'espera-cabeza';
+  const nombre = document.createElement('h3');
+  nombre.textContent = 'Sin proveedor';
+  const ayuda = document.createElement('p');
+  ayuda.className = 'espera-minimo';
+  ayuda.textContent = 'Se mandaron a espera sin saber a quién se les iba a pedir. Elige un proveedor: '
+    + 'el renglón se queda en espera y pasa a su tarjeta.';
+  cabeza.append(nombre, ayuda);
+  tarjeta.append(cabeza, bloqueDeEspera('En espera', renglones, ''));
+  return tarjeta;
+};
+
+const pintarLaListaDeEspera = (datos) => {
+  const sin = document.getElementById('espera-sin-repartir');
+  const tarjetas = document.getElementById('espera-tarjetas');
+  tarjetas.replaceChildren();
+  sin.replaceChildren();
+  // Antes de repartir (o sin lista): el motivo, que llega hecho, y el botón que
+  // lleva a Repartir. No se inventa un segundo reparto.
+  if (!datos.repartida) {
+    const frase = document.createElement('p');
+    frase.className = 'nota';
+    frase.textContent = datos.motivo;
+    sin.append(frase);
+    if (datos.ir_a_repartir) {
+      sin.append(botonDeAccion('Ir a repartir', () => {
+        mostrarPestana('pedido');
+        history.replaceState(null, '', '#pedido');
+        IR_A_PASO('repartir');
+      }, 'tenida'));
+    }
+    sin.hidden = false;
+    return;
+  }
+  sin.hidden = true;
+  // Con la lista cerrada se ve todo, sin botones que sirvan: cada botón ya
+  // viene apagado con su motivo, y arriba se dice por qué.
+  if (datos.solo_lectura) {
+    const cerrada = document.createElement('p');
+    cerrada.className = 'nota aviso';
+    cerrada.textContent = datos.motivo_solo_lectura;
+    tarjetas.append(cerrada);
+  }
+  datos.proveedores.forEach((t) => tarjetas.append(tarjetaDeEspera(t)));
+  if (datos.sin_proveedor.length) tarjetas.append(tarjetaSinProveedor(datos.sin_proveedor));
+};
+
+async function cargarListaDeEspera() {
+  const datos = await respuestaDe(fetch('/api/lista-de-espera'));
+  if (!datos.ok) {
+    // «No se pudo leer» no se pinta como una lista vacía: lo que había se queda
+    // y la falla dice por qué.
+    notaDeFalla('espera-falla', datos);
+    return;
+  }
+  nota('espera-falla', '');
+  pintarLaListaDeEspera(datos);
+  pintarCuenta('espera', datos.globo, 'gris');
+}
 
 // ---------------------------------------------------------------- Sesiones
 

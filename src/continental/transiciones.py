@@ -377,6 +377,11 @@ DEVOLVER_A_ABIERTO = "devolver_a_abierto"
 #: …y el renglón **pospuesto** (ADR 0025).
 DEVOLVER_POSPUESTO = "devolver_pospuesto"
 
+#: …y el renglón **pospuesto que nadie sabe a quién se le iba a pedir**: la
+#: tarjeta «Sin proveedor» de la lista de espera (ticket 11) le elige uno, y el
+#: renglón sigue en espera.
+ELEGIR_PROVEEDOR_DE_LA_ESPERA = "elegir_proveedor_de_la_espera"
+
 #: Todas las acciones que `motivo_para_no_editar` conoce, en el orden en que
 #: `almacenamiento.py` las declara. Sirve para que quien llama con una
 #: cadena mal escrita reciba un error claro y no un "sí se puede" por
@@ -384,6 +389,7 @@ DEVOLVER_POSPUESTO = "devolver_pospuesto"
 ACCIONES_DE_EDICION = ACCIONES_QUE_EXIGEN_RENGLON_ABIERTO + (
     DEVOLVER_A_ABIERTO,
     DEVOLVER_POSPUESTO,
+    ELEGIR_PROVEEDOR_DE_LA_ESPERA,
 )
 
 
@@ -568,7 +574,9 @@ def motivo_para_no_editar(
     `accion` es una de `ACCIONES_DE_EDICION`: `"descartar"`,
     `"ajustar_la_cantidad"`, `"elegir_proveedor"` y `"posponer"` (ADR 0025)
     exigen el renglón `abierto`; `"devolver_a_abierto"` exige lo contrario,
-    `descartado`, y `"devolver_pospuesto"` exige `pospuesto`. Todas exigen
+    `descartado`, y `"devolver_pospuesto"` exige `pospuesto`.
+    `"elegir_proveedor_de_la_espera"` (ticket 11 de lista-de-espera) exige
+    `pospuesto` **y sin proveedor de espera todavía**. Todas exigen
     además la lista `abierta` — la condición que el
     2026-09-20 unificó en las cuatro sentencias (ver `almacenamiento.py`).
 
@@ -591,6 +599,17 @@ def motivo_para_no_editar(
             return (
                 "ese renglón no está en espera: no hay nada que sacar de la "
                 "espera."
+            )
+    elif accion == ELEGIR_PROVEEDOR_DE_LA_ESPERA:
+        if renglon.estado != RENGLON_POSPUESTO:
+            return (
+                "ese renglón no está en espera: a quién pedírselo se elige "
+                "en su lista del día."
+            )
+        if renglon.proveedor_de_la_espera is not None:
+            return (
+                "ese renglón ya tiene proveedor en la espera: no se le cambia "
+                "desde aquí."
             )
     elif renglon.estado != RENGLON_ABIERTO:
         return _motivo_por_estado_del_renglon(renglon, accion)

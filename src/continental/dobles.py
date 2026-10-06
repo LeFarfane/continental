@@ -1597,6 +1597,43 @@ class AlmacenamientoFalso:
             elegido_en=dt.datetime.now(dt.UTC),
         )
 
+    def elegir_proveedor_de_la_espera(
+        self, negocio: str, renglon_id: int, proveedor: str, quien: str
+    ) -> PedidoSugeridoGuardado | None:
+        """`_ELEGIR_PROVEEDOR_DE_LA_ESPERA` en memoria (ticket 11 de lista-de-espera).
+
+        Las tres condiciones del `WHERE` —el renglón `pospuesto`, sin proveedor
+        de espera y su lista `abierta`— las juzga
+        `transiciones.motivo_para_no_editar`, la misma función que apaga el
+        botón y dice el motivo del 409. Escribe juntas la espera y la elección
+        (`ck_renglon_eleccion`) y deja el renglón `pospuesto`.
+        """
+        self._revisar()
+        encontrado = self._renglon_por_id(renglon_id)
+        if encontrado is None:
+            return None
+        fila, lista = encontrado
+        if fila["negocio"] != negocio:
+            return None
+        if (
+            motivo_para_no_editar(
+                renglon_guardado_desde_columnas(fila),
+                armar_guardado(lista, lista["renglones"]),
+                "elegir_proveedor_de_la_espera",
+            )
+            is not None
+        ):
+            return None
+        cambios = {
+            "proveedor_de_la_espera": proveedor,
+            "proveedor_elegido": proveedor,
+            "elegido_por": quien,
+            "elegido_en": dt.datetime.now(dt.UTC),
+        }
+        revisar_el_renglon({**fila, **cambios})
+        fila.update(cambios)
+        return armar_guardado(lista, lista["renglones"])
+
     def pedidos_de_la_lista(
         self, negocio: str, pedido_sugerido_id: int
     ) -> tuple[PedidoGuardado, ...]:

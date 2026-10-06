@@ -567,7 +567,8 @@ def test_las_pestanas_se_llaman_como_el_glosario():
     del dueño, 2026-09-28).
 
     Desde el diseño del 2026-09-30 las pestañas van en una barra lateral, en
-    dos grupos: "Pedido" —la lista del día y lo que viene en camino— y
+    dos grupos: "Pedido" —la lista del día, la lista de espera (ticket 11 de
+    lista-de-espera) y lo que viene en camino— y
     "Proveedores". Más el estado, abajo, que no lleva rótulo de texto suelto
     sino su tarjeta."""
     pantalla = pantalla_completa()
@@ -576,7 +577,10 @@ def test_las_pestanas_se_llaman_como_el_glosario():
     rotulos = re.findall(r'role="tab"[^>]*>([^<]+)', pestanas)
     grupos = re.findall(r'data-grupo="([^"]+)"', pestanas)
 
-    assert rotulos == ["Lista del día", "En camino", "Buscar", "Vigilancia", "Sesiones", "Ajustes"]
+    assert rotulos == [
+        "Lista del día", "Lista de espera", "En camino", "Buscar", "Vigilancia",
+        "Sesiones", "Ajustes",
+    ]
     assert grupos == ["Pedido", "Proveedores"]
     assert "rdenes" not in pestanas
 

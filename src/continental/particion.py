@@ -541,6 +541,20 @@ def _linea(
     return Linea(**comunes, precio=lectura.precio)
 
 
+def la_linea_del_renglon(
+    renglon: RenglonGuardado,
+    proveedor: str,
+    lecturas: Sequence[PrecioDeProveedor],
+) -> Linea:
+    """El renglón como línea de **ese** proveedor: el precio de hoy y su motivo.
+
+    `_linea`, con nombre público para la lista de espera (ticket 11): ahí cada
+    renglón se enseña con el último precio consultado de su proveedor, y esa
+    regla no se escribe una segunda vez. Pura.
+    """
+    return _linea(renglon, proveedor, lecturas)
+
+
 def partir(
     renglones: Sequence[RenglonGuardado],
     comparaciones: Mapping[int, Comparacion],
@@ -881,6 +895,10 @@ class TotalDelPedido:
 def _en_pesos(valor: Decimal) -> str:
     """`$1,661.94`: con coma de miles y dos decimales, para leerse de un vistazo."""
     return f"${valor.quantize(_CENTAVOS):,.2f}"
+
+
+en_pesos = _en_pesos
+"""`$1,661.94`, para quien pinta un precio fuera de este módulo (ticket 11)."""
 
 
 def el_total_del_pedido(

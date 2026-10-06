@@ -312,6 +312,14 @@ class AvisoDelMinimo:
     falta: str | None = None
     #: Lo que se comparó contra el mínimo, en esa base (total o piso).
     comparado: str | None = None
+    #: **Cuánto de la barra se llena**, de 0 a 100, entero (ticket 11): lo que
+    #: se comparó entre el mínimo, redondeado **hacia abajo** y con tope en 100.
+    #: Lo calcula el servidor, en la base del mínimo, y el navegador solo
+    #: dibuja el ancho: no compara ni divide montos. `None` cuando no hay
+    #: barra que pintar —sin mínimo capturado, sin mínimo, o sin poder leer—.
+    #: Con un piso (faltan precios) es el piso: una barra que **no promete más
+    #: de lo que se sabe**.
+    progreso: int | None = None
 
     @property
     def se_avisa(self) -> bool:
@@ -329,6 +337,7 @@ class AvisoDelMinimo:
             "base": self.base,
             "falta": self.falta,
             "comparado": self.comparado,
+            "progreso": self.progreso,
             "se_avisa": self.se_avisa,
         }
 
@@ -341,6 +350,19 @@ def aviso_de_que_no_se_pudo_leer(proveedor: str) -> AvisoDelMinimo:
         proveedor=proveedor,
         nombre=nombre_del_proveedor(proveedor),
     )
+
+
+def llenado_de_la_barra(comparado: Decimal, monto: Decimal) -> int:
+    """De 0 a 100: qué parte del mínimo ya se alcanzó. **Pura.**
+
+    Hacia abajo, y con tope: $1,999.99 de $2,000.00 es 99 y no 100, porque una
+    barra llena dice «ya llegó» y todavía no llega; y $5,000 de $2,000 es 100
+    y no 250. `monto` es positivo (un mínimo en cero no tiene barra y nunca
+    llega aquí). Todo en `Decimal`: el dinero no pasa por coma flotante.
+    """
+    if comparado <= 0:
+        return 0
+    return min(100, int((comparado * 100) // monto))
 
 
 def _plural(n: int, uno: str, varios: str) -> str:
@@ -380,6 +402,7 @@ def avisar_el_minimo(
         return AvisoDelMinimo(
             NO_SE_SABE,
             f"sin renglones: nada que comparar con el mínimo de {nombre}",
+            progreso=0,
             **ya,
         )
 
@@ -395,6 +418,7 @@ def avisar_el_minimo(
                 LLEGA,
                 f"llega al mínimo de {nombre} ({frase_del_minimo_})",
                 comparado=comparado,
+                progreso=llenado_de_la_barra(total, minimo.monto),
                 **ya,
             )
         falta = minimo.monto - total
@@ -403,6 +427,7 @@ def avisar_el_minimo(
             f"faltan {_pesos(falta)} para el mínimo de {nombre} ({frase_del_minimo_})",
             falta=str(falta),
             comparado=comparado,
+            progreso=llenado_de_la_barra(total, minimo.monto),
             **ya,
         )
 
@@ -414,6 +439,7 @@ def avisar_el_minimo(
             f"llega al mínimo de {nombre} ({frase_del_minimo_}) "
             "aunque faltan datos de algunos renglones",
             comparado=_pesos(parcial),
+            progreso=llenado_de_la_barra(parcial, minimo.monto),
             **ya,
         )
     motivos = []
@@ -431,5 +457,6 @@ def avisar_el_minimo(
         f"no se sabe si llega al mínimo de {nombre} ({frase_del_minimo_}): "
         f"van {_pesos(parcial)} {base} y {', '.join(motivos)}",
         comparado=_pesos(parcial),
+        progreso=llenado_de_la_barra(parcial, minimo.monto),
         **ya,
     )

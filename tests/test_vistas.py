@@ -343,7 +343,12 @@ def test_la_pantalla_trae_el_interruptor_con_los_dos_nombres(cliente):
     # «Mandar a espera» el pedido entero (lista de espera, ticket 06):
     # `POST /api/pedido/{id}/posponer`. Ya existía, pero con la ruta en el
     # renglón de abajo este conteo no lo veía. Sube de 34 a 35.
-    assert portada.count("fetch('/api/") == 35
+    # Las dos de la lista de espera (ticket 11 de lista-de-espera): leerla
+    # (`GET /api/lista-de-espera`, cada vez que se abre la pantalla) y mover un
+    # renglón desde ella (`POST /api/renglon/{id}/posponer`, `/devolver-pospuesto`
+    # o `/proveedor-de-la-espera`: UNA sola función, `moverDesdeLaEspera`, porque
+    # escribe en su propia nota y no en la de la lista del día). Sube de 35 a 37.
+    assert portada.count("fetch('/api/") == 37
 
 
 def test_la_pantalla_recuerda_la_eleccion_y_aguanta_un_localStorage_roto(cliente):
