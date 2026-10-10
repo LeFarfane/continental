@@ -5925,7 +5925,7 @@ const cabezaDeLaTarjeta = (t) => {
   fila.className = 'fila-nombre';
   const nombre = document.createElement('h3');
   nombre.textContent = t.nombre;
-  fila.append(nombre, insignia(t.frase_del_pedido, TONOS_DEL_PEDIDO[t.estado_del_pedido] || 'gris'));
+  fila.append(nombre, insignia(t.frase_del_pedido, TONOS_DEL_PEDIDO[t.estado_a_la_vista] || 'gris'));
   const total = document.createElement('p');
   total.className = 'espera-total' + (t.total && t.total.hay ? '' : ' nose');
   total.textContent = t.frase_del_total;

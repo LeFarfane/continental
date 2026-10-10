@@ -53,6 +53,8 @@ from continental.almacenamiento import (
     BORRADOR,
     CANCELADO,
     ENVIADO,
+    PEDIDO_RECIBIDO,
+    PEDIDO_RECIBIDO_PARCIAL,
     PedidoGuardado,
     PedidoSugeridoGuardado,
     PrecioDeProveedor,
@@ -66,6 +68,7 @@ from continental.particion import (
     total_como_json,
 )
 from continental.precios import nombre_del_proveedor
+from continental.recepcion import PedidoALaVista
 from continental.transiciones import (
     ELEGIR_PROVEEDOR_DE_LA_ESPERA,
     motivo_para_no_editar,
@@ -98,18 +101,42 @@ MOTIVO_PROVEEDOR_DESCONOCIDO = (
     "viene de un proveedor que Continental no conoce: no se le elige otro desde aquí."
 )
 
+#: Las frases de los cinco estados que la pantalla enseña (ADR 0015). Tres se
+#: declaran y dos se calculan de los renglones; la tarjeta dice los cinco.
 _ESTADOS_DEL_PEDIDO = {
     BORRADOR: "En borrador",
     ENVIADO: "Enviado",
     CANCELADO: "Cancelado",
+    PEDIDO_RECIBIDO: "Recibido",
+    PEDIDO_RECIBIDO_PARCIAL: "Recibido parcial",
 }
 
 
-def frase_del_estado_del_pedido(pedido: PedidoGuardado | None) -> str:
-    """Cómo se llama el pedido de hoy de un proveedor, o que no hay."""
+def el_estado_a_la_vista(
+    pedido: PedidoGuardado | None, renglones_de_la_lista: Sequence[RenglonGuardado]
+) -> str | None:
+    """El estado que la tarjeta ENSEÑA, o `None` sin pedido. **Pura.**
+
+    Sale de `recepcion.PedidoALaVista`, no de `estado_declarado`: un pedido
+    enviado cuyos renglones ya llegaron se ve «Recibido». Lo que se DECIDE
+    (si se puede mandar o sacar de la espera) sigue leyendo lo declarado.
+    """
     if pedido is None:
+        return None
+    return PedidoALaVista.de(pedido, renglones_de_la_lista).estado
+
+
+def frase_del_estado_del_pedido(
+    pedido: PedidoGuardado | None, renglones_de_la_lista: Sequence[RenglonGuardado]
+) -> str:
+    """Cómo se llama el pedido de hoy de un proveedor, o que no hay. **Pura.**
+
+    Enseña, no decide: usa el estado a la vista (`el_estado_a_la_vista`).
+    """
+    estado = el_estado_a_la_vista(pedido, renglones_de_la_lista)
+    if estado is None:
         return "Sin pedido hoy"
-    return _ESTADOS_DEL_PEDIDO.get(pedido.estado_declarado, pedido.estado_declarado)
+    return _ESTADOS_DEL_PEDIDO.get(estado, estado)
 
 
 def motivo_para_no_sacar(
@@ -297,8 +324,11 @@ def _tarjeta(
         "proveedor": proveedor,
         "nombre": nombre_del_proveedor(proveedor),
         "pedido_id": None if pedido is None else pedido.pedido_id,
+        # Lo declarado (decide) y lo que se enseña (calculado, ADR 0015), por
+        # separado, como `app.py`: `estado` y `estado_a_la_vista`.
         "estado_del_pedido": None if pedido is None else pedido.estado_declarado,
-        "frase_del_pedido": frase_del_estado_del_pedido(pedido),
+        "estado_a_la_vista": el_estado_a_la_vista(pedido, lista.renglones),
+        "frase_del_pedido": frase_del_estado_del_pedido(pedido, lista.renglones),
         "total": None if total is None else total_como_json(total),
         "frase_del_total": _frase_del_total(pedido, total, precios),
         "minimo": _el_minimo(pedido, avisos),

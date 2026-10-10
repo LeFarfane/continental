@@ -34,8 +34,12 @@ from continental.almacenamiento import (
     CANCELADO,
     CERRADO,
     ENVIADO,
+    PEDIDO_RECIBIDO,
+    PEDIDO_RECIBIDO_PARCIAL,
     RENGLON_ABIERTO,
     RENGLON_POSPUESTO,
+    RENGLON_RECIBIDO,
+    RENGLON_RECIBIDO_PARCIAL,
     AlmacenamientoDelPedido,
     PedidoGuardado,
     PedidoSugeridoGuardado,
@@ -535,9 +539,47 @@ def test_el_pedido_vacio_sigue_en_su_tarjeta_y_lo_descartado_no_cuenta():
 
 
 def test_el_estado_del_pedido_se_dice_con_palabras():
-    assert frase_del_estado_del_pedido(None) == "Sin pedido hoy"
-    assert frase_del_estado_del_pedido(_pedido(1, "nadro")) == "En borrador"
-    assert frase_del_estado_del_pedido(_pedido(1, "nadro", ENVIADO)) == "Enviado"
+    assert frase_del_estado_del_pedido(None, []) == "Sin pedido hoy"
+    assert frase_del_estado_del_pedido(_pedido(1, "nadro"), []) == "En borrador"
+    assert frase_del_estado_del_pedido(_pedido(1, "nadro", ENVIADO), []) == "Enviado"
+    assert frase_del_estado_del_pedido(_pedido(1, "nadro", CANCELADO), []) == "Cancelado"
+
+
+def test_la_tarjeta_de_un_pedido_enviado_con_todo_recibido_dice_recibido():
+    """ADR 0015: lo que se enseña sale de los renglones, no de lo declarado."""
+    renglones = [
+        _renglon(1, RENGLON_RECIBIDO, pedido_id=10),
+        _renglon(2, RENGLON_RECIBIDO, pedido_id=10),
+    ]
+    lista = _lista(renglones)
+
+    nadro = la_lista_de_espera(lista, [_pedido(10, "nadro", ENVIADO)], {}, None)["proveedores"][0]
+
+    assert nadro["frase_del_pedido"] == "Recibido"
+    assert nadro["estado_a_la_vista"] == PEDIDO_RECIBIDO
+    assert nadro["estado_del_pedido"] == ENVIADO, "lo declarado no cambia: decide, no enseña"
+
+
+def test_la_tarjeta_de_un_pedido_enviado_con_algo_corto_dice_recibido_parcial():
+    renglones = [
+        _renglon(1, RENGLON_RECIBIDO, pedido_id=10),
+        _renglon(2, RENGLON_RECIBIDO_PARCIAL, pedido_id=10),
+    ]
+    lista = _lista(renglones)
+
+    nadro = la_lista_de_espera(lista, [_pedido(10, "nadro", ENVIADO)], {}, None)["proveedores"][0]
+
+    assert nadro["frase_del_pedido"] == "Recibido parcial"
+    assert nadro["estado_a_la_vista"] == PEDIDO_RECIBIDO_PARCIAL
+    assert nadro["estado_del_pedido"] == ENVIADO
+
+
+def test_la_tarjeta_sin_pedido_no_tiene_estado_a_la_vista():
+    lista, pedidos, precios = _armada()
+
+    vicma = la_lista_de_espera(lista, pedidos, precios, None)["proveedores"][2]
+
+    assert vicma["estado_a_la_vista"] is None and vicma["estado_del_pedido"] is None
 
 
 def test_una_lista_que_no_hay_trae_su_motivo_y_ninguna_tarjeta():
